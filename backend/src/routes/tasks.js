@@ -3,23 +3,9 @@ const { verifyToken } = require("../middleware/verifyToken");
 const { pool } = require("../config/database");
 const { createUserNotification } = require("../services/notificationService");
 const { emitCalendarChanged } = require("../realtime/meetingsRealtime");
-const {
-  resolveTenantContext,
-  enforceSubscription,
-  requireFeature,
-} = require("../middleware/tenantAccess");
-const { bindTenantCrmPool } = require("../middleware/tenantCrmPool");
-const { requireCrmTenant } = require("../middleware/crmTenant");
 
 const router = express.Router();
-router.use(
-  verifyToken,
-  resolveTenantContext,
-  bindTenantCrmPool,
-  requireCrmTenant,
-  enforceSubscription(),
-  requireFeature("task_management", "view")
-);
+router.use(verifyToken);
 
 const VALID_STATUS = new Set([
   "new",
@@ -254,7 +240,7 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-router.post("/", requireFeature("task_management", "create"), async (req, res) => {
+router.post("/",  async (req, res) => {
   try {
     const {
       title,
@@ -348,7 +334,7 @@ router.post("/", requireFeature("task_management", "create"), async (req, res) =
   }
 });
 
-router.put("/:id", requireFeature("task_management", "edit"), async (req, res) => {
+router.put("/:id", async (req, res) => {
   try {
     const taskId = Number(req.params.id);
     if (!taskId) return res.status(400).json({ success: false, message: "Invalid task id" });
@@ -461,7 +447,7 @@ router.put("/:id", requireFeature("task_management", "edit"), async (req, res) =
   }
 });
 
-router.delete("/:id", requireFeature("task_management", "delete"), async (req, res) => {
+router.delete("/:id", async (req, res) => {
   try {
     const taskId = Number(req.params.id);
     if (!taskId) return res.status(400).json({ success: false, message: "Invalid task id" });

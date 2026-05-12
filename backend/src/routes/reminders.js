@@ -8,29 +8,15 @@ const {
   deleteReminder,
   bulkDeleteReminders,
 } = require("../controllers/reminderController");
-const {
-  resolveTenantContext,
-  enforceSubscription,
-  requireAnyFeature,
-} = require("../middleware/tenantAccess");
-const { bindTenantCrmPool } = require("../middleware/tenantCrmPool");
-const { requireCrmTenant } = require("../middleware/crmTenant");
 
 const router = express.Router();
-router.use(
-  verifyToken,
-  resolveTenantContext,
-  bindTenantCrmPool,
-  requireCrmTenant,
-  enforceSubscription(),
-  requireAnyFeature(["task_management", "lead_management"], "view")
-);
+router.use(verifyToken);
 
 router.get("/", getReminders);
-router.post("/", requireAnyFeature(["task_management", "lead_management"], "create"), createReminder);
-router.post("/bulk-delete", requireAnyFeature(["task_management", "lead_management"], "delete"), bulkDeleteReminders);
-router.put("/:id", requireAnyFeature(["task_management", "lead_management"], "edit"), updateReminder);
-router.patch("/:id/done", requireAnyFeature(["task_management", "lead_management"], "edit"), markReminderDone);
-router.delete("/:id", requireAnyFeature(["task_management", "lead_management"], "delete"), deleteReminder);
+router.post("/", createReminder);
+router.post("/bulk-delete", bulkDeleteReminders);
+router.put("/:id", updateReminder);
+router.patch("/:id/done", markReminderDone);
+router.delete("/:id", deleteReminder);
 
 module.exports = router;

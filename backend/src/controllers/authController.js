@@ -2,7 +2,6 @@ const crypto = require("crypto");
 const bcrypt = require("bcrypt");
 const { mainPool } = require("../config/database");
 const { sendPasswordReset } = require("../services/emailService");
-const { reserveSubdomain } = require("../services/subdomainService");
 const {
   hashPassword,
   generateAccessToken,
@@ -16,7 +15,6 @@ const {
   ACCESS_COOKIE,
   REFRESH_COOKIE,
 } = require("../services/authService");
-const { validateTenantSubdomain } = require("../services/tenantDatabaseService");
 
 const RESET_TOKEN_BYTES = 32;
 const RESET_EXPIRY_HOURS = 1;

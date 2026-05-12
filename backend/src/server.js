@@ -119,9 +119,6 @@ const corsOptions = {
     "Authorization",
     "X-Integration-Secret",
     "X-Requested-With",
-    "X-Tenant-Subdomain",
-    "X-Tenant-Slug",
-    "X-Subdomain",
   ],
   optionsSuccessStatus: 204,
   // Avoid sticky preflight cache during local dev when origin rules change.
@@ -175,7 +172,6 @@ app.use((req, res, next) => {
           path: req.originalUrl,
           status: res.statusCode,
           duration_ms: Date.now() - started,
-          tenant_id: null,
           user_id: req.user?.id || null,
         })
       );

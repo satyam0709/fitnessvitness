@@ -35,31 +35,15 @@ function validateRuntimeEnv() {
   }
 
   if (prod) {
-    const tenantKey = String(process.env.TENANT_DB_ENCRYPTION_KEY || "").trim();
-    if (!tenantKey) {
-      console.warn(
-        "[runtimeValidation] TENANT_DB_ENCRYPTION_KEY is not set; BYOD DB credential encryption will derive from JWT_SECRET. " +
-          "Set an explicit 64-char hex TENANT_DB_ENCRYPTION_KEY for a clearer rotation boundary."
-      );
-    }
     const checks = [
       ["JWT_SECRET", process.env.JWT_SECRET],
       ["JWT_REFRESH_SECRET", process.env.JWT_REFRESH_SECRET],
       ["DB_PASSWORD/DB_PASS", dbPass],
-      ...(tenantKey ? [["TENANT_DB_ENCRYPTION_KEY", tenantKey]] : []),
-      ["STRIPE_WEBHOOK_SECRET", process.env.STRIPE_WEBHOOK_SECRET],
     ];
     for (const [name, value] of checks) {
       if (isWeakSecret(value)) {
         throw new Error(`Weak or invalid secret detected for ${name}. Rotate before production launch.`);
       }
-    }
-  } else {
-    const hasTenantKey = String(process.env.TENANT_DB_ENCRYPTION_KEY || "").trim() !== "";
-    if (!hasTenantKey) {
-      console.warn(
-        "[runtimeValidation] TENANT_DB_ENCRYPTION_KEY is not set; tenant DB credentials will be encrypted using a key derived from JWT_SECRET."
-      );
     }
   }
 }

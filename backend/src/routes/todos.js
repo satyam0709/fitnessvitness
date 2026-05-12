@@ -6,23 +6,9 @@ const { verifyToken } = require("../middleware/verifyToken");
 const { pool } = require("../config/database");
 const { emitTodosChanged, emitCalendarChanged } = require("../realtime/meetingsRealtime");
 const { createUserNotification } = require("../services/notificationService");
-const {
-  resolveTenantContext,
-  enforceSubscription,
-  requireFeature,
-} = require("../middleware/tenantAccess");
-const { bindTenantCrmPool } = require("../middleware/tenantCrmPool");
-const { requireCrmTenant } = require("../middleware/crmTenant");
 
 const router = express.Router();
-router.use(
-  verifyToken,
-  resolveTenantContext,
-  bindTenantCrmPool,
-  requireCrmTenant,
-  enforceSubscription(),
-  requireFeature("task_management", "view")
-);
+router.use(verifyToken);
 
 const VALID_FREQ = new Set([
   "once",
@@ -306,7 +292,7 @@ router.get("/", async (req, res) => {
   }
 });
 
-router.post("/", requireFeature("task_management", "create"), maybeUpload, async (req, res) => {
+router.post("/",  maybeUpload, async (req, res) => {
   const b = req.body || {};
   const body = String(b.body || "").trim();
   if (!body) {
@@ -398,7 +384,7 @@ router.post("/", requireFeature("task_management", "create"), maybeUpload, async
   }
 });
 
-router.put("/:id", requireFeature("task_management", "edit"), async (req, res) => {
+router.put("/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) {
@@ -540,7 +526,7 @@ router.put("/:id", requireFeature("task_management", "edit"), async (req, res) =
   }
 });
 
-router.delete("/:id", requireFeature("task_management", "delete"), async (req, res) => {
+router.delete("/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) {

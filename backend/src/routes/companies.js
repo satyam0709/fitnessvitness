@@ -2,15 +2,12 @@ const express = require("express");
 const multer = require("multer");
 const { verifyToken } = require("../middleware/verifyToken");
 const { pool } = require("../config/database");
-const { resolveTenantContext, enforceSubscription } = require("../middleware/tenantAccess");
-const { bindTenantCrmPool } = require("../middleware/tenantCrmPool");
-const { requireCrmTenant } = require("../middleware/crmTenant");
 const { canSeeAllTeamRecords } = require("../utils/crmTeamAccess");
 const { emitContactsChanged, emitAdminChanged, emitUserEvent } = require("../realtime/meetingsRealtime");
 
 function leadListScope(req, alias = "l") {
-  const parts = [`${alias}.is_deleted = 0`, `${alias}.tenant_id = ?`];
-  const params = [req.user.tenantId];
+  const parts = [`${alias}.is_deleted = 0`];
+  const params = [];
   if (!canSeeAllTeamRecords(req)) {
     parts.push(`(${alias}.created_by = ? OR ${alias}.assigned_to = ?)`);
     params.push(req.user.id, req.user.id);
@@ -19,7 +16,7 @@ function leadListScope(req, alias = "l") {
 }
 
 const router = express.Router();
-router.use(verifyToken, resolveTenantContext, bindTenantCrmPool, requireCrmTenant, enforceSubscription());
+router.use(verifyToken);
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024, files: 1 } });
 const allowedMimes = ["image/jpeg", "image/png", "image/webp", "text/csv", "application/pdf"];
 
