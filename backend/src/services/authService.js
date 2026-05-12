@@ -38,14 +38,13 @@ async function comparePassword(plain, hash) {
 }
 
 /**
- * @param {{ userId: number, tenantId: string | null, role: string, is_platform_admin: number | boolean }} payload
+ * @param {{ userId: number, role: string, is_platform_admin: number | boolean }} payload
  */
 function generateAccessToken(payload) {
-  const { userId, tenantId, role, is_platform_admin } = payload;
+  const { userId, role, is_platform_admin } = payload;
   return jwt.sign(
     {
       userId: Number(userId),
-      tenantId: tenantId != null && String(tenantId).trim() !== "" ? String(tenantId) : null,
       role: String(role || "staff").toLowerCase(),
       is_platform_admin: Number(is_platform_admin) === 1 ? 1 : 0,
     },

@@ -8,7 +8,7 @@ import Providers from "@/app/providers";
 import { PROTECTED_PREFIXES } from "@/lib/constants";
 
 /** Auth flows use their own layout; skip marketing chrome to avoid "logged in" header on /login. */
-const AUTH_LANDING_PREFIXES = ["/login", "/signup", "/sign-in", "/register", "/invite", "/reset-password"];
+const AUTH_LANDING_PREFIXES = ["/login", "/invite", "/reset-password"];
 
 function isAuthLandingPath(pathname) {
   return AUTH_LANDING_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));

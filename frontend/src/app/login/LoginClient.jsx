@@ -186,7 +186,7 @@ export default function LoginClient({ initialReturnTo = "", initialEmail = "" })
           <div className={styles.formHeader}>
             <div className={styles.cardLogoWrapper}>
               <Image
-                src="/assets/logo.png"
+                src="/assets/logo.svg"
                 alt="RND TECHNOSOFT"
                 width={160}
                 height={54}
@@ -253,11 +253,8 @@ export default function LoginClient({ initialReturnTo = "", initialEmail = "" })
           </form>
 
           <div className={styles.formFooter}>
-            <p>Don&apos;t have a workspace?</p>
             <div className={styles.footerLinks}>
-              <Link href="/signup">Create workspace</Link>
-              <span className={styles.separator}>•</span>
-              <span>Use invitation link from email</span>
+              <span>Use invitation link from email to join your team</span>
             </div>
           </div>
         </div>

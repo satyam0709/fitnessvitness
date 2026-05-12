@@ -104,9 +104,8 @@ function restrictToOwn(req) {
 }
 
 function leadScopeSql(req, alias = "l") {
-  const tenantId = req.user.tenantId;
-  const parts = [`${alias}.is_deleted = 0`, `${alias}.tenant_id = ?`];
-  const params = [tenantId];
+  const parts = [`${alias}.is_deleted = 0`];
+  const params = [];
   if (restrictToOwn(req)) {
     parts.push(`(${alias}.assigned_to = ? OR ${alias}.created_by = ?)`);
     params.push(req.user.id, req.user.id);
@@ -115,9 +114,8 @@ function leadScopeSql(req, alias = "l") {
 }
 
 function opportunityScopeSql(req, alias = "o") {
-  const tenantId = req.user.tenantId;
-  const parts = [`${alias}.is_deleted = 0`, `${alias}.tenant_id = ?`];
-  const params = [tenantId];
+  const parts = [`${alias}.is_deleted = 0`];
+  const params = [];
   if (restrictToOwn(req)) {
     parts.push(`(${alias}.created_by = ? OR ${alias}.owner_user_id = ?)`);
     params.push(req.user.id, req.user.id);
@@ -126,9 +124,8 @@ function opportunityScopeSql(req, alias = "o") {
 }
 
 function ticketScopeSql(req, alias = "t") {
-  const tenantId = req.user.tenantId;
-  const parts = [`${alias}.is_deleted = 0`, `${alias}.tenant_id = ?`];
-  const params = [tenantId];
+  const parts = [`${alias}.is_deleted = 0`];
+  const params = [];
   if (restrictToOwn(req)) {
     parts.push(`(${alias}.created_by = ? OR ${alias}.assigned_to = ?)`);
     params.push(req.user.id, req.user.id);
@@ -137,9 +134,8 @@ function ticketScopeSql(req, alias = "t") {
 }
 
 function taskScopeSql(req, alias = "t") {
-  const tenantId = req.user.tenantId;
-  const parts = [`${alias}.is_deleted = 0`, `${alias}.tenant_id = ?`];
-  const params = [tenantId];
+  const parts = [`${alias}.is_deleted = 0`];
+  const params = [];
   if (restrictToOwn(req)) {
     parts.push(`(${alias}.assigned_to = ? OR ${alias}.created_by = ?)`);
     params.push(req.user.id, req.user.id);
@@ -148,9 +144,8 @@ function taskScopeSql(req, alias = "t") {
 }
 
 function reminderScopeSql(req, alias = "r") {
-  const tenantId = req.user.tenantId;
-  const parts = [`${alias}.is_deleted = 0`, `${alias}.tenant_id = ?`];
-  const params = [tenantId];
+  const parts = [`${alias}.is_deleted = 0`];
+  const params = [];
   if (restrictToOwn(req)) {
     parts.push(`(${alias}.user_id = ? OR ${alias}.assigned_to_user_id = ?)`);
     params.push(req.user.id, req.user.id);
@@ -159,9 +154,8 @@ function reminderScopeSql(req, alias = "r") {
 }
 
 function contactScopeSql(req, alias = "c") {
-  const tenantId = req.user.tenantId;
-  const parts = [`${alias}.tenant_id = ?`];
-  const params = [tenantId];
+  const parts = ["1=1"];
+  const params = [];
   if (restrictToOwn(req)) {
     parts.push(`(${alias}.created_by = ? OR ${alias}.assigned_to = ?)`);
     params.push(req.user.id, req.user.id);
@@ -170,9 +164,8 @@ function contactScopeSql(req, alias = "c") {
 }
 
 function companyScopeSql(req, alias = "c") {
-  const tenantId = req.user.tenantId;
-  const parts = [`${alias}.is_deleted = 0`, `${alias}.tenant_id = ?`];
-  const params = [tenantId];
+  const parts = [`${alias}.is_deleted = 0`];
+  const params = [];
   if (restrictToOwn(req)) {
     parts.push(`(${alias}.created_by = ? OR ${alias}.assigned_to = ?)`);
     params.push(req.user.id, req.user.id);
@@ -479,27 +472,17 @@ async function loadTodaySummary(req, todayYmd, yesterdayYmd) {
   const own = restrictToOwn(req);
 
   const leadOwn = own ? " AND (assigned_to = ? OR created_by = ?)" : "";
-  const lpToday = own ? [tenantId, todayYmd, uid, uid] : [tenantId, todayYmd];
-  const lpYest = own ? [tenantId, yesterdayYmd, uid, uid] : [tenantId, yesterdayYmd];
+  const lpToday = own ? [todayYmd, uid, uid] : [todayYmd];
+  const lpYest = own ? [yesterdayYmd, uid, uid] : [yesterdayYmd];
 
-  const remOwn = own ? " AND (user_id = ? OR assigned_to_user_id = ?)" : "";
-  const remParams = own ? [tenantId, todayYmd, uid, uid] : [tenantId, todayYmd];
+  const remParams = own ? [todayYmd, uid, uid] : [todayYmd];
 
-  const taskOwn = own ? " AND (assigned_to = ? OR created_by = ?)" : "";
-  const taskParams = own ? [tenantId, uid, uid, todayYmd, todayYmd] : [tenantId, todayYmd, todayYmd];
+  const taskParams = own ? [uid, uid, todayYmd, todayYmd] : [todayYmd, todayYmd];
 
-  const todoDayClause = `(
-    DATE(t.todo_date) = ?
-    OR (t.status = 'pending' AND t.carry_forward = 1 AND DATE(t.todo_date) < ?)
-    OR (t.status = 'completed' AND t.completed_at IS NOT NULL AND DATE(t.completed_at) = ?)
-  )`;
-  const todoVis = own
-    ? `(t.created_by = ? OR EXISTS (SELECT 1 FROM crm_todo_assignees a WHERE a.todo_id = t.id AND a.user_id = ?))`
-    : "1=1";
   const todoParamsTotal = own
-    ? [tenantId, uid, uid, todayYmd, todayYmd, todayYmd]
-    : [tenantId, todayYmd, todayYmd, todayYmd];
-  const todoPendingParams = own ? [tenantId, uid, uid, todayYmd, todayYmd] : [tenantId, todayYmd, todayYmd];
+    ? [uid, uid, todayYmd, todayYmd, todayYmd]
+    : [todayYmd, todayYmd, todayYmd];
+  const todoPendingParams = own ? [uid, uid, todayYmd, todayYmd] : [todayYmd, todayYmd];
 
   const [
     todayLeadsRes,
@@ -515,33 +498,33 @@ async function loadTodaySummary(req, todayYmd, yesterdayYmd) {
   ] = await Promise.all([
     pool.execute(
       `SELECT COUNT(*) AS todayLeads FROM leads
-       WHERE is_deleted = 0 AND tenant_id = ? AND DATE(created_at) = ?${leadOwn}`,
+       WHERE is_deleted = 0 AND DATE(created_at) = ?${leadOwn}`,
       lpToday
     ),
     pool.execute(
       `SELECT COUNT(*) AS yesterdayLeads FROM leads
-       WHERE is_deleted = 0 AND tenant_id = ? AND DATE(created_at) = ?${leadOwn}`,
+       WHERE is_deleted = 0 AND DATE(created_at) = ?${leadOwn}`,
       lpYest
     ),
     pool.execute(
       `SELECT COUNT(*) AS completedLeads FROM leads
-       WHERE is_deleted = 0 AND tenant_id = ? AND DATE(created_at) = ?
+       WHERE is_deleted = 0 AND DATE(created_at) = ?
          AND status IN ('close_by','confirm')${leadOwn}`,
       lpToday
     ),
     pool.execute(
       `SELECT COUNT(*) AS todayFollowups FROM reminders
-       WHERE is_deleted = 0 AND tenant_id = ? AND DATE(remind_at) = ?${remOwn}`,
+       WHERE is_deleted = 0 AND DATE(remind_at) = ?${remOwn}`,
       remParams
     ),
     pool.execute(
       `SELECT COUNT(*) AS followupCompleted FROM reminders
-       WHERE is_deleted = 0 AND tenant_id = ? AND DATE(remind_at) = ? AND is_done = 1${remOwn}`,
+       WHERE is_deleted = 0 AND DATE(remind_at) = ? AND is_done = 1${remOwn}`,
       remParams
     ),
     pool.execute(
       `SELECT COUNT(*) AS todayTasks FROM tasks
-       WHERE is_deleted = 0 AND tenant_id = ?
+       WHERE is_deleted = 0
          ${taskOwn}
          AND (
            (due_date IS NOT NULL AND DATE(due_date) = ?)
@@ -551,7 +534,7 @@ async function loadTodaySummary(req, todayYmd, yesterdayYmd) {
     ),
     pool.execute(
       `SELECT COUNT(*) AS taskCompleted FROM tasks
-       WHERE is_deleted = 0 AND tenant_id = ?
+       WHERE is_deleted = 0
          ${taskOwn}
          AND status IN ('done','completed')
          AND (
@@ -562,17 +545,17 @@ async function loadTodaySummary(req, todayYmd, yesterdayYmd) {
     ),
     pool.execute(
       `SELECT COUNT(*) AS todoBucketTotal FROM crm_todos t
-       WHERE t.is_deleted = 0 AND t.tenant_id = ? AND ${todoVis} AND ${todoDayClause}`,
+       WHERE t.is_deleted = 0 AND ${todoVis} AND ${todoDayClause}`,
       todoParamsTotal
     ),
     pool.execute(
       `SELECT COUNT(*) AS todoBucketDone FROM crm_todos t
-       WHERE t.is_deleted = 0 AND t.tenant_id = ? AND ${todoVis} AND ${todoDayClause} AND t.status = 'completed'`,
+       WHERE t.is_deleted = 0 AND ${todoVis} AND ${todoDayClause} AND t.status = 'completed'`,
       todoParamsTotal
     ),
     pool.execute(
       `SELECT COUNT(*) AS todayTodosPending FROM crm_todos t
-       WHERE t.is_deleted = 0 AND t.tenant_id = ? AND ${todoVis}
+       WHERE t.is_deleted = 0 AND ${todoVis}
          AND t.status = 'pending'
          AND (DATE(t.todo_date) = ? OR (t.carry_forward = 1 AND DATE(t.todo_date) < ?))`,
       todoPendingParams
@@ -681,10 +664,6 @@ async function getDashboardOpr(req, res) {
 async function getDashboardStats(req, res) {
   try {
     if (!req.user?.id) return res.status(401).json({ success: false, message: "Unauthorized" });
-    const tenantId = req.user.tenantId;
-    if (!tenantId) {
-      return res.status(403).json({ success: false, message: "Tenant context required" });
-    }
 
     let panels;
     try {
@@ -793,10 +772,6 @@ async function getDashboardInsights(req, res) {
     if (!req.user?.id) {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
-    const tenantId = req.user?.tenantId || null;
-    if (!tenantId) {
-      return res.status(403).json({ success: false, message: "Tenant context required" });
-    }
     const userIntId = req.user.id;
 
     const todayLocal = formatYmd(new Date());
@@ -820,10 +795,10 @@ async function getDashboardInsights(req, res) {
     const [statusRows] = await pool.execute(
       `SELECT status, COUNT(*) AS c
        FROM leads
-       WHERE is_deleted = 0 AND tenant_id = ?${vis}
+       WHERE is_deleted = 0${vis}
          AND DATE(created_at) BETWEEN ? AND ?
        GROUP BY status`,
-      own ? [tenantId, userIntId, userIntId, from, to] : [tenantId, from, to]
+      own ? [userIntId, userIntId, from, to] : [from, to]
     );
 
     const byStatus = {
@@ -843,11 +818,11 @@ async function getDashboardInsights(req, res) {
     const [dailyRows] = await pool.execute(
       `SELECT DATE(created_at) AS d, source, COUNT(*) AS c
        FROM leads
-       WHERE is_deleted = 0 AND tenant_id = ?${vis}
+       WHERE is_deleted = 0${vis}
          AND DATE(created_at) BETWEEN ? AND ?
        GROUP BY DATE(created_at), source
        ORDER BY d ASC`,
-      own ? [tenantId, userIntId, userIntId, from, to] : [tenantId, from, to]
+      own ? [userIntId, userIntId, from, to] : [from, to]
     );
 
     const dayList = [];

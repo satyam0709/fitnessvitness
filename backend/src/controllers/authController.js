@@ -38,34 +38,6 @@ function superAdminEmailSet() {
   );
 }
 
-async function reconcileConfiguredPlatformSuperAdmin(user) {
-  if (!user?.id || !user?.email) return user;
-  const normalizedEmail = String(user.email).trim().toLowerCase();
-  const configured = superAdminEmailSet();
-  if (!configured.has(normalizedEmail)) return user;
-
-  const needsUpdate =
-    Number(user.is_platform_admin) !== 1 ||
-    String(user.role || "").toLowerCase() !== "admin" ||
-    (user.tenant_id != null && String(user.tenant_id).trim() !== "");
-  if (!needsUpdate) return user;
-
-  await mainPool.execute(
-    `UPDATE users
-     SET is_platform_admin = 1,
-         role = 'admin',
-         tenant_id = NULL,
-         updated_at = NOW()
-     WHERE id = ?`,
-    [user.id]
-  );
-  return {
-    ...user,
-    is_platform_admin: 1,
-    role: "admin",
-    tenant_id: null,
-  };
-}
 
 function requestHostOnly(req) {
   const forwarded = String(req?.headers?.["x-forwarded-host"] || "").trim();
@@ -235,15 +207,6 @@ function setRefreshCookie(req, res, token) {
   });
 }
 
-function setTenantIdCookie(req, res, tenantId) {
-  res.cookie("tenant_id", tenantId, {
-    ...cookieBaseOpts(req),
-    httpOnly: true,
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-  });
-}
 
 function clearAuthCookies(req, res) {
   const o = cookieBaseOpts(req);
@@ -260,32 +223,15 @@ function publicUserRow(row) {
     first_name: row.first_name || "",
     last_name: row.last_name || "",
     role: String(row.role || "staff").toLowerCase(),
-    tenant_id: row.tenant_id || null,
     is_platform_admin: Number(row.is_platform_admin) === 1,
     email_verified: Number(row.email_verified) === 1,
   };
 }
 
-function slugFromCompanyName(name, tenantId) {
-  const base = String(name || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 32);
-  const suffix = String(tenantId || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "")
-    .slice(0, 6);
-  const candidate = `${base || "tenant"}${suffix ? `-${suffix}` : ""}`.slice(0, 40);
-  const checked = validateTenantSubdomain(candidate);
-  if (checked.ok) return checked.slug;
-  return `tenant-${suffix || "crm"}`.slice(0, 40);
-}
 
 async function loadUserById(id) {
   const [rows] = await mainPool.execute(
-    `SELECT id, clerk_user_id, email, first_name, last_name, role, tenant_id, is_active,
+    `SELECT id, email, first_name, last_name, role, is_active,
             COALESCE(is_platform_admin, 0) AS is_platform_admin,
             COALESCE(email_verified, 0) AS email_verified,
             password_hash
@@ -328,48 +274,9 @@ async function login(req, res) {
       });
     }
 
-    user = await reconcileConfiguredPlatformSuperAdmin(user);
-    console.log(`[auth] User found for login, id=${user.id}`);
 
     const passwordField = user.password_hash || user.password || user.hashed_password;
 
-    if (!passwordField) {
-      console.log('LOGIN ATTEMPT: User has no password field, triggering migration logic');
-      // 🚀 MIGRATION LOGIC: User exists but has no password (migrated from Clerk)
-      // Automatically generate a reset token and send them an email to set a password.
-      try {
-        const plain = crypto.randomBytes(32).toString("hex");
-        const tokenHash = sha256hex(plain);
-        const expires = new Date(Date.now() + 1 * 60 * 60 * 1000); // 1 hour expiry
-        await mainPool.execute(
-          `UPDATE users SET password_reset_token = ?, password_reset_expires = ?, updated_at = NOW() WHERE id = ?`,
-          [tokenHash, expires, user.id]
-        );
-
-        const link = `${frontendBaseUrl()}/reset-password?token=${encodeURIComponent(plain)}`;
-
-        await sendPasswordReset(user.email, {
-          link,
-          expiresHours: 1,
-          userId: user.id,
-        });
-
-        return res.status(403).json({
-          success: false,
-          code: "AUTH_PASSWORD_SETUP_REQUIRED",
-          message: "We've upgraded our secure login system! An email has just been sent to you with a link to set your new password. Please check your inbox.",
-          diagnostics: buildAuthDiagnostics(req, { stage: "password_migration" }),
-        });
-      } catch (err) {
-        console.error("Auto password reset failed:", err);
-        return res.status(401).json({
-          success: false,
-          code: "AUTH_PASSWORD_SETUP_FAILED",
-          message: "Please use the 'Forgot Password' link to set a password for your account.",
-          diagnostics: buildAuthDiagnostics(req, { stage: "password_migration_email", error: String(err?.message || "") }),
-        });
-      }
-    }
 
     // FIXED: login password verification via bcrypt.compare
     const ok = await bcrypt.compare(String(password), String(passwordField));
@@ -392,58 +299,9 @@ async function login(req, res) {
       });
     }
 
-    if (user.tenant_id && !user.is_platform_admin) {
-      const [tenantRows] = await mainPool.execute(
-        "SELECT subdomain, slug, subdomain_status, status FROM tenants WHERE id = ? LIMIT 1",
-        [user.tenant_id]
-      );
-      const tenant = tenantRows[0];
 
-      if (!tenant) {
-        return res.status(403).json({
-          success: false,
-          code: "AUTH_WORKSPACE_NOT_FOUND",
-          message: "Workspace not found or not created yet for this account.",
-        });
-      }
-
-      const reqSubdomain = String(req.headers["x-tenant-subdomain"] || req.headers["x-tenant-slug"] || "").trim().toLowerCase();
-      const tenantSub = String(tenant.subdomain || tenant.slug || "").trim().toLowerCase();
-
-      const assignedWorkspaceUrl = tenantSub
-        ? `https://${tenantSub}.${process.env.APP_BASE_DOMAIN || "365rndcrm.vercel.app"}`
-        : "";
-
-      // Block apex login when tenant status is active (paid + workspace live).
-      // Don't gate on subdomain_status — that field may lag behind actual workspace state.
-      const workspaceActive = tenantSub && tenant.status === "active";
-
-      if (tenantSub) {
-        if (reqSubdomain && reqSubdomain !== tenantSub) {
-          // Always block wrong-subdomain attempts regardless of status.
-          return res.status(403).json({
-            success: false,
-            code: "AUTH_WORKSPACE_MISMATCH",
-            message: `Please log in via your assigned workspace URL: ${assignedWorkspaceUrl}`,
-            assigned_workspace_url: assignedWorkspaceUrl,
-          });
-        }
-        if (!reqSubdomain && workspaceActive) {
-          // Apex login blocked — workspace is live.
-          return res.status(403).json({
-            success: false,
-            code: "AUTH_WORKSPACE_MISMATCH",
-            message: `Please log in via your assigned workspace URL: ${assignedWorkspaceUrl}`,
-            assigned_workspace_url: assignedWorkspaceUrl,
-          });
-        }
-      }
-    }
-
-    const tenantId = user.tenant_id && String(user.tenant_id).trim() !== "" ? user.tenant_id : null;
     const access = generateAccessToken({
       userId: user.id,
-      tenantId,
       role: user.role,
       is_platform_admin: user.is_platform_admin,
     });
@@ -453,31 +311,7 @@ async function login(req, res) {
     setAccessCookie(req, res, access);
     setRefreshCookie(req, res, refresh);
 
-    // Set tenant_id cookie for pending_payment redirects
-    if (tenantId) {
-      setTenantIdCookie(req, res, tenantId);
-    }
-
-    // Build tenant info for response
-    let tenantInfo = null;
-    let redirectUrl = "/dashboard";
-    if (tenantId && !user.is_platform_admin) {
-      const [tenantRows] = await mainPool.execute(
-        "SELECT subdomain, slug, subdomain_status, status FROM tenants WHERE id = ? LIMIT 1",
-        [tenantId]
-      );
-      const tenant = tenantRows[0];
-      if (tenant) {
-        tenantInfo = {
-          subdomain: tenant.subdomain || tenant.slug,
-          status: tenant.status,
-          subdomain_status: tenant.subdomain_status,
-        };
-        if (tenant.status === "pending_payment") {
-          redirectUrl = "/add-package?onboarding=1";
-        }
-      }
-    }
+    const redirectUrl = "/dashboard";
 
     res.json({
       success: true,
@@ -488,13 +322,10 @@ async function login(req, res) {
         id: user.id,
         email: user.email,
         role: String(user.role || "staff").toLowerCase(),
-        tenant_id: tenantId,
         is_platform_admin: Number(user.is_platform_admin) === 1 ? 1 : 0,
         first_name: user.first_name || "",
         last_name: user.last_name || "",
-        profile_image: user.profile_profile || null,
       },
-      tenant: tenantInfo,
       redirectUrl,
     });
   } catch (e) {
@@ -572,39 +403,8 @@ async function refresh(req, res) {
     if (!user || !user.is_active) {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
-    user = await reconcileConfiguredPlatformSuperAdmin(user);
-
-    // Same subdomain enforcement as login.
-    // Refresh is a silent re-auth — if the user has a workspace subdomain,
-    // they must be calling this from that subdomain, not the apex domain.
-    if (user.tenant_id && !user.is_platform_admin) {
-      const [tenantRows] = await mainPool.execute(
-        "SELECT subdomain, slug, subdomain_status, status FROM tenants WHERE id = ? LIMIT 1",
-        [user.tenant_id]
-      );
-      const tenant = tenantRows[0];
-      const tenantSub = String(tenant?.subdomain || tenant?.slug || "").trim().toLowerCase();
-      // Same rule as login: block apex refresh when tenant is active.
-      const workspaceActive = tenantSub && tenant?.status === "active";
-
-      if (workspaceActive) {
-        const reqSubdomain = String(req.headers["x-tenant-subdomain"] || req.headers["x-tenant-slug"] || "").trim().toLowerCase();
-        if (!reqSubdomain || reqSubdomain !== tenantSub) {
-          const assignedUrl = `https://${tenantSub}.${process.env.APP_BASE_DOMAIN || "365rndcrm.vercel.app"}`;
-          return res.status(403).json({
-            success: false,
-            code: "AUTH_WORKSPACE_MISMATCH",
-            message: `Please access your workspace at: ${assignedUrl}`,
-            assigned_workspace_url: assignedUrl,
-          });
-        }
-      }
-    }
-
-    const tenantId = user.tenant_id && String(user.tenant_id).trim() !== "" ? user.tenant_id : null;
     const access = generateAccessToken({
       userId: user.id,
-      tenantId,
       role: user.role,
       is_platform_admin: user.is_platform_admin,
     });
@@ -730,9 +530,9 @@ async function resetPassword(req, res) {
  */
 async function signup(req, res) {
   try {
-    const { name, company_name, email, password } = req.body || {};
-    if (!email || !password || !name || !company_name) {
-      return res.status(400).json({ success: false, message: "name, company_name, email, password are required." });
+    const { name, email, password } = req.body || {};
+    if (!email || !password || !name) {
+      return res.status(400).json({ success: false, message: "name, email, password are required." });
     }
     if (String(password).length < 8) {
       return res.status(400).json({ success: false, message: "Password must be at least 8 characters." });
@@ -744,77 +544,26 @@ async function signup(req, res) {
     const emailNorm = String(email).trim().toLowerCase();
     const pwHash = await hashPassword(password);
 
-    // FIXED: 2 signup wrapped in transaction for atomic user+tenant provisioning
-    const conn = await mainPool.getConnection();
-    let user;
+    let userId;
     try {
-      await conn.beginTransaction();
-      let userId;
-      try {
-        const [ins] = await conn.execute(
-          `INSERT INTO users (clerk_user_id, email, password_hash, first_name, last_name, role, is_active, email_verified)
-           VALUES (NULL, ?, ?, ?, ?, 'manager', 1, 0)`,
-          [emailNorm, pwHash, firstName, lastName]
-        );
-        userId = ins.insertId;
-      } catch (e) {
-        if (e.code === "ER_DUP_ENTRY") {
-          await conn.rollback();
-          return res.status(409).json({ success: false, message: "An account with this email already exists." });
-        }
-        throw e;
-      }
-
-      const [fresh] = await conn.execute(
-        `SELECT id, email, first_name, last_name, role, tenant_id, is_platform_admin, email_verified FROM users WHERE id = ? LIMIT 1`,
-        [userId]
+      const [ins] = await mainPool.execute(
+        `INSERT INTO users (email, password_hash, first_name, last_name, role, is_active, email_verified)
+          VALUES (?, ?, ?, ?, 'manager', 1, 0)`,
+        [emailNorm, pwHash, firstName, lastName]
       );
-      user = fresh[0];
-
-      const tenantId = user.tenant_id || crypto.randomUUID();
-      if (!user.tenant_id) {
-        const subdomain = await reserveSubdomain(company_name);
-        await conn.execute(
-          `INSERT INTO tenants
-             (id, company_name, subdomain, subdomain_status, slug, owner_user_id, status, trial_ends_at)
-           VALUES (?, ?, ?, 'pending', ?, ?, 'trial', DATE_ADD(NOW(), INTERVAL 7 DAY))`,
-          [tenantId, String(company_name).trim().slice(0, 180), subdomain, subdomain, user.id]
-        );
-        await conn.execute("UPDATE users SET tenant_id = ?, role = 'manager' WHERE id = ?", [tenantId, user.id]);
-        const [again] = await conn.execute(
-          `SELECT id, email, first_name, last_name, role, tenant_id, is_platform_admin, email_verified FROM users WHERE id = ? LIMIT 1`,
-          [userId]
-        );
-        user = again[0];
-
-        const [pkg] = await conn.execute(
-          "SELECT id FROM subscription_packages WHERE is_active = 1 ORDER BY sort_order ASC, id ASC LIMIT 1"
-        );
-        if (pkg.length) {
-          await conn.execute(
-            `INSERT INTO subscriptions (id, tenant_id, package_id, status, starts_at, ends_at)
-             VALUES (?, ?, ?, 'trial', NOW(), DATE_ADD(NOW(), INTERVAL 7 DAY))`,
-            [crypto.randomUUID(), tenantId, pkg[0].id]
-          );
-        }
-      }
-      await conn.commit();
+      userId = ins.insertId;
     } catch (e) {
-      try {
-        await conn.rollback();
-      } catch {
-        /* ignore rollback error */
+      if (e.code === "ER_DUP_ENTRY") {
+        return res.status(409).json({ success: false, message: "An account with this email already exists." });
       }
       throw e;
-    } finally {
-      conn.release();
     }
 
+    const user = await loadUserById(userId);
+
     // Automatically log the user in after signup
-    const tenantId = user.tenant_id && String(user.tenant_id).trim() !== "" ? user.tenant_id : null;
     const access = generateAccessToken({
       userId: user.id,
-      tenantId,
       role: user.role,
       is_platform_admin: user.is_platform_admin,
     });
@@ -824,15 +573,10 @@ async function signup(req, res) {
     setAccessCookie(req, res, access);
     setRefreshCookie(req, res, refresh);
 
-    // Set tenant_id cookie for pending_payment redirects
-    if (tenantId) {
-      setTenantIdCookie(req, res, tenantId);
-    }
-
     res.status(201).json({
       success: true,
       message: "Account created. You can sign in now.",
-      data: { user: publicUserRow(user), tenant_id: user.tenant_id || null },
+      data: { user: publicUserRow(user) },
     });
   } catch (err) {
     console.error("auth signup:", err);
@@ -883,5 +627,4 @@ module.exports = {
   signup,
   setAccessCookie,
   setRefreshCookie,
-  setTenantIdCookie,
 };

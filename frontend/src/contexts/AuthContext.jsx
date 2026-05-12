@@ -12,7 +12,6 @@ import {
 import { useRouter } from "next/navigation";
 import {
   getApiBase,
-  getTenantSubdomainFromHost,
   disconnectGlobalSocket,
   getAccessToken,
   setAccessToken,
@@ -44,13 +43,7 @@ function isPublicRoutePath(pathname) {
 }
 
 function tenantHeaders() {
-  const headers = {};
-  const sub = getTenantSubdomainFromHost();
-  if (sub) {
-    headers["X-Tenant-Subdomain"] = sub;
-    headers["X-Tenant-Slug"] = sub;
-  }
-  return headers;
+  return {};
 }
 
 async function parseJsonSafe(res) {

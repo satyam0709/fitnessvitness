@@ -8,7 +8,10 @@
       "Bash(node --check src/lib/fitnessApi.js)",
       "Bash(npm list *)",
       "Bash(cd d:\\\\all c\\\\Desktop\\\\crm-test\\\\backend)",
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(Get-Content \"C:\\\\Users\\\\satyam\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--all-c-Desktop-crm-test\\\\ee13b687-9a71-47a8-9fd2-14661b907d05\\\\tasks\\\\bxfqoh38t.output\" -Tail 50)",
+      "Bash(findstr -i chat)"
     ]
   }
 }
