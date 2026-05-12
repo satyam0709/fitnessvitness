@@ -1,5 +1,4 @@
 const express = require("express");
-const { handleClerkWebhook } = require("../controllers/webhookController");
 const { getMe, syncCurrentUser } = require("../controllers/userController");
 const { submitContact, getContacts, markAsRead } = require("../controllers/contactController");
 const { verifyToken } = require("../middleware/verifyToken");
@@ -65,7 +64,6 @@ router.get("/health/db", async (_req, res) => {
     res.json({
       success: true,
       db: { ok: rows?.[0]?.ok === 1 },
-      tenantPools: getTenantPoolStats(),
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
@@ -73,74 +71,10 @@ router.get("/health/db", async (_req, res) => {
       success: false,
       message: "Database health check failed",
       error: String(error.message || "db_unavailable"),
-      tenantPools: getTenantPoolStats(),
     });
   }
 });
 
-router.get("/health/auth", (req, res) => {
-  const configuredOrigins = buildConfiguredOrigins();
-  const origin = String(req.get("origin") || "").trim() || null;
-  const cookieHeader = String(req.get("cookie") || "");
-  const hasAccessCookie = cookieHeader.includes("access_token=");
-  const hasRefreshCookie = cookieHeader.includes("refresh_token=");
-  const cookieDomain = String(process.env.COOKIE_DOMAIN || "").trim() || null;
-  const cookieSecure = process.env.NODE_ENV === "production";
-  const sameSite = "lax";
-
-  const jwtConfigured = Boolean(String(process.env.JWT_SECRET || "").trim());
-  const jwtRefreshConfigured = Boolean(String(process.env.JWT_REFRESH_SECRET || "").trim());
-  const frontendUrlConfigured = Boolean(
-    String(process.env.FRONTEND_URL || process.env.CLIENT_URL || process.env.APP_URL || "").trim()
-  );
-
-  const originAllowed =
-    !origin ||
-    configuredOrigins.includes(origin) ||
-    (() => {
-      try {
-        const host = new URL(origin).hostname.toLowerCase();
-        const base = String(process.env.APP_BASE_DOMAIN || "localhost")
-          .replace(/^https?:\/\//, "")
-          .split("/")[0]
-          .toLowerCase();
-        return (
-          host === "localhost" ||
-          host === "127.0.0.1" ||
-          host.endsWith(".localhost") ||
-          host === base ||
-          host.endsWith(`.${base}`)
-        );
-      } catch {
-        return false;
-      }
-    })();
-
-  res.json({
-    success: true,
-    message: "Auth runtime health snapshot",
-    checks: {
-      jwt_secret_configured: jwtConfigured,
-      jwt_refresh_secret_configured: jwtRefreshConfigured,
-      frontend_url_configured: frontendUrlConfigured,
-      cookie: {
-        domain: cookieDomain,
-        secure: cookieSecure,
-        sameSite,
-      },
-      request: {
-        origin,
-        origin_allowed: originAllowed,
-        has_access_cookie: hasAccessCookie,
-        has_refresh_cookie: hasRefreshCookie,
-      },
-      configured_origins: configuredOrigins,
-    },
-    timestamp: new Date().toISOString(),
-  });
-});
-
-router.post("/webhook/clerk", handleClerkWebhook);
 router.use("/auth", authRouter);
 
 router.post("/users/sync", verifyToken, syncCurrentUser);

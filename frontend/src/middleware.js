@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { PROTECTED_PREFIXES } from "@/lib/constants";
 
-const AUTH_PATH_PREFIXES = ["/login", "/signup", "/sign-in", "/register"];
+const AUTH_PATH_PREFIXES = ["/login"];
 
 function isProtectedPath(pathname) {
   return PROTECTED_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
@@ -22,9 +22,11 @@ export default function middleware(request) {
   const pathname = request.nextUrl.pathname;
   const cookiePresent = hasAuthCookies(request);
 
-  if (!cookiePresent && isProtectedPath(pathname)) {
+  if (!cookiePresent && (pathname === "/" || isProtectedPath(pathname))) {
     const loginUrl = new URL("/login", request.url);
-    loginUrl.searchParams.set("returnTo", `${pathname}${request.nextUrl.search || ""}`);
+    if (pathname !== "/") {
+      loginUrl.searchParams.set("returnTo", `${pathname}${request.nextUrl.search || ""}`);
+    }
     return NextResponse.redirect(loginUrl);
   }
 

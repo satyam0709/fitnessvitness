@@ -106,7 +106,30 @@ async function ensureSchema() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
-  // ── contacts table (company-wise contact directory) ───────────────────────
+  // ── users table ───────────────────────────────────────────────────────────
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS users (
+      id                INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      email             VARCHAR(180) NOT NULL,
+      password_hash     VARCHAR(255) DEFAULT NULL,
+      first_name        VARCHAR(100) DEFAULT NULL,
+      last_name         VARCHAR(100) DEFAULT NULL,
+      role              ENUM('admin','manager','staff') NOT NULL DEFAULT 'staff',
+      is_active         TINYINT(1)   NOT NULL DEFAULT 1,
+      email_verified    TINYINT(1)   NOT NULL DEFAULT 0,
+      must_change_password TINYINT(1) NOT NULL DEFAULT 0,
+      mobile_number     VARCHAR(20)  DEFAULT NULL,
+      profile_image     VARCHAR(255) DEFAULT NULL,
+      password_reset_token VARCHAR(255) DEFAULT NULL,
+      password_reset_expires DATETIME   DEFAULT NULL,
+      created_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uk_email (email)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // ── contacts table ───────────────────────────────────────────────────────
   await pool.execute(`
     CREATE TABLE IF NOT EXISTS contacts (
       id                   INT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -134,7 +157,9 @@ async function ensureSchema() {
       KEY idx_contacts_relationship (account_relationship),
       KEY idx_contacts_department (department),
       KEY idx_contacts_assigned (assigned_to),
-      KEY idx_contacts_created_by (created_by)
+      KEY idx_contacts_created_by (created_by),
+      CONSTRAINT fk_contacts_assigned FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE SET NULL,
+      CONSTRAINT fk_contacts_creator FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
@@ -866,146 +891,6 @@ async function ensureSchema() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
-  // ── multi-tenant SaaS foundation ───────────────────────────────────────────
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS tenants (
-      id              CHAR(36)     NOT NULL,
-      company_name    VARCHAR(180) NOT NULL,
-      owner_user_id   INT UNSIGNED DEFAULT NULL,
-      status          ENUM('active','trial','suspended','cancelled') NOT NULL DEFAULT 'trial',
-      trial_ends_at   DATETIME     DEFAULT NULL,
-      settings_json   JSON         DEFAULT NULL,
-      created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      KEY idx_tenants_owner (owner_user_id),
-      KEY idx_tenants_status (status)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS subscriptions (
-      id                        CHAR(36)     NOT NULL,
-      tenant_id                 CHAR(36)     NOT NULL,
-      package_id                INT UNSIGNED DEFAULT NULL,
-      status                    ENUM('trial','active','expired','cancelled','suspended') NOT NULL DEFAULT 'trial',
-      starts_at                 DATETIME     DEFAULT NULL,
-      ends_at                   DATETIME     DEFAULT NULL,
-      payment_gateway           VARCHAR(40)  DEFAULT NULL,
-      gateway_subscription_id   VARCHAR(180) DEFAULT NULL,
-      coupon_id                 INT UNSIGNED DEFAULT NULL,
-      created_at                DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at                DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      KEY idx_subscriptions_tenant (tenant_id),
-      KEY idx_subscriptions_status (status)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS tenant_addons (
-      id            CHAR(36)     NOT NULL,
-      tenant_id     CHAR(36)     NOT NULL,
-      addon_type    ENUM('extra_staff_seat','extra_storage','extra_feature') NOT NULL,
-      quantity      INT UNSIGNED NOT NULL DEFAULT 1,
-      price_paid    DECIMAL(12,2) NOT NULL DEFAULT 0,
-      active_until  DATETIME     DEFAULT NULL,
-      created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      KEY idx_tenant_addons_tenant (tenant_id),
-      KEY idx_tenant_addons_type (addon_type)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS staff_permissions (
-      id           CHAR(36)     NOT NULL,
-      tenant_id    CHAR(36)     NOT NULL,
-      user_id      INT UNSIGNED NOT NULL,
-      feature      VARCHAR(80)  NOT NULL,
-      can_view     TINYINT(1)   NOT NULL DEFAULT 1,
-      can_create   TINYINT(1)   NOT NULL DEFAULT 0,
-      can_edit     TINYINT(1)   NOT NULL DEFAULT 0,
-      can_delete   TINYINT(1)   NOT NULL DEFAULT 0,
-      created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      KEY idx_staff_permissions_tenant_user (tenant_id, user_id),
-      UNIQUE KEY uk_staff_permissions_scope (tenant_id, user_id, feature),
-      KEY idx_staff_permissions_feature (feature)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-
-  // ── RBAC: global permission catalog + per-tenant roles + members (organization = tenant) ──
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS acl_permissions (
-      id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
-      code         VARCHAR(120) NOT NULL,
-      module_name  VARCHAR(80)  NOT NULL,
-      action_name  VARCHAR(80)  NOT NULL,
-      description  VARCHAR(255) DEFAULT NULL,
-      created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      UNIQUE KEY uk_acl_permissions_code (code),
-      KEY idx_acl_permissions_module (module_name)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS org_roles (
-      id               INT UNSIGNED NOT NULL AUTO_INCREMENT,
-      organization_id  CHAR(36)     NOT NULL,
-      slug             VARCHAR(40)  NOT NULL,
-      name             VARCHAR(120) NOT NULL,
-      is_system        TINYINT(1)   NOT NULL DEFAULT 1,
-      created_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      UNIQUE KEY uk_org_roles_scope (organization_id, slug),
-      KEY idx_org_roles_org (organization_id)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS org_role_permissions (
-      role_id        INT UNSIGNED NOT NULL,
-      permission_id  INT UNSIGNED NOT NULL,
-      PRIMARY KEY (role_id, permission_id),
-      KEY idx_orp_permission (permission_id)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS organization_members (
-      id               BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-      organization_id  CHAR(36)     NOT NULL,
-      user_id          INT UNSIGNED NOT NULL,
-      role_id          INT UNSIGNED NOT NULL,
-      is_active        TINYINT(1)   NOT NULL DEFAULT 1,
-      invited_by       INT UNSIGNED DEFAULT NULL,
-      joined_at        DATETIME     DEFAULT NULL,
-      created_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      UNIQUE KEY uk_org_members_user_org (organization_id, user_id),
-      KEY idx_org_members_user (user_id),
-      KEY idx_org_members_role (role_id)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS rbac_audit_log (
-      id               BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-      organization_id  CHAR(36)     NOT NULL,
-      actor_user_id    INT UNSIGNED NOT NULL,
-      target_user_id   INT UNSIGNED DEFAULT NULL,
-      action           VARCHAR(80)  NOT NULL,
-      detail_json      JSON         DEFAULT NULL,
-      created_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      KEY idx_rbac_audit_org (organization_id, created_at)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
 
   const [usersTbl] = await pool.execute(
     `SELECT TABLE_NAME FROM information_schema.tables
@@ -1124,276 +1009,6 @@ async function ensureSchema() {
     }
   }
 
-  const [tenTbl] = await pool.execute(
-    `SELECT TABLE_NAME FROM information_schema.tables
-     WHERE table_schema = DATABASE() AND table_name = 'tenants'`
-  );
-  if (tenTbl.length) {
-    const [slugCol] = await pool.execute(
-      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tenants' AND COLUMN_NAME = 'slug'`
-    );
-    if (!slugCol.length) {
-      await pool.execute(`ALTER TABLE tenants ADD COLUMN slug VARCHAR(120) DEFAULT NULL`);
-      try {
-        await pool.execute(`ALTER TABLE tenants ADD UNIQUE KEY uk_tenants_slug (slug)`);
-      } catch {
-        /* unique may exist */
-      }
-      console.log("Migration: added tenants.slug");
-    }
-    for (const { column, definition } of [
-      { column: "is_active", definition: "TINYINT(1) NOT NULL DEFAULT 1" },
-      { column: "owner_clerk_user_id", definition: "VARCHAR(100) DEFAULT NULL" },
-      { column: "subdomain", definition: "VARCHAR(64) DEFAULT NULL" },
-      {
-        column: "subdomain_status",
-        definition: "ENUM('pending','active','failed') NOT NULL DEFAULT 'pending'",
-      },
-    ]) {
-      const [c] = await pool.execute(
-        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tenants' AND COLUMN_NAME = ?`,
-        [column]
-      );
-      if (!c.length) {
-        await pool.execute(`ALTER TABLE tenants ADD COLUMN \`${column}\` ${definition}`);
-        console.log(`Migration: added tenants.${column}`);
-      }
-    }
-    try {
-      await pool.execute(`ALTER TABLE tenants ADD KEY idx_tenants_is_active (is_active)`);
-    } catch {
-      /* exists */
-    }
-    try {
-      await pool.execute(`ALTER TABLE tenants ADD UNIQUE KEY uk_tenants_subdomain (subdomain)`);
-    } catch {
-      /* exists */
-    }
-    try {
-      await pool.execute(
-        `UPDATE tenants SET subdomain = slug WHERE (subdomain IS NULL OR TRIM(subdomain) = '') AND slug IS NOT NULL`
-      );
-    } catch (e) {
-      console.warn("Migration: backfill tenants.subdomain:", e.message);
-    }
-
-    // Migration: Add 'pending_payment' to tenants.status ENUM if not present
-    try {
-      const [enumRows] = await pool.execute(`
-        SELECT COLUMN_TYPE
-        FROM INFORMATION_SCHEMA.COLUMNS
-        WHERE TABLE_SCHEMA = DATABASE()
-          AND TABLE_NAME = 'tenants'
-          AND COLUMN_NAME = 'status'
-      `);
-      if (enumRows.length > 0) {
-        const columnType = enumRows[0].COLUMN_TYPE;
-        // Check if 'pending_payment' is not in the ENUM values
-        if (!columnType.includes("'pending_payment'")) {
-          console.log("Migration: Adding 'pending_payment' to tenants.status ENUM");
-          // Modify the ENUM to include pending_payment
-          await pool.execute(`
-            ALTER TABLE tenants
-            MODIFY COLUMN status ENUM('active','trial','suspended','cancelled','pending_payment')
-            NOT NULL DEFAULT 'trial'
-          `);
-        }
-      }
-    } catch (e) {
-      console.warn("Migration: modifying tenants.status ENUM:", e.message);
-    }
-  }
-
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS tenant_features (
-      id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
-      tenant_id    CHAR(36)     NOT NULL,
-      feature_key  VARCHAR(80)  NOT NULL,
-      is_enabled   TINYINT(1)   NOT NULL DEFAULT 1,
-      created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      UNIQUE KEY uk_tenant_features_scope (tenant_id, feature_key),
-      KEY idx_tenant_features_tenant (tenant_id),
-      CONSTRAINT fk_tenant_features_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS tenant_marketplace_addons (
-      id          CHAR(36)     NOT NULL,
-      tenant_id   CHAR(36)     NOT NULL,
-      addon_key   VARCHAR(100) NOT NULL,
-      is_active   TINYINT(1)   NOT NULL DEFAULT 0,
-      valid_from  DATETIME     DEFAULT NULL,
-      valid_until DATETIME     DEFAULT NULL,
-      created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      UNIQUE KEY uk_tma_scope (tenant_id, addon_key),
-      KEY idx_tma_tenant (tenant_id),
-      CONSTRAINT fk_tma_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS tenant_invitations (
-      id           CHAR(36)     NOT NULL,
-      tenant_id    CHAR(36)     NOT NULL,
-      email        VARCHAR(180) NOT NULL,
-      role         VARCHAR(20)  NOT NULL DEFAULT 'staff',
-      invited_by   INT UNSIGNED DEFAULT NULL,
-      status       ENUM('pending','accepted','expired','cancelled') NOT NULL DEFAULT 'pending',
-      expires_at   DATETIME     NOT NULL,
-      created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      KEY idx_tinv_tenant (tenant_id),
-      KEY idx_tinv_email (email),
-      CONSTRAINT fk_tinv_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
-      CONSTRAINT fk_tinv_inviter FOREIGN KEY (invited_by) REFERENCES users(id) ON DELETE SET NULL
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS user_invitations (
-      id           CHAR(36)     NOT NULL,
-      user_id      INT UNSIGNED NOT NULL,
-      tenant_id    CHAR(36)     DEFAULT NULL,
-      invited_by   INT UNSIGNED DEFAULT NULL,
-      email        VARCHAR(180) NOT NULL,
-      role         VARCHAR(20)  NOT NULL DEFAULT 'staff',
-      token        VARCHAR(255) NOT NULL,
-      status       ENUM('pending','accepted','expired','cancelled') NOT NULL DEFAULT 'pending',
-      expires_at   DATETIME     NOT NULL,
-      accepted_at  DATETIME     DEFAULT NULL,
-      created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      UNIQUE KEY uk_user_invitations_token (token),
-      KEY idx_user_invitations_user (user_id),
-      KEY idx_user_invitations_email (email),
-      KEY idx_user_invitations_tenant (tenant_id),
-      CONSTRAINT fk_user_invitations_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-      CONSTRAINT fk_user_invitations_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE SET NULL,
-      CONSTRAINT fk_user_invitations_invited_by FOREIGN KEY (invited_by) REFERENCES users(id) ON DELETE SET NULL
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-
-  // Legacy-compatible package registry per tenant (additive; does not alter existing subscription model)
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS tenant_packages (
-      id            INT UNSIGNED NOT NULL AUTO_INCREMENT,
-      tenant_id     CHAR(36)     NOT NULL,
-      package_name  VARCHAR(100) NOT NULL,
-      max_users     INT          NOT NULL DEFAULT 5,
-      valid_from    DATE         DEFAULT NULL,
-      valid_until   DATE         DEFAULT NULL,
-      status        ENUM('trial','active','expired','cancelled') NOT NULL DEFAULT 'trial',
-      created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      KEY idx_tenant_packages_tenant (tenant_id),
-      CONSTRAINT fk_tenant_packages_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-
-  // Backward-compatible invitation token support
-  const [tinvTokenCol] = await pool.execute(
-    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tenant_invitations' AND COLUMN_NAME = 'token'`
-  );
-  if (!tinvTokenCol.length) {
-    await pool.execute(`ALTER TABLE tenant_invitations ADD COLUMN token VARCHAR(255) DEFAULT NULL`);
-    console.log("Migration: added tenant_invitations.token");
-  }
-  try {
-    await pool.execute(`ALTER TABLE tenant_invitations ADD UNIQUE KEY uk_tinv_token (token)`);
-  } catch {
-    // index may already exist
-  }
-
-  // Optional legacy column parity for tenants.name while keeping existing company_name usage
-  const [tenantNameCol] = await pool.execute(
-    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tenants' AND COLUMN_NAME = 'name'`
-  );
-  if (!tenantNameCol.length) {
-    await pool.execute(`ALTER TABLE tenants ADD COLUMN name VARCHAR(255) DEFAULT NULL`);
-    try {
-      await pool.execute(`UPDATE tenants SET name = company_name WHERE name IS NULL`);
-    } catch {
-      // tolerate partial/legacy shape differences
-    }
-    console.log("Migration: added tenants.name");
-  }
-
-  const tenantColumnsByTable = {
-    users: "CHAR(36) DEFAULT NULL",
-    leads: "CHAR(36) DEFAULT NULL",
-    tasks: "CHAR(36) DEFAULT NULL",
-    reminders: "CHAR(36) DEFAULT NULL",
-    meetings: "CHAR(36) DEFAULT NULL",
-    notes: "CHAR(36) DEFAULT NULL",
-    contacts: "CHAR(36) DEFAULT NULL",
-    companies: "CHAR(36) DEFAULT NULL",
-    customers: "CHAR(36) DEFAULT NULL",
-    invoices: "CHAR(36) DEFAULT NULL",
-    crm_todos: "CHAR(36) DEFAULT NULL",
-    opportunities: "CHAR(36) DEFAULT NULL",
-    tickets: "CHAR(36) DEFAULT NULL",
-  };
-  for (const [table, definition] of Object.entries(tenantColumnsByTable)) {
-    const [tbl] = await pool.execute(
-      `SELECT TABLE_NAME FROM information_schema.tables
-       WHERE table_schema = DATABASE() AND table_name = ?`,
-      [table]
-    );
-    if (!tbl.length) continue;
-    const [cols] = await pool.execute(
-      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = 'tenant_id'`,
-      [table]
-    );
-    if (!cols.length) {
-      await pool.execute(`ALTER TABLE \`${table}\` ADD COLUMN tenant_id ${definition}`);
-      console.log(`Migration: added ${table}.tenant_id`);
-    }
-    try {
-      await pool.execute(`ALTER TABLE \`${table}\` ADD INDEX idx_${table}_tenant_id (tenant_id)`);
-    } catch {
-      // index may already exist
-    }
-  }
-
-  // Add FK users.tenant_id -> tenants.id if both tables/column exist and FK is missing
-  const [usersTblForFk] = await pool.execute(
-    `SELECT TABLE_NAME FROM information_schema.tables
-     WHERE table_schema = DATABASE() AND table_name = 'users'`
-  );
-  const [usersTenantColForFk] = await pool.execute(
-    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'tenant_id'`
-  );
-  if (usersTblForFk.length && usersTenantColForFk.length) {
-    const [usersTenantFk] = await pool.execute(
-      `SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS
-       WHERE TABLE_SCHEMA = DATABASE()
-         AND TABLE_NAME = 'users'
-         AND CONSTRAINT_TYPE = 'FOREIGN KEY'
-         AND CONSTRAINT_NAME = 'fk_users_tenant'`
-    );
-    if (!usersTenantFk.length) {
-      try {
-        await pool.execute(
-          `ALTER TABLE users
-           ADD CONSTRAINT fk_users_tenant
-           FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE SET NULL`
-        );
-        console.log("Migration: added users.fk_users_tenant");
-      } catch (e) {
-        console.warn("Migration: could not add users.fk_users_tenant:", e.message);
-      }
-    }
-  }
 
   const starredTables = ["opportunities", "companies"];
   for (const table of starredTables) {
@@ -1464,148 +1079,6 @@ async function ensureSchema() {
     }
   }
 
-  // ── per-tenant MySQL databases (metadata in main DB) ───────────────────────
-  try {
-    await pool.execute(`
-    CREATE TABLE IF NOT EXISTS tenant_databases (
-      id CHAR(36) NOT NULL,
-      tenant_id CHAR(36) NOT NULL,
-      subdomain VARCHAR(100) NOT NULL,
-      db_name VARCHAR(64) NOT NULL,
-      db_host VARCHAR(255) NOT NULL,
-      db_port INT NOT NULL DEFAULT 3306,
-      db_user VARCHAR(100) DEFAULT NULL,
-      db_pass_encrypted TEXT DEFAULT NULL,
-      use_main_credentials TINYINT(1) NOT NULL DEFAULT 1,
-      provision_mode ENUM('platform_shared','superadmin_assigned','tenant_provided') NOT NULL DEFAULT 'platform_shared',
-      status ENUM('provisioning','active','suspended','failed','pending_review') NOT NULL DEFAULT 'provisioning',
-      provision_error TEXT DEFAULT NULL,
-      provisioned_at DATETIME DEFAULT NULL,
-      provisioned_by INT UNSIGNED DEFAULT NULL,
-      storage_bytes BIGINT UNSIGNED DEFAULT NULL,
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      UNIQUE KEY uk_td_tenant (tenant_id),
-      UNIQUE KEY uk_td_subdomain (subdomain),
-      UNIQUE KEY uk_td_db_name (db_name),
-      KEY idx_td_status (status),
-      CONSTRAINT fk_td_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-  } catch (e) {
-    console.warn("ensureSchema: tenant_databases (try without FK):", e.message);
-    await pool.execute(`
-    CREATE TABLE IF NOT EXISTS tenant_databases (
-      id CHAR(36) NOT NULL,
-      tenant_id CHAR(36) NOT NULL,
-      subdomain VARCHAR(100) NOT NULL,
-      db_name VARCHAR(64) NOT NULL,
-      db_host VARCHAR(255) NOT NULL,
-      db_port INT NOT NULL DEFAULT 3306,
-      db_user VARCHAR(100) DEFAULT NULL,
-      db_pass_encrypted TEXT DEFAULT NULL,
-      use_main_credentials TINYINT(1) NOT NULL DEFAULT 1,
-      provision_mode ENUM('platform_shared','superadmin_assigned','tenant_provided') NOT NULL DEFAULT 'platform_shared',
-      status ENUM('provisioning','active','suspended','failed','pending_review') NOT NULL DEFAULT 'provisioning',
-      provision_error TEXT DEFAULT NULL,
-      provisioned_at DATETIME DEFAULT NULL,
-      provisioned_by INT UNSIGNED DEFAULT NULL,
-      storage_bytes BIGINT UNSIGNED DEFAULT NULL,
-      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      UNIQUE KEY uk_td_tenant (tenant_id),
-      UNIQUE KEY uk_td_subdomain (subdomain),
-      UNIQUE KEY uk_td_db_name (db_name),
-      KEY idx_td_status (status)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-  }
-  const [tdUseMainCol] = await pool.execute(
-    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tenant_databases' AND COLUMN_NAME = 'use_main_credentials'`
-  );
-  if (!tdUseMainCol.length) {
-    await pool.execute(
-      `ALTER TABLE tenant_databases
-       ADD COLUMN use_main_credentials TINYINT(1) NOT NULL DEFAULT 1 AFTER db_pass_encrypted`
-    );
-    console.log("Migration: added tenant_databases.use_main_credentials");
-  }
-
-  const provisioningCols = [
-    {
-      column: "provision_mode",
-      definition:
-        "ENUM('platform_shared','superadmin_assigned','tenant_provided') NOT NULL DEFAULT 'platform_shared'",
-    },
-    { column: "provision_error", definition: "TEXT DEFAULT NULL" },
-    { column: "provisioned_at", definition: "DATETIME DEFAULT NULL" },
-    { column: "provisioned_by", definition: "INT UNSIGNED DEFAULT NULL" },
-  ];
-  for (const { column, definition } of provisioningCols) {
-    const [c] = await pool.execute(
-      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tenant_databases' AND COLUMN_NAME = ?`,
-      [column]
-    );
-    if (!c.length) {
-      await pool.execute(`ALTER TABLE tenant_databases ADD COLUMN \`${column}\` ${definition}`);
-      console.log(`Migration: added tenant_databases.${column}`);
-    }
-  }
-
-  try {
-    await pool.execute(`
-      ALTER TABLE tenant_databases MODIFY COLUMN status
-        ENUM('provisioning','active','suspended','failed','pending_review')
-        NOT NULL DEFAULT 'provisioning'
-    `);
-  } catch (e) {
-    console.warn("Migration: tenant_databases status enum extend:", e.message);
-  }
-
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS tenant_db_requests (
-      id                  INT UNSIGNED  NOT NULL AUTO_INCREMENT,
-      tenant_id           CHAR(36)      NOT NULL,
-      db_host             VARCHAR(255)  NOT NULL,
-      db_port             SMALLINT UNSIGNED NOT NULL DEFAULT 3306,
-      db_name             VARCHAR(100)  NOT NULL,
-      db_user             VARCHAR(100)  NOT NULL,
-      db_pass_encrypted   VARCHAR(512)  NOT NULL,
-      status              ENUM('pending','testing','approved','rejected') NOT NULL DEFAULT 'pending',
-      test_result         TEXT          DEFAULT NULL,
-      reviewed_by         INT UNSIGNED  DEFAULT NULL,
-      reviewed_at         DATETIME      DEFAULT NULL,
-      reject_reason       VARCHAR(255)  DEFAULT NULL,
-      created_at          DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at          DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      KEY idx_tdbr_tenant (tenant_id),
-      KEY idx_tdbr_status (status)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS subscription_package_db_policy (
-      package_id      INT UNSIGNED NOT NULL,
-      allowed_modes   JSON         NOT NULL,
-      default_mode    ENUM('platform_shared','superadmin_assigned','tenant_provided') NOT NULL DEFAULT 'platform_shared',
-      auto_approve    TINYINT(1)   NOT NULL DEFAULT 0,
-      created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      PRIMARY KEY (package_id)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-
-  const { ensureMasterPlatformTables } = require("./masterDatabase");
-  try {
-    await ensureMasterPlatformTables(pool);
-  } catch (e) {
-    console.warn("ensureSchema: ensureMasterPlatformTables:", e.message);
-  }
 
   const [tPlan] = await pool.execute(
     `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
@@ -1831,24 +1304,5 @@ async function ensureSchema() {
   console.log(`Schema ensured. Tables ready.`);
 }
 
-/**
- * Log dedicated-tenant database registry stats at startup.
- */
-async function validateTenantDatabases() {
-  try {
-    const { mainPool } = require("./database");
-    const [rows] = await mainPool.execute(
-      `SELECT status, COUNT(*) c FROM tenant_databases GROUP BY status`
-    );
-    if (!rows.length) {
-      console.log("[tenant_databases] (none registered — all tenants on shared main DB)");
-      return;
-    }
-    const parts = rows.map((r) => `${r.status}=${r.c}`).join(", ");
-    console.log(`[tenant_databases] ${parts}`);
-  } catch (e) {
-    console.warn("validateTenantDatabases:", e.message);
-  }
-}
 
-module.exports = { ensureSchema, validateTenantDatabases };
+module.exports = { ensureSchema };

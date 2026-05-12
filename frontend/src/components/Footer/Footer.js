@@ -4,14 +4,6 @@ import Link from "next/link";
 import Image from "next/image";
 import styles from "./Footer.module.css";
 
-const COMPANY_LINKS = [
-  { label: "Blog", href: "/blog" },
-  { label: "Features", href: "/features" },
-  { label: "What's new", href: "/blog" },
-  { label: "Video Tutorial", href: "#" },
-  { label: "FAQ", href: "#" },
-  { label: "Contact Us", href: "/contact-us" },
-];
 
 const POLICY_LINKS = [
   { label: "Privacy Policy", href: "#" },
@@ -49,19 +41,6 @@ export default function Footer() {
               opportunities of your business are qualified, analyzed, and
               nurtured by time to time.
             </p>
-          </div>
-
-          <div>
-            <h4 className={styles.heading}>Company</h4>
-            <ul className={styles.list}>
-              {COMPANY_LINKS.map((item) => (
-                <li key={item.label}>
-                  <Link href={item.href} className={styles.link}>
-                    {item.label}
-                  </Link>
-                </li>
-              ))}
-            </ul>
           </div>
 
           <div>

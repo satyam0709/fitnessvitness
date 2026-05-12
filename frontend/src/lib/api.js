@@ -176,64 +176,8 @@ export function getSocketOrigin() {
   }
 }
 
-export function getTenantSubdomainFromHost() {
-  if (typeof window === "undefined") return "";
-  const h = String(window.location.hostname || "").toLowerCase();
-  const base = String(
-    process.env.NEXT_PUBLIC_APP_BASE_DOMAIN || "365rndcrm.vercel.app"
-  )
-    .replace(/^https?:\/\//, "")
-    .split("/")[0]
-    .toLowerCase();
-  if (!h || h === "localhost" || h === "127.0.0.1" || h === base) return "";
-  if (h.endsWith(`.${base}`)) {
-    const s = h.slice(0, -(base.length + 1));
-    if (s && !s.includes(".")) return s;
-  }
-  return "";
-}
-
-export function getAppBaseDomain() {
-  return String(process.env.NEXT_PUBLIC_APP_BASE_DOMAIN || "365rndcrm.vercel.app")
-    .replace(/^https?:\/\//, "")
-    .split("/")[0]
-    .toLowerCase();
-}
-
-export function buildTenantDashboardUrl(subdomain) {
-  const sub = String(subdomain || "")
-    .trim()
-    .toLowerCase();
-  if (!sub || typeof window === "undefined") return "/dashboard";
-  const proto = window.location.protocol;
-  const port = window.location.port ? `:${window.location.port}` : "";
-  const host = String(window.location.hostname || "").toLowerCase();
-  const baseDomain = getAppBaseDomain();
-
-  if (host === "localhost" || host === "127.0.0.1") {
-    return `${proto}//${sub}.localhost${port}/dashboard`;
-  }
-
-  const apex = baseDomain.replace(/^www\./, "");
-  if (host === baseDomain || host === apex || host === `www.${apex}`) {
-    return `${proto}//${sub}.${apex}${port}/dashboard`;
-  }
-
-  if (host.endsWith(`.${apex}`)) {
-    return `${proto}//${sub}.${apex}${port}/dashboard`;
-  }
-
-  return `${proto}//${sub}.${host.replace(/^www\./, "")}${port}/dashboard`;
-}
-
 function tenantFetchHeaders() {
-  const headers = {};
-  const sub = getTenantSubdomainFromHost();
-  if (sub) {
-    headers["X-Tenant-Subdomain"] = sub;
-    headers["X-Tenant-Slug"] = sub;
-  }
-  return headers;
+  return {};
 }
 
 export function publicFileUrl(storedPath) {
