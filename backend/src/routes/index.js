@@ -11,8 +11,6 @@ const tasksRouter        = require("./tasks");
 const usersRouter        = require("./users");
 const integrationsRouter = require("./integrations");
 const v2Router           = require("./v2");
-const adminRouter        = require("./admin");
-const paymentRouter      = require("./payment");
 const remindersRouter    = require("./reminders");    // ← NEW
 const meetingsRouter     = require("./meetings");     // ← NEW
 const todosRouter          = require("./todos");
@@ -22,25 +20,12 @@ const calendarRouter     = require("./calendar");
 const contactsRouter     = require("./contacts");
 const companiesRouter    = require("./companies");
 const crmRouter          = require("./crm");
-const superadminRouter   = require("./superadmin");
 const authRouter         = require("./auth");
-const rbacRouter         = require("./rbac");
-const tenantAdminRouter = require("./tenantAdmin");
-const invitationsRouter = require("./invitations");
-const { placeOrder, getOrders, startTrial } = require("../controllers/orderController");
-const { getPublicCatalog } = require("../controllers/packageController");
-const { validateCoupon } = require("../controllers/couponController");
-const { getMeContext, getMeFeatures } = require("../controllers/meController");
-const { resolveTenantContext } = require("../middleware/tenantAccess");
-const { requireFeature } = require("../middleware/tenantAccess");
-const { handleRazorpayWebhook } = require("../controllers/paymentWebhookController");
+const fitnessRouter      = require("./fitness");
+const { getMeContext } = require("../controllers/meController");
 
 const router = express.Router();
-const gateFeature = (feature, action = "view") => [
-  verifyToken,
-  resolveTenantContext,
-  requireFeature(feature, action),
-];
+const protectedRoute = [verifyToken];
 
 function normalizeOrigin(raw) {
   const v = String(raw || "").trim();
@@ -155,50 +140,34 @@ router.get("/health/auth", (req, res) => {
   });
 });
 
-/** Public pricing catalog (packages + add-ons) for storefront — no auth. */
-router.get("/packages/catalog", getPublicCatalog);
-
-router.post("/coupons/validate", validateCoupon);
-
 router.post("/webhook/clerk", handleClerkWebhook);
-router.post("/webhooks/razorpay", handleRazorpayWebhook);
 router.use("/auth", authRouter);
 
 router.post("/users/sync", verifyToken, syncCurrentUser);
 router.get("/users/me", verifyToken, getMe);
-router.get("/me", verifyToken, resolveTenantContext, getMeContext);
-router.get("/me/features", verifyToken, resolveTenantContext, getMeFeatures);
-router.use("/rbac", rbacRouter);
-router.use("/tenant-admin", tenantAdminRouter);
-router.use("/invitations", invitationsRouter);
+router.get("/me", verifyToken, getMeContext);
 
 router.use("/users",        usersRouter);
-router.use("/leads", ...gateFeature("lead_management", "view"), leadsRouter);
-router.use("/opportunities", ...gateFeature("opportunities", "view"), opportunitiesRouter);
-router.use("/tickets", ...gateFeature("tickets", "view"), ticketsRouter);
-router.use("/tasks", ...gateFeature("task_management", "view"), tasksRouter);
-router.use("/reminders", ...gateFeature("reminders", "view"), remindersRouter);
-router.use("/meetings", ...gateFeature("meetings", "view"), meetingsRouter);
-router.use("/todos", ...gateFeature("todos", "view"), todosRouter);
-router.use("/notifications", ...gateFeature("notifications", "view"), notificationsRouter);
-router.use("/dashboard", ...gateFeature("dashboard", "view"), dashboardRouter);
-router.use("/calendar", ...gateFeature("calendar", "view"), calendarRouter);
-router.use("/contacts", ...gateFeature("customer_management", "view"), contactsRouter);
-router.use("/companies", ...gateFeature("customer_management", "view"), companiesRouter);
-router.use("/integrations", ...gateFeature("integrations", "view"), integrationsRouter);
+router.use("/leads", ...protectedRoute, leadsRouter);
+router.use("/opportunities", ...protectedRoute, opportunitiesRouter);
+router.use("/tickets", ...protectedRoute, ticketsRouter);
+router.use("/tasks", ...protectedRoute, tasksRouter);
+router.use("/reminders", ...protectedRoute, remindersRouter);
+router.use("/meetings", ...protectedRoute, meetingsRouter);
+router.use("/todos", ...protectedRoute, todosRouter);
+router.use("/notifications", ...protectedRoute, notificationsRouter);
+router.use("/dashboard", ...protectedRoute, dashboardRouter);
+router.use("/calendar", ...protectedRoute, calendarRouter);
+router.use("/contacts", ...protectedRoute, contactsRouter);
+router.use("/companies", ...protectedRoute, companiesRouter);
+router.use("/integrations", ...protectedRoute, integrationsRouter);
 
 router.post("/contact",            submitContact);
 router.get("/contact", verifyToken, getContacts);
 router.patch("/contact/:id/read", verifyToken, markAsRead);
 
-router.post("/orders/start-trial", verifyToken, startTrial);
-router.post("/orders", verifyToken, placeOrder);
-router.get("/orders", verifyToken, getOrders);
-
-router.use("/admin",   adminRouter);
-router.use("/superadmin", superadminRouter);
 router.use("/crm", crmRouter);
-router.use("/payment", paymentRouter);
 router.use("/v2",      v2Router);
+router.use("/fitness", ...protectedRoute, fitnessRouter);
 
 module.exports = router;

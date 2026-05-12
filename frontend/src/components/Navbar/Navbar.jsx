@@ -300,14 +300,6 @@ useEffect(() => {
                   )}
                 </li>
 
-                <li className={styles.navItem}>
-                  <Link
-                    href="/pricing"
-                    className={`${styles.navLink} ${pathname === "/pricing" ? styles.active : ""}`}
-                  >
-                    Pricing
-                  </Link>
-                </li>
 
                 <li
                   className={styles.navItem}
@@ -503,13 +495,6 @@ useEffect(() => {
               </Link>
             ))}
           </MobileAccordion>
-          <Link
-            href="/pricing"
-            className={`${styles.mobileNavLink} ${pathname === "/pricing" ? styles.active : ""}`}
-            onClick={() => setMobileOpen(false)}
-          >
-            Pricing
-          </Link>
           <MobileAccordion
             label="Integrations"
             isOpen={mobileExpand === "integrations"}

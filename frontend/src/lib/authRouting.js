@@ -4,7 +4,6 @@ import {
   getTenantSubdomainFromHost,
 } from "./api";
 import { getGlobalAuthData } from "@/contexts/AuthContext";
-import { isPlatformSuperAdmin } from "@/lib/platformUser";
 
 /**
  * True when the browser is on the main app host (no workspace subdomain).
@@ -68,22 +67,19 @@ export async function resolvePostLoginTarget(searchParams) {
 
   // Force onboarding completion FIRST
   if (mePayload?.onboarding_locked) {
-    return { kind: "path", href: "/add-package?onboarding=1" };
+    return { kind: "path", href: "/dashboard" };
   }
 
   if (!user || !mePayload) {
     return { kind: "path", href: "/dashboard" };
   }
 
-  // Determine if they are a super admin
-  const isSuperAdmin = isPlatformSuperAdmin(user);
-
   // Tenant workspace members: enforce assigned workspace URL before checking returnTo
   const expectedSub = mePayload.tenant_subdomain;
   const workspaceHrefBase = tenantWorkspaceDashboardHref(mePayload);
   let isWrongSubdomain = false;
   
-  if (!isSuperAdmin && expectedSub && workspaceHrefBase) {
+  if (expectedSub && workspaceHrefBase) {
     const currentSub = getTenantSubdomainFromHost();
     if (currentSub !== expectedSub) {
       isWrongSubdomain = true;
@@ -91,11 +87,6 @@ export async function resolvePostLoginTarget(searchParams) {
   }
 
   if (returnTo && returnTo.startsWith("/") && !returnTo.startsWith("//")) {
-    const pathOnly = returnTo.split("?")[0];
-    if (isSuperAdmin && (pathOnly === "/dashboard" || pathOnly === "/")) {
-      return { kind: "path", href: "/admin/dashboard" };
-    }
-    
     // If they provided returnTo but are on the wrong subdomain, append the returnTo path to their workspace base URL
     if (isWrongSubdomain) {
       try {
@@ -109,14 +100,6 @@ export async function resolvePostLoginTarget(searchParams) {
     }
     
     return { kind: "path", href: returnTo };
-  }
-
-  if (isSuperAdmin) {
-    return { kind: "path", href: "/admin/dashboard" };
-  }
-
-  if (mePayload?.workspace_access_ready === false) {
-    return { kind: "path", href: "/workspace-pending" };
   }
 
   if (isWrongSubdomain) {
@@ -146,11 +129,6 @@ export async function runPostLoginDashboardRouting(router, searchParams) {
     const verified = sanitizeWorkspaceDashboardUrl(target.href);
     window.location.href = verified || target.href;
     return true; // Indicates full page navigation has started
-  }
-
-  if (target.href.startsWith("/admin")) {
-    router.replace(target.href);
-    return false; // Let Next.js handle client-side routing
   }
 
   if (target.href !== "/dashboard") {

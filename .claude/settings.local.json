@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e \"require\\('./src/routes/fitness.js'\\)\")",
+      "Bash(node --check src/routes/fitness.js)",
+      "Bash(node --check src/controllers/fitnessController.js)",
+      "Bash(node --check src/server.js)",
+      "Bash(node --check src/lib/fitnessApi.js)",
+      "Bash(npm list *)",
+      "Bash(cd d:\\\\all c\\\\Desktop\\\\crm-test\\\\backend)",
+      "Bash(npm install *)"
+    ]
+  }
+}

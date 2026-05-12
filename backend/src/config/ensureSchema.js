@@ -2,7 +2,7 @@ const { mainPool: pool } = require("./database");
 const { INTEGRATIONS } = require("./integrationsCatalog");
 
 let schemaEnsured = false;
-const CURRENT_SCHEMA_VERSION = 4;
+const CURRENT_SCHEMA_VERSION = 5;
 
 async function ensureSchema() {
   if (schemaEnsured) return;
@@ -1635,6 +1635,190 @@ async function ensureSchema() {
        VALUES (?, ?, 0)
        ON DUPLICATE KEY UPDATE name = VALUES(name)`,
       [integration.key, integration.name]
+    );
+  }
+
+  // ── fitness layer tables ───────────────────────────────────────────────────
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS fitness_clients (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      client_id VARCHAR(20) UNIQUE NOT NULL,
+      full_name VARCHAR(255) NOT NULL,
+      status ENUM('Active','Hold','Inactive') DEFAULT 'Active',
+      progress ENUM('Very Good','Good','Neutral','Poor','Very Poor') DEFAULT 'Neutral',
+      phone VARCHAR(20),
+      email VARCHAR(255),
+      age INT,
+      city VARCHAR(100),
+      address TEXT,
+      occupation VARCHAR(100),
+      emergency_contact VARCHAR(255),
+      referred_by_client_id VARCHAR(20),
+      source ENUM('BNI','Instagram','Facebook','Referral - Existing Client','Friend / Family','Walk-in','Online / Website','Corporate / Company') DEFAULT 'Walk-in',
+      tier TINYINT DEFAULT 3,
+      health_goal VARCHAR(255),
+      plan_type ENUM('1 Month Plan','3 Month Plan','6 Month Plan','1 Year Plan'),
+      plan_start_date DATE,
+      plan_expiry_date DATE,
+      follow_up_freq_days INT DEFAULT 14,
+      last_consultation_date DATE,
+      next_due_date DATE,
+      medical_conditions TEXT,
+      allergies TEXT,
+      activity_level VARCHAR(100),
+      current_medications TEXT,
+      height_cm DECIMAL(5,2),
+      start_weight_kg DECIMAL(5,2),
+      current_weight_kg DECIMAL(5,2),
+      target_weight_kg DECIMAL(5,2),
+      bmi DECIMAL(5,2),
+      coach_notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_fitness_clients_client_id (client_id),
+      KEY idx_fitness_clients_status (status),
+      KEY idx_fitness_clients_next_due (next_due_date)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS fitness_consultations (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      client_id VARCHAR(20) NOT NULL,
+      consult_date DATE NOT NULL,
+      consult_type ENUM('Onboarding','Diet Review','Check-in','Follow-up','Other') NOT NULL,
+      weight_kg DECIMAL(5,2),
+      key_observations TEXT,
+      diet_changes TEXT,
+      next_steps TEXT,
+      next_appointment VARCHAR(100),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_fitness_consultations_client (client_id),
+      KEY idx_fitness_consultations_date (consult_date)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS fitness_body_stats (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      client_id VARCHAR(20) NOT NULL,
+      recorded_date DATE NOT NULL,
+      weight_kg DECIMAL(5,2),
+      body_fat_pct DECIMAL(5,2),
+      muscle_mass_kg DECIMAL(5,2),
+      waist_cm DECIMAL(5,2),
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_fitness_body_stats_client (client_id),
+      KEY idx_fitness_body_stats_date (recorded_date)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS fitness_supplements (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      client_id VARCHAR(20) NOT NULL,
+      product_name VARCHAR(255) NOT NULL,
+      prescribed_date DATE,
+      quantity INT,
+      mrp_inr DECIMAL(10,2),
+      rate_inr DECIMAL(10,2),
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_fitness_supplements_client (client_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS fitness_transactions (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      client_id VARCHAR(20) NOT NULL,
+      transaction_date DATE NOT NULL,
+      product_plan VARCHAR(255) NOT NULL,
+      type ENUM('Membership','Supplement','Other') NOT NULL,
+      mrp_inr DECIMAL(10,2),
+      rate_inr DECIMAL(10,2),
+      received_inr DECIMAL(10,2) DEFAULT 0,
+      pending_inr DECIMAL(10,2) DEFAULT 0,
+      cost_inr DECIMAL(10,2) DEFAULT 0,
+      profit_inr DECIMAL(10,2) GENERATED ALWAYS AS (received_inr - cost_inr) STORED,
+      pay_mode ENUM('GPay','Cash','Online Transfer','Cheque','UPI','NEFT') DEFAULT 'GPay',
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_fitness_transactions_client (client_id),
+      KEY idx_fitness_transactions_date (transaction_date),
+      KEY idx_fitness_transactions_type (type)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS fitness_referrals (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      referrer_client_id VARCHAR(20) NOT NULL,
+      referred_client_id VARCHAR(20) NOT NULL,
+      referral_date DATE,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_fitness_referrals_referrer (referrer_client_id),
+      KEY idx_fitness_referrals_referred (referred_client_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS fitness_client_tasks (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      client_id VARCHAR(20) NOT NULL,
+      task_description TEXT NOT NULL,
+      due_date DATE,
+      priority ENUM('High','Medium','Low') DEFAULT 'Medium',
+      status ENUM('Open','In Progress','Done','Carried Forward','Overdue') DEFAULT 'Open',
+      period VARCHAR(50),
+      completed_on DATE,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_fitness_client_tasks_client (client_id),
+      KEY idx_fitness_client_tasks_status (status),
+      KEY idx_fitness_client_tasks_due (due_date)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS fitness_settings (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      setting_key VARCHAR(100) NOT NULL UNIQUE,
+      setting_value JSON NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  // Seed default fitness settings
+  const defaultFitnessSettings = [
+    { key: 'progress_options', value: ['Very Good', 'Good', 'Neutral', 'Poor', 'Very Poor'] },
+    { key: 'status_options', value: ['Active', 'Hold', 'Inactive'] },
+    { key: 'source_options', value: ['BNI', 'Instagram', 'Facebook', 'Referral - Existing Client', 'Friend / Family', 'Walk-in', 'Online / Website', 'Corporate / Company'] },
+    { key: 'plan_types', value: [{ type: '1 Month Plan', duration_days: 30 }, { type: '3 Month Plan', duration_days: 90 }, { type: '6 Month Plan', duration_days: 180 }, { type: '1 Year Plan', duration_days: 365 }] },
+    { key: 'consult_type_options', value: ['Onboarding', 'Diet Review', 'Check-in', 'Follow-up', 'Other'] },
+    { key: 'task_status_options', value: ['Open', 'In Progress', 'Done', 'Carried Forward', 'Overdue'] },
+    { key: 'priority_options', value: ['High', 'Medium', 'Low'] },
+    { key: 'pay_mode_options', value: ['GPay', 'Cash', 'Online Transfer', 'Cheque', 'UPI', 'NEFT'] },
+    { key: 'transaction_type_options', value: ['Membership', 'Supplement', 'Other'] },
+  ];
+
+  for (const setting of defaultFitnessSettings) {
+    await pool.execute(
+      `INSERT INTO fitness_settings (setting_key, setting_value) VALUES (?, ?)
+       ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
+      [setting.key, JSON.stringify(setting.value)]
     );
   }
 
