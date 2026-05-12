@@ -1,0 +1,42 @@
+{
+  "name": "rnd-technosoft-backend",
+  "version": "1.0.0",
+  "description": "RND TECHNOSOFT CRM Backend",
+  "main": "src/server.js",
+  "scripts": {
+    "dev": "nodemon src/server.js",
+    "start": "node src/server.js",
+    "db:setup": "node src/config/setupDb.js",
+    "db:seed": "node src/config/seedData.js",
+    "smoke:api": "node scripts/smoke-api-contract.js",
+    "smoke:indexes": "node scripts/smoke-db-index-audit.js",
+    "smoke:isolation": "node scripts/smoke-tenant-isolation.js",
+    "audit:tenant-sql": "node scripts/audit-tenant-sql.js",
+    "test:subdomain": "node scripts/test-subdomain-routing.js",
+    "test:tenant-pool": "node scripts/test-tenant-isolation.js",
+    "test:db-provision": "node scripts/test-db-provisioning.js",
+    "test:signup-rollback": "node scripts/test-signup-rollback.js",
+    "audit:tenant-db": "node scripts/tenant-db-audit.js",
+    "migrate:tenant-crm": "node scripts/migrate-tenant-crm.js",
+    "ops:health-snapshot": "node scripts/ops-health-snapshot.js"
+  },
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "cors": "^2.8.6",
+    "dotenv": "^16.6.1",
+    "express": "^4.22.1",
+    "express-rate-limit": "^7.5.1",
+    "helmet": "^7.2.0",
+    "jsonwebtoken": "^9.0.3",
+    "morgan": "^1.10.1",
+    "multer": "^1.4.5-lts.1",
+    "mysql2": "^3.20.0",
+    "nodemailer": "^8.0.7",
+    "redis": "^5.12.1",
+    "socket.io": "^4.8.3",
+    "stripe": "^22.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}

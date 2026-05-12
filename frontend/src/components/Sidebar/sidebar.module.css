@@ -1,0 +1,620 @@
+/* ─── SIDEBAR SHELL ─── */
+.sidebar {
+  width: 240px;
+  min-height: 100vh;
+  background: var(--bg-card);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  z-index: 200;
+  transition:
+    width 300ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 300ms ease;
+  overflow: hidden;
+  will-change: width;
+  box-shadow: 2px 0 20px rgba(0, 0, 0, 0.06);
+}
+
+.sidebar.collapsed {
+  width: 68px;
+}
+
+/* ─── LOGO AREA ─── */
+.logoArea {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  height: 60px;
+  min-height: 60px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--bg-card);
+  overflow: hidden;
+  transition: padding 300ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.sidebar.collapsed .logoArea {
+  /* One row cannot fit 40px logo + 26px toggle in 68px — stack so both stay visible */
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 4px;
+  height: auto;
+  min-height: 60px;
+}
+
+/* ── Brand logo (expanded) ── */
+.brand {
+  display: flex;
+  align-items: center;
+  text-decoration: none;
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+  opacity: 1;
+  transition: opacity 200ms ease;
+}
+
+.logo {
+  width: auto;
+  height: 44px;
+  object-fit: contain;
+  flex-shrink: 0;
+  transition: opacity 200ms ease;
+}
+
+/* ── Brand icon (collapsed) ── */
+.brandIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  flex-shrink: 0;
+  width: 100%;
+  max-width: 56px;
+  min-height: 40px;
+}
+
+.logoMarkSm {
+  background: var(--yellow);
+  color: #1a1a2e;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 15px;
+  font-weight: 900;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: transform 200ms ease;
+}
+
+.logoMarkSm:hover {
+  transform: scale(1.06);
+}
+
+.collapsedLogoWrap {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* ── Collapsed logo (image) ── */
+.logoCollapsed {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+  flex-shrink: 0;
+  transition: transform 200ms ease;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.1));
+}
+
+.collapsedLogoWrap:hover .logoCollapsed {
+  transform: scale(1.06);
+}
+
+/* ── Text badge fallback ── */
+.logoMark {
+  background: var(--yellow);
+  color: #1a1a2e;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  padding: 5px 8px;
+  border-radius: 6px 0 0 6px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.logoText {
+  background: var(--bg-deep);
+  color: #ffffff;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  padding: 5px 8px;
+  border-radius: 0 6px 6px 0;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+/* ── Collapse toggle button ── */
+.collapseBtn {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  width: 26px;
+  height: 26px;
+  min-width: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 8px;
+  flex-shrink: 0;
+  transition:
+    background 140ms ease,
+    color 140ms ease,
+    border-color 140ms ease,
+    transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
+  margin-left: 8px;
+}
+
+.sidebar.collapsed .collapseBtn {
+  margin-left: 0;
+  transform: none;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  font-size: 9px;
+}
+
+.collapseBtn:hover {
+  background: var(--yellow-tint);
+  color: var(--yellow-hover);
+  border-color: var(--yellow);
+  transform: scale(1.1);
+}
+
+/* ─── SIDEBAR BODY (scroll nav + pinned admin) ─── */
+.sidebarBody {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ─── NAV SCROLL AREA ─── */
+.nav {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px 0 24px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--grey-400) transparent;
+}
+
+.adminBar {
+  flex-shrink: 0;
+  padding: 10px 12px 16px;
+  border-top: 1px solid var(--border);
+  background: linear-gradient(180deg, transparent, var(--bg-hover));
+}
+
+.adminBarLink {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  text-decoration: none;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--yellow-hover);
+  background: var(--yellow-tint);
+  border: 1px solid rgba(245, 196, 0, 0.35);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.adminBarLink:hover {
+  background: rgba(245, 196, 0, 0.2);
+  color: var(--text-main);
+}
+
+.adminBarLinkActive {
+  border-color: var(--yellow);
+  box-shadow: 0 0 0 1px rgba(245, 196, 0, 0.25);
+}
+
+.adminBarIcon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(245, 196, 0, 0.2);
+  flex-shrink: 0;
+}
+
+.adminBarIcon i {
+  font-size: 14px;
+}
+
+.adminBarLabel {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar.collapsed .adminBar {
+  padding: 8px 8px 12px;
+}
+
+.sidebar.collapsed .adminBarLink {
+  justify-content: center;
+  padding: 10px;
+}
+
+.nav::-webkit-scrollbar       { width: 3px; }
+.nav::-webkit-scrollbar-track  { background: transparent; }
+.nav::-webkit-scrollbar-thumb  { background: var(--grey-400); border-radius: 3px; }
+.nav::-webkit-scrollbar-thumb:hover { background: var(--yellow-hover); }
+
+/* ─── SECTION GROUPING ─── */
+.section {
+  margin-bottom: 2px;
+}
+
+.navSection {
+  padding: 16px 14px 5px;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  /* Fade in/out with sidebar width */
+  opacity: 1;
+  transition: opacity 200ms ease;
+}
+
+.sectionDivider {
+  height: 1px;
+  background: var(--border);
+  margin: 10px 10px;
+  opacity: 0.7;
+}
+
+/* ─── NAV ITEM ─── */
+.navItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  margin: 2px 8px;
+  width: calc(100% - 16px);
+  font-family: 'Montserrat', sans-serif;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-decoration: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  white-space: nowrap;
+  min-width: 0;
+  border-radius: 10px;
+  line-height: 1;
+  transition:
+    background 150ms ease,
+    color 150ms ease,
+    padding 300ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Collapsed: center icon */
+.sidebar.collapsed .navItem {
+  padding: 7px 0;
+  margin: 2px auto;
+  width: calc(100% - 16px);
+  justify-content: center;
+  gap: 0;
+}
+
+.navItem:hover {
+  background: var(--bg-hover);
+  color: var(--text-main);
+}
+
+.navItem.active {
+  background: var(--yellow-tint);
+  color: var(--yellow-hover);
+  font-weight: 700;
+}
+
+/* Active indicator bar */
+.navItem.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  background: var(--yellow);
+  border-radius: 0 3px 3px 0;
+  opacity: 1;
+  transition: opacity 150ms ease;
+}
+
+.sidebar.collapsed .navItem.active::before {
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+}
+
+/* ─── ICON BADGE ─── */
+.iconBadge {
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  flex-shrink: 0;
+  transition:
+    transform 200ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 200ms ease;
+}
+
+.navItem:hover .iconBadge {
+  transform: scale(1.1);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+}
+
+.navItem.active .iconBadge {
+  transform: scale(1.05);
+}
+
+/* ─── LABEL ─── */
+.label {
+  flex: 1;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Fade text out as sidebar collapses */
+  opacity: 1;
+  max-width: 160px;
+  transition: opacity 150ms ease, max-width 300ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.countPill {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--yellow-tint);
+  border: 1px solid rgba(245, 196, 0, 0.55);
+  color: var(--text-main);
+  font-size: 11px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 6px;
+  flex-shrink: 0;
+}
+
+.sidebar.collapsed .label {
+  opacity: 0;
+  max-width: 0;
+  pointer-events: none;
+}
+
+/* ─── CHEVRON ARROW ─── */
+.arrow {
+  font-size: 9px;
+  transition: transform 250ms cubic-bezier(0.16, 1, 0.3, 1), opacity 150ms ease;
+  flex-shrink: 0;
+  opacity: 0.5;
+}
+
+.arrowOpen {
+  transform: rotate(90deg);
+  opacity: 1;
+}
+
+/* Chevron has no room when rail is 68px — hide in collapsed mode */
+.sidebar.collapsed .arrow {
+  display: none;
+  width: 0;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+}
+
+/* ─── ACTIVE PIP ─── */
+.activePip {
+  width: 6px;
+  height: 6px;
+  min-width: 6px;
+  background: var(--yellow);
+  border-radius: 50%;
+  flex-shrink: 0;
+  box-shadow: 0 0 8px rgba(245, 196, 0, 0.6);
+  animation: pipPulse 2s ease-in-out infinite;
+}
+
+@keyframes pipPulse {
+  0%, 100% { box-shadow: 0 0 6px rgba(245,196,0,0.4); }
+  50%       { box-shadow: 0 0 12px rgba(245,196,0,0.8); }
+}
+
+/* ─── SUBMENU GROUP ─── */
+.group {
+  display: flex;
+  flex-direction: column;
+}
+
+.subMenu {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 280ms cubic-bezier(0.16, 1, 0.3, 1);
+  margin-left: 50px;
+  margin-right: 8px;
+}
+
+.subMenuOpen {
+  max-height: 400px;
+}
+
+/* ─── SUB ITEM ─── */
+.subItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-decoration: none;
+  border-radius: 7px;
+  margin-bottom: 1px;
+  white-space: nowrap;
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    padding-left 120ms ease;
+}
+
+.subItem:hover {
+  background: var(--bg-hover);
+  color: var(--text-main);
+  padding-left: 14px;
+}
+
+.subItemActive {
+  color: var(--yellow-hover);
+  font-weight: 700;
+  background: var(--yellow-tint);
+}
+
+/* ─── SUB DOT ─── */
+.subDot {
+  width: 5px;
+  height: 5px;
+  min-width: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+  opacity: 0.35;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.subItem:hover .subDot,
+.subItemActive .subDot {
+  opacity: 1;
+  transform: scale(1.5);
+}
+
+.subItemActive .subDot {
+  background: var(--yellow);
+}
+
+/* ─── TOOLTIP (collapsed mode) ─── */
+.navItem[title]:not([title=""]) {
+  position: relative;
+}
+
+/* Tooltip shown via CSS when sidebar is collapsed */
+.sidebar.collapsed .navItem::after {
+  content: attr(title);
+  position: absolute;
+  left: calc(100% + 12px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--bg-deep);
+  color: #fff;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 8px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+  transition: opacity 160ms ease, transform 160ms ease;
+  z-index: 9999;
+  /* Start slightly left */
+  transform: translateY(-50%) translateX(-4px);
+}
+
+.sidebar.collapsed .navItem:hover::after {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
+/* Arrow on tooltip */
+.sidebar.collapsed .navItem::before {
+  /* Override active bar in collapsed mode */
+  content: none !important;
+}
+
+.sidebar.collapsed .navItem.active::before {
+  content: '' !important;
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  background: var(--yellow);
+  border-radius: 0 3px 3px 0;
+}
+
+/* ─── MOBILE ─── */
+@media (max-width: 768px) {
+  .sidebar {
+    transform: translateX(-100%);
+    transition:
+      transform 300ms cubic-bezier(0.16, 1, 0.3, 1),
+      width     300ms cubic-bezier(0.16, 1, 0.3, 1),
+      box-shadow 300ms ease;
+    box-shadow: none;
+    width: 240px;
+  }
+
+  .sidebar.mobileOpen {
+    transform: translateX(0);
+    box-shadow: 4px 0 40px rgba(0, 0, 0, 0.18);
+  }
+
+  .sidebar.collapsed {
+    transform: translateX(-100%);
+  }
+}

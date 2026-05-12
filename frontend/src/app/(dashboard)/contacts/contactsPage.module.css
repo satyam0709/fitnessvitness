@@ -1,0 +1,338 @@
+.page {
+  display: grid;
+  gap: 14px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.title {
+  margin: 0;
+  font-size: 1.5rem;
+  color: var(--text-main);
+}
+
+.subtitle {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+}
+
+.headerActions {
+  display: flex;
+  gap: 8px;
+}
+
+.toolbar {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) repeat(3, minmax(170px, 220px));
+  gap: 8px;
+}
+
+.input,
+.select,
+.formGrid input,
+.formGrid select,
+.formGrid textarea {
+  width: 100%;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--text-main);
+  padding: 10px 12px;
+  outline: none;
+}
+
+.input:focus,
+.select:focus,
+.formGrid input:focus,
+.formGrid select:focus,
+.formGrid textarea:focus {
+  border-color: var(--yellow);
+  box-shadow: 0 0 0 3px var(--yellow-tint);
+}
+
+.bucketStrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bucket {
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  min-width: 120px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: var(--text-main);
+}
+
+.bucketActive {
+  border-color: var(--yellow);
+  background: var(--yellow-tint);
+  color: var(--text-main);
+}
+
+.tableWrap {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: auto;
+  background: var(--bg-card);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 1100px;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 0.92rem;
+  vertical-align: top;
+  color: var(--text-main);
+}
+
+.table th {
+  background: var(--bg-hover);
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.actions {
+  white-space: nowrap;
+  display: flex;
+  gap: 6px;
+}
+
+.btnPrimary,
+.btnGhost,
+.btnSmall {
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.btnPrimary {
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-txt);
+}
+
+.btnGhost {
+  border-color: var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-main);
+}
+
+.btnSmall {
+  padding: 6px 10px;
+  background: var(--bg-hover);
+  color: var(--text-main);
+  border: 1px solid var(--border-color);
+}
+
+.btnDanger {
+  background: var(--lead-status-cancel);
+  color: #fff;
+}
+
+.empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.errorBox {
+  border: 1px solid var(--lead-status-cancel);
+  background: var(--bg-card);
+  color: var(--lead-status-cancel);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  padding: 12px;
+  backdrop-filter: blur(4px);
+}
+
+.modal {
+  width: min(920px, 100%);
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+}
+
+.modalHead {
+  position: sticky;
+  top: 0;
+  background: linear-gradient(
+    135deg,
+    var(--crm-modal-header-start, #1a1a2e) 0%,
+    var(--crm-modal-header-end, #2d2d4e) 100%
+  );
+  border-bottom: 3px solid var(--crm-modal-accent, #f5c400);
+  padding: 12px 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modalHead h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 18px;
+  color: var(--crm-modal-accent, #f5c400);
+}
+
+.iconBtn {
+  border: none;
+  background: rgba(245, 196, 0, 0.15);
+  color: #fff;
+  border-radius: var(--radius-sm);
+  width: 32px;
+  height: 32px;
+  cursor: pointer;
+}
+
+.modalCloseBtn {
+  border: none;
+  background: rgba(245, 196, 0, 0.15);
+  color: #fff;
+  border-radius: var(--radius-sm);
+  width: 32px;
+  height: 32px;
+  cursor: pointer;
+}
+
+.modalCloseBtn:hover {
+  background: rgba(245, 196, 0, 0.28);
+}
+
+.formGrid {
+  padding: 14px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.formGrid label {
+  display: grid;
+  gap: 5px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.full {
+  grid-column: 1 / -1;
+}
+
+.modalActions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.infoBox {
+  grid-column: 1 / -1;
+  border: 1px dashed var(--yellow);
+  background: var(--yellow-light);
+  color: var(--text-main);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-size: 0.88rem;
+}
+
+[data-theme="dark"] .infoBox {
+    background: var(--yellow-tint);
+}
+
+.importSummary {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.importSummary > div {
+  border: 1px solid var(--border-color);
+  background: var(--bg-hover);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 0.88rem;
+  color: var(--text-main);
+}
+
+.importMeta {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+}
+
+.liveDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--lead-status-confirm);
+}
+
+.liveDotOff {
+  background: var(--lead-status-cancel);
+}
+
+@media (max-width: 1024px) {
+  .toolbar {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .formGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .importSummary {
+    grid-template-columns: 1fr 1fr;
+  }
+}  

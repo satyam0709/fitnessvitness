@@ -1,0 +1,18 @@
+/* src/app/admin/contacts/contacts.module.css */
+.filterBtn {
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.filterActive {
+  background: var(--bg-deep);
+  color: var(--btn-dark-txt);
+  border-color: var(--bg-deep);
+}

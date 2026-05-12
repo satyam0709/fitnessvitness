@@ -1,0 +1,197 @@
+.section {
+  padding: 80px 24px;
+  background-color: var(--bg-main);
+}
+
+.container {
+  max-width: var(--max-width);
+  margin: 0 auto;
+}
+
+/* HEADER & TABS */
+.header {
+  text-align: center;
+  margin-bottom: 60px;
+  position: relative;
+  z-index: 20;
+}
+
+.title {
+  font-family: var(--font-display);
+  font-size: clamp(28px, 4vw, 42px);
+  font-weight: 800;
+  color: var(--text-main);
+  margin-bottom: 32px;
+  line-height: 1.3;
+}
+
+.tabContainer {
+  display: flex;
+  justify-content: center;
+  gap: 24px;
+  border-bottom: 1px solid var(--border);
+  max-width: 600px;
+  margin: 0 auto;
+  position: relative;
+  z-index: 10;
+}
+
+.tab {
+  background: transparent;
+  border: none;
+  font-family: var(--font-body);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 12px 16px;
+  transition: color 0.2s ease;
+  cursor: pointer;
+  position: relative;
+  z-index: 9999; 
+  pointer-events: auto;
+}
+
+.tab:hover {
+  color: var(--text-main);
+}
+
+.activeTab {
+  color: var(--text-main);
+}
+
+/* Yellow Underline Logic */
+.tab::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  background-color: var(--yellow);
+  border-radius: 3px 3px 0 0;
+  transform: scaleX(0);
+  transition: transform 0.3s ease;
+  transform-origin: center;
+}
+
+/* Trigger the yellow line on hover OR when active */
+.tab:hover::after,
+.activeTab::after {
+  transform: scaleX(1);
+}
+
+/* CONTENT ROWS */
+.tabContent {
+  display: flex;
+  flex-direction: column;
+  gap: 80px;
+  animation: fadeIn 0.4s ease-in-out;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 60px;
+  justify-content: space-between;
+}
+
+.rowReverse {
+  flex-direction: row-reverse;
+}
+
+.imageCol {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+}
+
+.image {
+  width: 100%;
+  max-width: 500px;
+  height: auto;
+  object-fit: contain;
+}
+
+
+/* this is the 2nd section last image */
+.imageSmall {
+  width: 500px;
+  max-width: 400px;
+  height: auto;
+  object-fit: contain;
+}
+
+.textCol {
+  flex: 1;
+  max-width: 550px;
+}
+
+.heading {
+  font-family: var(--font-display);
+  font-size: clamp(24px, 3vw, 32px);
+  font-weight: 700;
+  color: var(--text-main);
+  margin-bottom: 20px;
+  line-height: 1.3;
+}
+
+.paragraph {
+  font-size: 16px;
+  color: var(--text-muted);
+  line-height: 1.8;
+  margin-bottom: 16px;
+}
+
+.list {
+  margin: 20px 0;
+  padding-left: 20px;
+  list-style-type: disc;
+  color: var(--text-muted);
+}
+
+.list li {
+  margin-bottom: 12px;
+  line-height: 1.6;
+}
+
+.list strong {
+  color: var(--text-main);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* RESPONSIVE DESIGN */
+@media (max-width: 900px) {
+  .row, .rowReverse {
+    flex-direction: column;
+    text-align: center;
+    gap: 40px;
+  }
+  
+  .textCol {
+    max-width: 100%;
+  }
+
+  .list {
+    text-align: left;
+    display: inline-block;
+  }
+  
+  .tabContainer {
+    flex-direction: column;
+    gap: 0;
+    border-bottom: none;
+  }
+
+  .tab::after {
+    display: none; /* Removes the underline on mobile for a cleaner look */
+  }
+
+  .activeTab {
+    background: var(--yellow-tint);
+    border-radius: var(--radius-sm);
+  }
+}

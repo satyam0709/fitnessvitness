@@ -1,0 +1,406 @@
+openapi: 3.0.3
+info:
+  title: RND TECHNOSOFT CRM API
+  version: 1.0.0
+  description: |
+    Multi-tenant CRM API with three-tier architecture:
+    super admin, tenant admin, and staff.
+servers:
+  - url: http://localhost:5000/api
+tags:
+  - name: Auth
+  - name: Me
+  - name: Superadmin
+  - name: Tenant Admin
+  - name: CRM
+  - name: Payments
+paths:
+  /auth/signup:
+    post:
+      tags: [Auth]
+      summary: Create tenant admin and tenant workspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, company_name, email, password]
+              properties:
+                name: { type: string }
+                company_name: { type: string }
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "201":
+          description: Account created
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Clerk-managed login compatibility endpoint
+      responses:
+        "501":
+          description: Login handled by Clerk frontend SDK
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Clerk-managed logout compatibility endpoint
+      responses:
+        "200":
+          description: Logged out
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Clerk-managed refresh compatibility endpoint
+      responses:
+        "501":
+          description: Refresh handled by Clerk SDK
+  /auth/me:
+    get:
+      tags: [Auth, Me]
+      summary: Current authenticated user context
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: User, tenant, subscription, features, seats
+  /me:
+    get:
+      tags: [Me]
+      summary: Current authenticated user context
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: User, tenant, subscription, features, seats
+  /superadmin/tenants:
+    get:
+      tags: [Superadmin]
+      summary: List all tenants
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Tenant list
+  /superadmin/tenants/{id}/status:
+    patch:
+      tags: [Superadmin]
+      summary: Update tenant status
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [active, trial, suspended, cancelled]
+      responses:
+        "200":
+          description: Tenant updated
+  /superadmin/subscriptions:
+    get:
+      tags: [Superadmin]
+      summary: List subscriptions
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Subscription list
+  /superadmin/analytics:
+    get:
+      tags: [Superadmin]
+      summary: Revenue and tenant analytics
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Analytics data
+  /superadmin/packages:
+    get:
+      tags: [Superadmin]
+      summary: List packages
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Package list
+    post:
+      tags: [Superadmin]
+      summary: Create package
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: Package created
+  /superadmin/packages/{id}:
+    patch:
+      tags: [Superadmin]
+      summary: Update package
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Package updated
+    delete:
+      tags: [Superadmin]
+      summary: Delete package
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Package deleted
+  /superadmin/addons:
+    get:
+      tags: [Superadmin]
+      summary: List add-ons
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Add-on list
+    post:
+      tags: [Superadmin]
+      summary: Create add-on
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: Add-on created
+  /superadmin/coupons:
+    get:
+      tags: [Superadmin]
+      summary: List coupons
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Coupon list
+    post:
+      tags: [Superadmin]
+      summary: Create coupon
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: Coupon created
+  /admin/staff:
+    get:
+      tags: [Tenant Admin]
+      summary: List tenant staff
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Staff list
+    post:
+      tags: [Tenant Admin]
+      summary: Add staff with seat enforcement
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: Staff assigned
+        "409":
+          description: Seat limit reached
+  /admin/staff/{id}/permissions:
+    get:
+      tags: [Tenant Admin]
+      summary: Get staff feature permissions
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Permission list
+    put:
+      tags: [Tenant Admin]
+      summary: Upsert staff feature permissions
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Permissions updated
+  /admin/subscription:
+    get:
+      tags: [Tenant Admin]
+      summary: Current tenant subscription
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Subscription details
+  /admin/usage:
+    get:
+      tags: [Tenant Admin]
+      summary: Seat and CRM usage statistics
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Usage details
+  /admin/addons/purchase:
+    post:
+      tags: [Tenant Admin]
+      summary: Purchase add-on and unlock immediately
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: Add-on purchased
+  /crm/leads:
+    get:
+      tags: [CRM]
+      summary: List tenant leads
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Leads list
+    post:
+      tags: [CRM]
+      summary: Create lead
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: Lead created
+  /crm/tasks:
+    get:
+      tags: [CRM]
+      summary: List tenant tasks
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Tasks list
+    post:
+      tags: [CRM]
+      summary: Create task
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: Task created
+  /crm/reminders:
+    get:
+      tags: [CRM]
+      summary: List reminders
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Reminder list
+  /crm/meetings:
+    get:
+      tags: [CRM]
+      summary: List meetings
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Meeting list
+  /crm/todos:
+    get:
+      tags: [CRM]
+      summary: List todos
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Todo list
+  /crm/notes:
+    get:
+      tags: [CRM]
+      summary: List notes
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Note list
+  /crm/customers:
+    get:
+      tags: [CRM]
+      summary: List customers
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Customer list
+  /crm/invoices:
+    get:
+      tags: [CRM]
+      summary: List invoices
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Invoice list
+  /crm/dashboard:
+    get:
+      tags: [CRM]
+      summary: Tenant dashboard stats
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Dashboard metrics
+  /payment/checkout:
+    post:
+      tags: [Payments]
+      summary: Stripe checkout
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Stripe checkout session
+  /payment/checkout/unified:
+    post:
+      tags: [Payments]
+      summary: Unified checkout, chooses Stripe or Razorpay
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Checkout response
+  /webhooks/razorpay:
+    post:
+      tags: [Payments]
+      summary: Razorpay webhook
+      responses:
+        "200":
+          description: Webhook received
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

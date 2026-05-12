@@ -1,0 +1,263 @@
+.page {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 36px 20px 96px;
+}
+
+.topBar {
+  text-align: center;
+  margin-bottom: 32px;
+  position: relative;
+}
+
+.backLink {
+  position: absolute;
+  left: 0;
+  top: 4px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-family: "Montserrat", sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+}
+
+.backLink:hover {
+  color: var(--yellow-hover);
+}
+
+.title {
+  font-family: "Montserrat", sans-serif;
+  font-size: 28px;
+  font-weight: 900;
+  color: var(--text-main);
+  margin: 0 0 8px;
+  letter-spacing: -0.02em;
+}
+
+.subtitle {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin: 0;
+  font-family: "Inter", sans-serif;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  gap: 28px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.tablePanel {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+.tableHead {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  font-family: "Montserrat", sans-serif;
+  font-weight: 800;
+  font-size: 15px;
+  color: var(--text-main);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.table th,
+.table td {
+  padding: 12px 18px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.table th {
+  font-family: "Montserrat", sans-serif;
+  font-weight: 700;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.table td {
+  color: var(--text-main);
+  font-family: "Inter", sans-serif;
+}
+
+.table tr:last-child td {
+  border-bottom: none;
+}
+
+.totals {
+  padding: 18px 20px 22px;
+  border-top: 1px solid var(--border);
+  background: rgba(245, 196, 0, 0.04);
+}
+
+.totalRow {
+  display: flex;
+  justify-content: space-between;
+  font-family: "Montserrat", sans-serif;
+  font-size: 14px;
+  margin-bottom: 8px;
+  color: var(--text-muted);
+}
+
+.totalRowStrong {
+  display: flex;
+  justify-content: space-between;
+  font-family: "Montserrat", sans-serif;
+  font-size: 18px;
+  font-weight: 900;
+  color: var(--text-main);
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border);
+}
+
+.couponNote {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 12px;
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.trialNote {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  padding: 0 4px;
+  margin: 0 0 4px;
+}
+
+.choiceCard {
+  border-radius: 16px;
+  padding: 20px 18px;
+  text-align: center;
+  font-family: "Montserrat", sans-serif;
+}
+
+.choiceCardTrial {
+  border: 2px solid #22c55e;
+  background: linear-gradient(180deg, rgba(34, 197, 94, 0.06) 0%, var(--bg-card) 100%);
+}
+
+.choiceCardPay {
+  border: 2px solid #5b57a6;
+  background: linear-gradient(180deg, rgba(91, 87, 166, 0.08) 0%, var(--bg-card) 100%);
+}
+
+.choiceIcon {
+  font-size: 28px;
+  margin-bottom: 8px;
+}
+
+.choiceTitle {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--text-main);
+  margin: 0 0 4px;
+}
+
+.choiceSub {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0 0 16px;
+}
+
+.btnTrial {
+  width: 100%;
+  padding: 14px 18px;
+  border: none;
+  border-radius: 12px;
+  font-family: "Montserrat", sans-serif;
+  font-weight: 800;
+  font-size: 14px;
+  cursor: pointer;
+  background: #16a34a;
+  color: #fff;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.btnTrial:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(22, 163, 74, 0.35);
+}
+
+.btnTrial:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.btnPay {
+  width: 100%;
+  padding: 14px 18px;
+  border: none;
+  border-radius: 12px;
+  font-family: "Montserrat", sans-serif;
+  font-weight: 800;
+  font-size: 14px;
+  cursor: pointer;
+  background: #3f3d89;
+  color: #fff;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.btnPay:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px rgba(63, 61, 137, 0.4);
+}
+
+.btnPay:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.loading {
+  min-height: 50vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-muted);
+  font-family: "Montserrat", sans-serif;
+  font-size: 14px;
+}
+
+.errorBanner {
+  background: rgba(231, 76, 60, 0.1);
+  border: 1px solid rgba(231, 76, 60, 0.35);
+  color: #c0392b;
+  padding: 12px 16px;
+  border-radius: 12px;
+  font-size: 14px;
+  margin-bottom: 20px;
+}

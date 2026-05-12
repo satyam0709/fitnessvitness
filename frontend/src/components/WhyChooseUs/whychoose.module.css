@@ -1,0 +1,110 @@
+.section {
+  padding: 0px 24px 80px; 
+  background-color: var(--bg-main);
+  transition: background-color 0.3s ease, color 0.3s ease;
+  background-color: var(--bg-main);
+  transition: background-color 0.3s ease, color 0.3s ease;;
+  background-color: var(--bg-main);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.container {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  text-align: center;
+}
+
+/* HEADER & TEXT */
+.header {
+  margin-bottom: 60px;
+}
+
+.title {
+  font-family: var(--font-display);
+  font-size: clamp(28px, 4vw, 40px);
+  font-weight: 800;
+  color: var(--text-main);
+  margin-bottom: 24px;
+  letter-spacing: -0.01em;
+}
+
+.desc {
+  max-width: 900px;
+  margin: 0 auto;
+  font-family: var(--font-body);
+  font-size: 16px;
+  color: var(--text-muted);
+  line-height: 1.8;
+}
+
+.desc p {
+  margin-bottom: 16px;
+}
+
+.desc p:last-child {
+  margin-bottom: 0;
+}
+
+/* STATS GRID */
+.statsGrid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 40px;
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.statItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* Circular Yellow Icon */
+.iconWrapper {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background-color: var(--yellow-tint);
+  color: var(--yellow);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 32px;
+  margin-bottom: 20px;
+  transition: transform 0.3s ease;
+}
+
+.statItem:hover .iconWrapper {
+  transform: translateY(-5px);
+}
+
+.statValue {
+  font-family: var(--font-display);
+  font-size: clamp(28px, 3vw, 36px);
+  font-weight: 800;
+  color: var(--text-main);
+  margin-bottom: 8px;
+}
+
+.statLabel {
+  font-family: var(--font-body);
+  font-size: 15px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* RESPONSIVE DESIGN */
+@media (max-width: 900px) {
+  .statsGrid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 48px 24px;
+  }
+}
+
+@media (max-width: 500px) {
+  .statsGrid {
+    grid-template-columns: 1fr;
+    gap: 48px;
+  }
+}
