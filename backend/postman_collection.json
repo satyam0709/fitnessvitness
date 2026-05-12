@@ -1,0 +1,108 @@
+{
+  "info": {
+    "name": "365 RND CRM API",
+    "_postman_id": "a2e9cb90-0000-0000-0000-000000000000",
+    "description": "Postman collection for RND CRM backend endpoints",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Get current user",
+          "request": {
+            "method": "GET",
+            "header": [{"key": "Authorization", "value": "Bearer {{clerkToken}}"}],
+            "url": {"raw": "{{baseUrl}}/api/users/me", "host": ["{{baseUrl}}"], "path": ["api", "users", "me"]}
+          }
+        }
+      ]
+    },
+    {
+      "name": "Leads",
+      "item": [
+        {
+          "name": "List leads",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{clerkToken}}"}], "url": {"raw": "{{baseUrl}}/api/leads", "host": ["{{baseUrl}}"], "path": ["api", "leads"]}}
+        },
+        {
+          "name": "Create lead",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{clerkToken}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"name\": \"Sample Lead\",\n  \"phone\": \"+911234567890\",\n  \"source\": \"online\",\n  \"status\": \"new\",\n  \"assigned_to\": \"seed-staff\",\n  \"notes\": \"Follow-up tomorrow\"\n}"}, "url": {"raw": "{{baseUrl}}/api/leads", "host": ["{{baseUrl}}"], "path": ["api", "leads"]}}
+        },
+        {
+          "name": "Get lead by id",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{clerkToken}}"}], "url": {"raw": "{{baseUrl}}/api/leads/{{leadId}}", "host": ["{{baseUrl}}"], "path": ["api", "leads", "{{leadId}}"]}}
+        },
+        {
+          "name": "Update lead",
+          "request": {"method": "PUT", "header": [{"key": "Authorization", "value": "Bearer {{clerkToken}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"status\": \"processing\",\n  \"notes\": \"Updated status to processing.\"\n}"}, "url": {"raw": "{{baseUrl}}/api/leads/{{leadId}}", "host": ["{{baseUrl}}"], "path": ["api", "leads", "{{leadId}}"]}}
+        },
+        {
+          "name": "Delete lead",
+          "request": {"method": "DELETE", "header": [{"key": "Authorization", "value": "Bearer {{clerkToken}}"}], "url": {"raw": "{{baseUrl}}/api/leads/{{leadId}}", "host": ["{{baseUrl}}"], "path": ["api", "leads", "{{leadId}}"]}}
+        }
+      ]
+    },
+    {
+      "name": "Tasks",
+      "item": [
+        {
+          "name": "List tasks",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{clerkToken}}"}], "url": {"raw": "{{baseUrl}}/api/tasks", "host": ["{{baseUrl}}"], "path": ["api", "tasks"]}}
+        },
+        {
+          "name": "Create task",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{clerkToken}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"title\": \"Follow up sample lead\",\n  \"description\": \"Call and confirm requirements\",\n  \"lead_id\": 1,\n  \"assigned_to\": \"seed-staff\",\n  \"due_date\": \"2026-05-01\",\n  \"priority\": \"high\",\n  \"status\": \"todo\"\n}"}, "url": {"raw": "{{baseUrl}}/api/tasks", "host": ["{{baseUrl}}"], "path": ["api", "tasks"]}}
+        },
+        {
+          "name": "Get task by id",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{clerkToken}}"}], "url": {"raw": "{{baseUrl}}/api/tasks/{{taskId}}", "host": ["{{baseUrl}}"], "path": ["api", "tasks", "{{taskId}}"]}}
+        },
+        {
+          "name": "Update task",
+          "request": {"method": "PUT", "header": [{"key": "Authorization", "value": "Bearer {{clerkToken}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"status\": \"in_progress\"\n}"}, "url": {"raw": "{{baseUrl}}/api/tasks/{{taskId}}", "host": ["{{baseUrl}}"], "path": ["api", "tasks", "{{taskId}}"]}}
+        },
+        {
+          "name": "Delete task",
+          "request": {"method": "DELETE", "header": [{"key": "Authorization", "value": "Bearer {{clerkToken}}"}], "url": {"raw": "{{baseUrl}}/api/tasks/{{taskId}}", "host": ["{{baseUrl}}"], "path": ["api", "tasks", "{{taskId}}"]}}
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "List users",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{clerkToken}}"}], "url": {"raw": "{{baseUrl}}/api/users", "host": ["{{baseUrl}}"], "path": ["api", "users"]}}
+        },
+        {
+          "name": "Update user role",
+          "request": {"method": "PATCH", "header": [{"key": "Authorization", "value": "Bearer {{clerkToken}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"role\": \"manager\"\n}"}, "url": {"raw": "{{baseUrl}}/api/users/{{userId}}/role", "host": ["{{baseUrl}}"], "path": ["api", "users", "{{userId}}", "role"]}}
+        }
+      ]
+    },
+    {
+      "name": "Dashboard",
+      "item": [
+        {
+          "name": "Get dashboard stats",
+          "request": {"method": "GET", "header": [{"key": "Authorization", "value": "Bearer {{clerkToken}}"}], "url": {"raw": "{{baseUrl}}/api/dashboard", "host": ["{{baseUrl}}"], "path": ["api", "dashboard"]}}
+        }
+      ]
+    },
+    {
+      "name": "Integrations",
+      "item": [
+        {
+          "name": "IndiaMart webhook",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{clerkToken}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"name\": \"IndiaMart Lead\",\n  \"phone\": \"+919000000000\",\n  \"email\": \"indiamartlead@crm-rnd.test\",\n  \"company_name\": \"IndiaMart Co\",\n  \"message\": \"New inbound lead from IndiaMart\"\n}"}, "url": {"raw": "{{baseUrl}}/api/integrations/indiamart", "host": ["{{baseUrl}}"], "path": ["api", "integrations", "indiamart"]}}
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {"key": "baseUrl", "value": "http://localhost:5000"},
+    {"key": "clerkToken", "value": ""}
+  ]
+}

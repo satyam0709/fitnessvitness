@@ -1,0 +1,380 @@
+.page {
+  padding: 20px;
+  display: grid;
+  gap: 14px;
+}
+
+.headerRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.headerMeta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.title {
+  font-family: var(--font-display);
+  font-size: 24px;
+  margin: 0;
+}
+
+.totalValue {
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.liveMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-card);
+  padding: 4px 10px;
+}
+
+.liveDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #22c55e;
+}
+
+.liveDotOff {
+  background: #ef4444;
+}
+
+.stageStrip {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.stageCard {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--yellow);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  color: var(--text-main);
+}
+
+.stageCard span {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.stageCard strong {
+  font-size: 15px;
+}
+
+.stageCardActive {
+  box-shadow: 0 0 0 2px var(--yellow-tint) inset;
+}
+
+.toolbar,
+.createRow {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr auto auto auto;
+  gap: 8px;
+}
+
+.createRow {
+  grid-template-columns: 2fr 1.3fr 1fr 1fr 1fr auto;
+}
+
+.input {
+  width: 100%;
+  height: 38px;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text-main);
+  padding: 0 10px;
+}
+
+.textArea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text-main);
+  padding: 10px;
+  resize: vertical;
+}
+
+.btnPrimary,
+.btnGhost,
+.btnDanger {
+  height: 38px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  padding: 0 12px;
+  font-weight: 700;
+}
+
+.btnPrimary {
+  background: var(--yellow);
+  border-color: var(--yellow);
+  color: #1a1a2e;
+}
+
+.btnGhost {
+  background: var(--bg-card);
+  color: var(--text-main);
+}
+
+.btnDanger {
+  background: #fee2e2;
+  color: #b91c1c;
+  border-color: #fecaca;
+}
+
+.btnStarActive {
+  background: var(--yellow-tint);
+  border-color: var(--yellow);
+}
+
+.tableWrap {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 960px;
+}
+
+.table th {
+  text-align: left;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-hover);
+  border-bottom: 1px solid var(--border);
+  padding: 10px;
+}
+
+.filterRow th {
+  background: var(--bg-card);
+  padding: 8px;
+}
+
+.filterInput {
+  width: 100%;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0 8px;
+  background: var(--bg-card);
+  color: var(--text-main);
+}
+
+.amountFilterWrap {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.table td {
+  border-bottom: 1px solid var(--border);
+  padding: 10px;
+  font-size: 14px;
+}
+
+.stageSelect {
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 8px;
+  background: var(--bg-card);
+  color: var(--text-main);
+}
+
+.actionIcons {
+  display: flex;
+  gap: 6px;
+}
+
+.iconBtn {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text-main);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.iconBtn:hover {
+  border-color: var(--yellow);
+  color: var(--yellow-hover);
+}
+
+.iconBtnStarred {
+  color: #f59e0b;
+}
+
+.empty {
+  padding: 26px;
+  color: var(--text-muted);
+}
+
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  z-index: 12000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow: auto;
+  padding: 72px 16px 24px;
+}
+
+
+.modal {
+  width: min(720px, 100%);
+  max-height: calc(100vh - 96px);
+  background: var(--bg-card, #fff);
+  color: var(--text, #111);
+  border: 1px solid var(--crm-modal-border, var(--border, #e2e8f0));
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  box-shadow: var(--shadow-lg, 0 24px 48px rgba(0, 0, 0, 0.2));
+  overflow: hidden;
+}
+
+.modalForm {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.modalHead {
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0;
+  padding: 16px 20px;
+  background: linear-gradient(
+    135deg,
+    var(--crm-modal-header-start, #1a1a2e) 0%,
+    var(--crm-modal-header-end, #2d2d4e) 100%
+  );
+  color: #fff;
+  border-bottom: 3px solid var(--crm-modal-accent, #f5c400);
+}
+
+.modalHead h2 {
+  margin: 0;
+  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--crm-modal-accent, #f5c400);
+}
+
+.modalCloseBtn {
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(245, 196, 0, 0.15);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.modalCloseBtn:hover {
+  background: rgba(245, 196, 0, 0.28);
+}
+
+.modalFormGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 12px;
+  row-gap: 12px;
+  align-items: start;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding: 20px;
+}
+
+.field {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted, #64748b);
+  min-width: 0;
+  align-content: start;
+}
+
+.fullWidth {
+  grid-column: 1 / -1;
+}
+
+.modalActions {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 20px;
+  background: var(--bg-card);
+  border-top: 1px solid var(--crm-modal-border, #e2e8f0);
+}
+
+@media (max-width: 1200px) {
+  .stageStrip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .toolbar,
+  .createRow {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .modalBackdrop {
+    padding: 12px;
+  }
+
+  .modal {
+    max-height: calc(100vh - 24px);
+  }
+
+  .modalFormGrid {
+    grid-template-columns: 1fr;
+  }
+}

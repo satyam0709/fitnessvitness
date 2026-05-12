@@ -1,0 +1,199 @@
+/* ─── Lead status (stacked bar + list) ─── */
+.statusChart {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 0 2px;
+  width: 100%;
+}
+
+.statusChartMeta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.statusTotalValue {
+  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-size: clamp(22px, 4vw, 28px);
+  font-weight: 800;
+  color: var(--text-main, #ffe449);
+  line-height: 1;
+}
+
+.statusTotalLabel {
+  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted, #555770);
+  text-transform: lowercase;
+}
+
+.stackedBar {
+  display: flex;
+  width: 100%;
+  height: 14px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--border, #ebebeb);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.stackedSeg {
+  min-width: 4px;
+  transition: flex-grow 0.25s ease;
+}
+
+.statusEmptyBar {
+  font-family: var(--font-body, "Inter", sans-serif);
+  font-size: 13px;
+  color: var(--text-muted, #555770);
+  padding: 10px 12px;
+  text-align: center;
+  background: var(--bg-hover, #f1f5f9);
+  border-radius: var(--radius-sm, 8px);
+  border: 1px dashed var(--border, #ebebeb);
+}
+
+.statusList {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.statusRow {
+  display: grid;
+  grid-template-columns: 10px minmax(72px, 1fr) minmax(48px, 1.2fr) 36px 40px;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border, #ebebeb);
+  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-size: clamp(11px, 2.8vw, 13px);
+}
+
+.statusRow:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.statusDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.statusLabel {
+  font-weight: 700;
+  color: var(--text-main, #1a1a2e);
+  min-width: 0;
+}
+
+.statusTrack {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg-hover, #f1f5f9);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.statusTrackFill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  min-width: 0;
+  transition: width 0.25s ease;
+}
+
+.statusCount {
+  font-weight: 800;
+  color: var(--text-main, #1a1a2e);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.statusPct {
+  font-weight: 600;
+  color: var(--text-muted, #555770);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 480px) {
+  .statusRow {
+    grid-template-columns: 8px minmax(64px, 1fr) 1fr 32px 36px;
+    gap: 6px 8px;
+    padding: 8px 0;
+  }
+
+  .stackedBar {
+    height: 12px;
+  }
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted, #6b7280);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.areaWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.areaSvg {
+  width: 100%;
+  height: auto;
+  min-height: 160px;
+}
+
+.axisLabel {
+  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-size: 10px;
+  fill: var(--text-muted, #9ca3af);
+}
+
+.legendWrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  justify-content: center;
+}
+
+.legendKey {
+  text-transform: capitalize;
+}
+
+.cardMenu {
+  background: transparent;
+  border: none;
+  color: var(--text-muted, #9ca3af);
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.cardMenu:hover {
+  background: var(--bg-hover, #f3f4f6);
+  color: var(--text-main, #1a1a2e);
+}

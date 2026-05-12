@@ -1,0 +1,131 @@
+/* Add Meeting — layout aligned with 365-style reference; colors follow global CRM/yellow */
+
+.recurrenceBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.radioRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+}
+
+.radioLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+  cursor: pointer;
+}
+
+.radioLabel input {
+  accent-color: var(--yellow, #f5c400);
+  width: 16px;
+  height: 16px;
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.chipsWrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--crm-modal-border, var(--border));
+  border-radius: 8px;
+  background: var(--crm-modal-input-bg, var(--bg-card));
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--yellow-tint, rgba(245, 196, 0, 0.15));
+  color: var(--text-main);
+  border: 1px solid rgba(245, 196, 0, 0.45);
+}
+
+.chipRemove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.chipRemove:hover {
+  background: rgba(220, 38, 38, 0.12);
+  color: #dc2626;
+}
+
+.addUserRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.addUserSelect {
+  flex: 1;
+  min-width: 0;
+}
+
+.togglePair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 560px) {
+  .togglePair {
+    grid-template-columns: 1fr;
+  }
+}
+
+.detailsToggle {
+  margin-top: 4px;
+  padding: 8px 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--yellow-hover);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+  text-align: left;
+}
+
+.detailsToggle:hover {
+  color: var(--yellow);
+}
+
+.detailsPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 4px;
+}

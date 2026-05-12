@@ -1,0 +1,135 @@
+<?xml version="1.0" standalone="no"?>
+<svg id="hero-illustration-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="100%" height="100%">
+                        <style>
+                            /* Light Mode Defaults */
+                            .bg-card { fill: #ffffff; }
+                            .bg-panel { fill: #f8fafc; }
+                            .text-main { fill: #0f172a; }
+                            .stroke-main { stroke: #0f172a; }
+                            .accent-fill { fill: #e2e8f0; }
+                            .accent-fill-darker { fill: #cbd5e1; }
+                            .accent-stroke { stroke: #e2e8f0; }
+                            .skin { fill: #ffcba4; }
+                            .hair { fill: #1e293b; }
+                            .shadow { fill: rgba(0,0,0,0.08); }
+                            
+                            /* Dark Mode Overrides */
+                            @media (prefers-color-scheme: dark) {
+                                .bg-card { fill: #1e1e2e; }
+                                .bg-panel { fill: #13131f; }
+                                .text-main { fill: #f8fafc; }
+                                .stroke-main { stroke: #f8fafc; }
+                                .accent-fill { fill: #334155; }
+                                .accent-fill-darker { fill: #475569; }
+                                .accent-stroke { stroke: #334155; }
+                                .hair { fill: #f8fafc; }
+                                .shadow { fill: rgba(0,0,0,0.4); }
+                            }
+                        </style>
+
+                        <!-- Background Abstract Decor (Blobs & Leaves) -->
+                        <path d="M 100 450 Q 150 250 300 200 Q 450 150 400 450 Z" class="accent-fill" opacity="0.5"/>
+                        <circle cx="200" cy="180" r="60" class="accent-fill" opacity="0.3"/>
+                        <circle cx="650" cy="350" r="100" class="accent-fill" opacity="0.3"/>
+                        
+                        <!-- Abstract Bottom Leaves -->
+                        <path d="M 120 520 Q 150 400 200 520 Z" class="accent-fill-darker"/>
+                        <path d="M 280 520 Q 340 420 380 520 Z" class="accent-fill-darker"/>
+                        <path d="M 550 520 Q 620 380 700 520 Z" class="accent-fill-darker"/>
+                        <path d="M 680 520 Q 750 450 780 520 Z" class="accent-fill"/>
+                        
+                        <!-- Floor Line -->
+                        <line x1="80" y1="520" x2="720" y2="520" class="accent-stroke" stroke-width="4" stroke-linecap="round"/>
+
+                        <!-- Connection Dashed Lines -->
+                        <path d="M 380 250 L 450 250 L 450 180 L 520 180" fill="none" stroke="#f5c400" stroke-width="3" stroke-dasharray="8,8" opacity="0.6"/>
+                        <path d="M 450 350 L 450 450 L 520 450" fill="none" stroke="#f5c400" stroke-width="3" stroke-dasharray="8,8" opacity="0.6"/>
+
+                        <!-- Floating Profile Card (Top Right) -->
+                        <rect x="520" y="140" width="220" height="80" rx="40" class="shadow"/>
+                        <rect x="520" y="135" width="220" height="80" rx="40" class="bg-card" stroke="#f5c400" stroke-width="3"/>
+                        <!-- Avatar inside Profile Card -->
+                        <circle cx="560" cy="175" r="24" fill="#f5c400" opacity="0.2"/>
+                        <circle cx="560" cy="175" r="20" fill="#f5c400"/>
+                        <path d="M 548 185 Q 560 160 572 185 Z" class="bg-card"/>
+                        <circle cx="560" cy="165" r="7" class="bg-card"/>
+                        <!-- Profile Card Lines -->
+                        <rect x="600" y="160" width="80" height="8" rx="4" class="text-main"/>
+                        <rect x="600" y="180" width="100" height="8" rx="4" class="accent-fill-darker"/>
+
+                        <!-- Floating Calendar Card (Middle Right) -->
+                        <rect x="500" y="275" width="240" height="180" rx="16" class="shadow"/>
+                        <rect x="500" y="270" width="240" height="180" rx="16" class="bg-card"/>
+                        <!-- Calendar Header -->
+                        <path d="M 500 286 Q 500 270 516 270 L 724 270 Q 740 270 740 286 L 740 320 L 500 320 Z" fill="#f5c400"/>
+                        <rect x="520" y="290" width="60" height="10" rx="5" class="bg-card"/>
+                        <!-- Calendar Grid Base -->
+                        <rect x="520" y="340" width="30" height="20" rx="4" class="accent-fill"/>
+                        <rect x="560" y="340" width="30" height="20" rx="4" class="accent-fill"/>
+                        <rect x="600" y="340" width="30" height="20" rx="4" class="accent-fill"/>
+                        <rect x="640" y="340" width="30" height="20" rx="4" class="accent-fill"/>
+                        <rect x="680" y="340" width="30" height="20" rx="4" class="accent-fill"/>
+                        
+                        <rect x="520" y="370" width="30" height="20" rx="4" class="accent-fill"/>
+                        <rect x="560" y="370" width="30" height="20" rx="4" class="accent-fill"/>
+                        <!-- Highlighted Day -->
+                        <rect x="600" y="370" width="30" height="20" rx="4" fill="#f5c400"/>
+                        <rect x="640" y="370" width="30" height="20" rx="4" class="accent-fill"/>
+                        <rect x="680" y="370" width="30" height="20" rx="4" class="accent-fill"/>
+                        
+                        <rect x="520" y="400" width="30" height="20" rx="4" class="accent-fill"/>
+                        <rect x="560" y="400" width="30" height="20" rx="4" class="accent-fill"/>
+
+                        <!-- Center Floating Action Buttons -->
+                        <!-- Button 1 -->
+                        <rect x="420" y="430" width="120" height="40" rx="20" class="shadow"/>
+                        <rect x="420" y="425" width="120" height="40" rx="20" fill="#f5c400"/>
+                        <rect x="460" y="440" width="40" height="8" rx="4" class="bg-card"/>
+                        <!-- Button 2 -->
+                        <rect x="560" y="430" width="120" height="40" rx="20" class="shadow"/>
+                        <rect x="560" y="425" width="120" height="40" rx="20" class="bg-card" stroke="#f5c400" stroke-width="3"/>
+                        <rect x="600" y="440" width="40" height="8" rx="4" fill="#f5c400"/>
+
+                        <!-- Center Floating Panel (Main Dashboard) -->
+                        <rect x="250" y="245" width="200" height="130" rx="12" class="shadow" transform="skewY(-5)"/>
+                        <rect x="250" y="240" width="200" height="130" rx="12" class="bg-card" transform="skewY(-5)"/>
+                        <!-- Panel Content -->
+                        <g transform="skewY(-5)">
+                            <rect x="270" y="260" width="160" height="70" rx="8" class="accent-fill"/>
+                            <rect x="290" y="280" width="80" height="30" rx="6" fill="#f5c400"/>
+                            <rect x="270" y="340" width="100" height="8" rx="4" class="text-main"/>
+                            <rect x="270" y="355" width="60" height="6" rx="3" class="accent-fill-darker"/>
+                        </g>
+
+                        <!-- Woman Character (Left) -->
+                        <!-- Back Leg -->
+                        <path d="M 230 380 L 190 510 L 210 510" class="stroke-main" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                        <!-- Front Leg -->
+                        <path d="M 260 380 L 290 510 L 310 510" class="stroke-main" stroke-width="18" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                        <!-- Shoes -->
+                        <path d="M 180 515 L 215 515 A 8 8 0 0 0 205 505 L 190 505 Z" fill="#f5c400"/>
+                        <path d="M 280 515 L 320 515 A 8 8 0 0 0 310 505 L 290 505 Z" fill="#f5c400"/>
+                        
+                        <!-- Torso (Yellow Theme) -->
+                        <path d="M 230 230 L 290 250 L 280 390 L 220 390 Z" fill="#f5c400" rx="15"/>
+                        <!-- Back Arm -->
+                        <path d="M 235 250 L 180 300" stroke="#d97706" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                        <!-- Neck & Head -->
+                        <path d="M 255 220 L 265 220 L 265 200 L 255 200 Z" class="skin"/>
+                        <circle cx="260" cy="180" r="22" class="skin"/>
+                        
+                        <!-- Hair (Flowing back) -->
+                        <path d="M 270 160 Q 240 150 230 180 Q 220 220 210 260 Q 240 250 240 210 Q 260 170 270 160 Z" class="hair"/>
+                        <circle cx="260" cy="170" r="18" class="hair"/>
+
+                        <!-- Front Arm (Interacting with Panel) -->
+                        <path d="M 275 250 L 320 300 L 360 280" stroke="#f5c400" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                        <circle cx="365" cy="275" r="8" class="skin"/>
+                        
+                        <!-- Floating Accent Circles -->
+                        <circle cx="160" cy="400" r="15" fill="none" class="accent-stroke" stroke-width="3"/>
+                        <circle cx="480" cy="460" r="20" fill="none" class="accent-stroke" stroke-width="3"/>
+                        <circle cx="330" cy="180" r="8" fill="#f5c400"/>
+                        <circle cx="420" cy="130" r="5" class="text-main"/>
+
+                    </svg>

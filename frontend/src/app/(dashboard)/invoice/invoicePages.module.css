@@ -1,0 +1,485 @@
+.page {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 8px 32px;
+}
+
+.pageHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.title {
+  margin: 0;
+  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: var(--text-main, #1a1a2e);
+}
+
+.sub {
+  margin: 6px 0 0;
+  font-size: 14px;
+  color: var(--text-muted, #64748b);
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.select,
+.input {
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #e2e8f0);
+  font-size: 14px;
+  background: var(--bg-card, #fff);
+  color: var(--text-main, #1a1a2e);
+  min-width: 140px;
+}
+
+.inputSearch {
+  min-width: 200px;
+  flex: 1;
+}
+
+.rowActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.iconBtn {
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #e2e8f0);
+  background: var(--bg-card, #fff);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted, #64748b);
+}
+
+.iconBtn:hover {
+  background: var(--bg-hover, #f1f5f9);
+}
+
+.midBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.btnPrimary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 20px;
+  border-radius: 10px;
+  border: none;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+  text-decoration: none;
+  background: linear-gradient(135deg, var(--yellow-hover, #d4a900), var(--yellow, #f5c400));
+  color: var(--btn-primary-txt, #1a1a2e);
+}
+
+.btnPrimary:hover {
+  filter: brightness(1.05);
+}
+
+.btnGhost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 20px;
+  border-radius: 10px;
+  border: 1px solid var(--border, #e2e8f0);
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+  text-decoration: none;
+  background: var(--bg-hover, #f1f5f9);
+  color: var(--text-main, #1a1a2e);
+}
+
+.btnGhost:hover {
+  border-color: var(--yellow, #f5c400);
+  background: var(--yellow-tint, rgba(245, 196, 0, 0.12));
+}
+
+.invoiceNumLink {
+  color: var(--yellow-hover, #d4a900);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.invoiceNumLink:hover {
+  text-decoration: underline;
+}
+
+.detailGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 16px 20px;
+}
+
+.detailLabel {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, #64748b);
+  margin-bottom: 4px;
+}
+
+.detailValue {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-main, #1a1a2e);
+}
+
+.dateRange {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-main, #1a1a2e);
+}
+
+.tableWrap {
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg-card, #fff);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.table th,
+.table td {
+  padding: 12px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+}
+
+.table th {
+  background: var(--bg-hover, #f8fafc);
+  font-weight: 700;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, #64748b);
+}
+
+.table tr:last-child td {
+  border-bottom: none;
+}
+
+.empty {
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--text-muted, #64748b);
+  font-size: 15px;
+}
+
+.pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.pillGst {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.pillNon {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.danger {
+  color: #b91c1c;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.danger:hover {
+  text-decoration: underline;
+}
+
+/* Add invoice */
+.formGrid {
+  display: grid;
+  gap: 16px;
+}
+
+.card {
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 12px;
+  padding: 20px;
+  background: var(--bg-card, #fff);
+}
+
+.cardTitle {
+  margin: 0 0 14px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-main, #1a1a2e);
+}
+
+.row2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+@media (max-width: 720px) {
+  .row2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main, #1a1a2e);
+}
+
+.req {
+  color: #dc2626;
+}
+
+.lineTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.lineTable th,
+.lineTable td {
+  padding: 8px;
+  border: 1px solid var(--border, #e2e8f0);
+  vertical-align: middle;
+}
+
+.lineTable input {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #e2e8f0);
+  font-size: 13px;
+}
+
+.numIn {
+  max-width: 100px;
+}
+
+.radioRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+}
+
+.radioRow label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.totals {
+  margin-top: 16px;
+  text-align: right;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.err {
+  color: #b91c1c;
+  font-size: 14px;
+  margin: 0 0 8px;
+}
+
+.btnSubmit {
+  margin-top: 20px;
+  padding: 12px 28px;
+  border-radius: 10px;
+  border: none;
+  font-weight: 700;
+  cursor: pointer;
+  background: linear-gradient(135deg, var(--yellow-hover, #d4a900), var(--yellow, #f5c400));
+  color: var(--btn-primary-txt, #1a1a2e);
+}
+
+.btnSubmit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Modal */
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.modal {
+  max-width: 480px;
+  width: 100%;
+  background: var(--bg-card, #fff);
+  border-radius: 16px;
+  padding: 28px 24px;
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.2);
+  text-align: center;
+}
+
+.modalIcon {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: #ffedd5;
+  color: #ea580c;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  margin: 0 auto 16px;
+}
+
+.modalTitle {
+  margin: 0 0 12px;
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: var(--text-main, #1a1a2e);
+}
+
+.modalText {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: var(--text-muted, #64748b);
+  line-height: 1.55;
+  text-align: left;
+}
+
+.modalSteps {
+  margin: 12px 0 20px;
+  padding-left: 18px;
+  font-size: 14px;
+  color: var(--text-main, #1a1a2e);
+  line-height: 1.6;
+  text-align: left;
+}
+
+.modalActions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.btnModalPrimary {
+  padding: 12px 16px;
+  border-radius: 10px;
+  border: none;
+  font-weight: 700;
+  cursor: pointer;
+  background: linear-gradient(135deg, var(--yellow-hover, #d4a900), var(--yellow, #f5c400));
+  color: var(--btn-primary-txt, #1a1a2e);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btnModalNo {
+  padding: 12px 16px;
+  border-radius: 10px;
+  border: 2px solid #dc2626;
+  background: #fff;
+  color: #dc2626;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.dimmed {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+/* Add invoice: form visible but inactive while settings modal is open (365-style) */
+.pageBehindBlocker {
+  opacity: 0.38;
+  pointer-events: none;
+  user-select: none;
+  transition: opacity 0.2s ease;
+}
+
+/* Web settings (General / Invoice / Integrations tabs) */
+.webTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  margin: 0 0 20px;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+}
+
+.webTab {
+  padding: 12px 18px;
+  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--text-muted, #64748b);
+  background: none;
+  border: none;
+  border-bottom: 3px solid transparent;
+  cursor: pointer;
+  margin-bottom: -1px;
+}
+
+.webTab:hover {
+  color: var(--text-main, #1a1a2e);
+}
+
+.webTabActive {
+  color: var(--yellow-hover, #d4a900);
+  border-bottom-color: var(--yellow, #f5c400);
+}

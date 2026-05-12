@@ -1,0 +1,595 @@
+
+.hero {
+  background: var(--bg-main);
+  padding: 0px 24px 0px;
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+}
+
+.heroTitle {
+  font-family: var(--font-display);
+  font-size: clamp(28px, 4vw, 40px);
+  font-weight: 800;
+  color: var(--text-main);
+  margin: 0 0 12px;
+  letter-spacing: -0.01em;
+}
+
+.heroSubtitle {
+  font-family: var(--font-body);
+  font-size: 15px;
+  color: var(--text-muted);
+  max-width: 520px;
+  margin: 0 auto;
+  line-height: 1.7;
+}
+
+/* BODY */
+.body {
+  padding: 48px 80px 72px;
+  background: var(--bg-main);
+}
+
+.inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 40px;
+}
+
+/* POST LIST */
+.postList {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+/* CARD */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  transition: box-shadow 0.25s ease, transform 0.25s ease;
+}
+
+.card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-md);
+}
+
+.cardImg {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 8;
+  background: var(--grey-100);
+  overflow: hidden;
+}
+
+.cardImgEl {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.cardBody {
+  padding: 28px 32px;
+}
+
+.cardTitle {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--text-main);
+  line-height: 1.4;
+  margin: 0 0 14px;
+}
+
+.cardExcerpt {
+  font-family: var(--font-body);
+  font-size: 15px;
+  color: var(--text-muted);
+  line-height: 1.7;
+  margin: 0 0 20px;
+}
+
+.cardMeta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--text-faint);
+}
+
+.metaItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.metaDivider {
+  color: var(--border);
+}
+
+/* PAGINATION */
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.pageBtn {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.pageBtn:hover {
+  border-color: var(--yellow);
+  color: var(--text-main);
+}
+
+.pageBtnActive {
+  background: var(--yellow);
+  border-color: var(--yellow);
+  color: #1a1a1a;
+}
+
+/* SIDEBAR */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  /* Removed the sticky positioning from here so the top widgets can scroll away normally */
+}
+
+/* STICKY WIDGET (Applies ONLY to the form now) */
+.stickyWidget {
+  position: sticky;
+  top: 120px;
+  z-index: 10;
+}
+
+.sideWidget {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+}
+
+.widgetTitle {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text-main);
+  margin: 0 0 18px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid var(--yellow);
+  display: inline-block;
+}
+
+/* Search */
+.searchBox {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-main);
+}
+
+.searchInput {
+  flex: 1;
+  border: none;
+  outline: none;
+  padding: 10px 14px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  background: transparent;
+  color: var(--text-main);
+}
+
+.searchInput::placeholder {
+  color: var(--text-faint);
+}
+
+.searchBtn {
+  padding: 10px 14px;
+  background: var(--yellow);
+  border: none;
+  cursor: pointer;
+  color: #1a1a1a;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  transition: background 0.15s ease;
+}
+
+.searchBtn:hover {
+  background: var(--yellow-hover);
+}
+
+/* Recent Posts */
+.recentList {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.recentItem {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  text-decoration: none;
+  transition: opacity 0.15s ease;
+}
+
+.recentItem:hover {
+  opacity: 0.8;
+}
+
+.recentImg {
+  position: relative;
+  width: 64px;
+  height: 50px;
+  border-radius: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: var(--grey-100);
+}
+
+.recentImgEl {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.recentInfo {
+  flex: 1;
+}
+
+.recentTitle {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-main);
+  line-height: 1.4;
+  margin: 0 0 6px;
+}
+
+.recentMeta {
+  display: flex;
+  gap: 10px;
+  font-family: var(--font-body);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+/* Social */
+.socialRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.socialIcon {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 14px;
+  text-decoration: none;
+  transition: all 0.15s ease;
+}
+
+.socialIcon:hover {
+  background: var(--yellow);
+  border-color: var(--yellow);
+  color: #1a1a1a;
+}
+
+.socialImg {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
+/* Callback Form */
+.callbackForm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.formInput {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-main);
+  color: var(--text-main);
+  font-family: var(--font-body);
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s ease;
+}
+
+.formInput:focus {
+  border-color: var(--yellow);
+}
+
+.formInput::placeholder {
+  color: var(--text-faint);
+}
+
+.phoneRow {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-main);
+  transition: border-color 0.15s ease;
+}
+
+.phoneRow:focus-within {
+  border-color: var(--yellow);
+}
+
+.phonePrefix {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 10px;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-main);
+  border-right: 1px solid var(--border);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.flagImg {
+  width: 18px;
+  height: auto;
+  border-radius: 2px;
+}
+
+.formInputPhone {
+  flex: 1;
+  border: none;
+  outline: none;
+  padding: 10px 12px;
+  background: transparent;
+  color: var(--text-main);
+  font-family: var(--font-body);
+  font-size: 13px;
+}
+
+.formInputPhone::placeholder {
+  color: var(--text-faint);
+}
+
+.submitBtn {
+  width: 100%;
+  padding: 11px;
+  background: #3d3580;
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.submitBtn:hover {
+  background: #2e2760;
+}
+
+/* FORM VALIDATION ERRORS */
+.errorText {
+  color: #e74c3c;
+  font-size: 11px;
+  margin-top: -6px;
+  margin-bottom: 2px;
+  font-family: var(--font-body);
+  display: block;
+}
+
+.errorInput {
+  border-color: #e74c3c !important;
+}
+
+/* HAVE QUESTIONS CTA */
+.cta {
+  background: #2e2a5e;
+  padding: 60px 24px;
+  text-align: center;
+}
+
+.ctaTitle {
+  font-family: var(--font-display);
+  font-size: clamp(24px, 3vw, 36px);
+  font-weight: 800;
+  color: #ffffff;
+  margin: 0 0 12px;
+}
+
+.ctaSubtitle {
+  font-family: var(--font-body);
+  font-size: 15px;
+  color: rgba(255, 255, 255, 0.65);
+  max-width: 540px;
+  margin: 0 auto 32px;
+  line-height: 1.7;
+}
+
+.ctaForm {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 900px;
+  margin: 0 auto 24px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.ctaInput {
+  flex: 1;
+  min-width: 200px;
+  padding: 12px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  font-family: var(--font-body);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.ctaInput:focus {
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.ctaInput::placeholder {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.ctaPhoneWrap {
+  flex: 1;
+  min-width: 200px;
+  display: flex;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  transition: border-color 0.15s ease;
+}
+
+.ctaPhoneWrap:focus-within {
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.ctaPrefix {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 12px;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.8);
+  border-right: 1px solid rgba(255, 255, 255, 0.2);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.ctaInputPhone {
+  flex: 1;
+  border: none;
+  outline: none;
+  padding: 12px 14px;
+  background: transparent;
+  color: #ffffff;
+  font-family: var(--font-body);
+  font-size: 14px;
+}
+
+.ctaInputPhone::placeholder {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.ctaBtn {
+  display: inline-block;
+  padding: 12px 36px;
+  background: transparent;
+  border: 2px solid #ffffff;
+  border-radius: 8px;
+  color: #ffffff;
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: all 0.2s ease;
+  letter-spacing: 0.02em;
+}
+
+.ctaBtn:hover {
+  background: #ffffff;
+  color: #2e2a5e;
+}
+
+/* RESPONSIVE */
+@media (max-width: 1024px) {
+  .body {
+    padding: 48px 32px 72px;
+  }
+
+  .inner {
+    grid-template-columns: 1fr 300px;
+    gap: 28px;
+  }
+}
+
+@media (max-width: 768px) {
+  .body {
+    padding: 32px 20px 60px;
+  }
+
+  .inner {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: static;
+  }
+
+  .stickyWidget {
+    position: static; /* Disables sticky on mobile since the sidebar goes to the bottom */
+  }
+
+  .hero {
+    padding: 60px 20px 32px;
+  }
+
+  .ctaForm {
+    flex-direction: column;
+  }
+
+  .ctaInput,
+  .ctaPhoneWrap {
+    min-width: unset;
+    width: 100%;
+  }
+}
+

@@ -1,0 +1,102 @@
+.shell {
+  display: flex;
+  min-height: 100vh;
+  background: var(--bg-main);
+  position: relative;
+  isolation: isolate;
+}
+
+.shell::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 60% 40% at 15% 10%, rgba(245, 196, 0, 0.045) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 60% at 85% 80%, rgba(45, 45, 78, 0.06) 0%, transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+[data-theme="dark"] .shell::before {
+  background:
+    radial-gradient(ellipse 60% 40% at 15% 10%, rgba(245, 196, 0, 0.03) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 60% at 85% 80%, rgba(130, 80, 255, 0.03) 0%, transparent 60%);
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(9, 9, 15, 0.55);
+  backdrop-filter: blur(4px) saturate(0.8);
+  -webkit-backdrop-filter: blur(4px) saturate(0.8);
+  z-index: 150;
+  animation: overlayIn 200ms cubic-bezier(0.0, 0, 0.2, 1) both;
+}
+
+@keyframes overlayIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* sidebar is 240px wide, collapsed is 68px — must match sidebar.module.css exactly */
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  margin-left: 240px;
+  width: calc(100% - 240px);
+  transition:
+    margin-left 320ms cubic-bezier(0.16, 1, 0.3, 1),
+    width 320ms cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+  z-index: 1;
+}
+
+.mainCollapsed {
+  margin-left: 68px;
+  width: calc(100% - 68px);
+}
+
+/* topbar is 60px — must match dashboardtopbar.module.css */
+.content {
+  padding-top: 60px;
+  flex: 1;
+  width: 100%;
+}
+
+.content > * {
+  padding: 20px 24px;
+  max-width: 1600px;
+  margin: 0 auto;
+  animation: contentPageIn 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.workspaceAdminRoot {
+  min-height: 100vh;
+  background: var(--bg-main);
+  width: 100%;
+}
+
+@keyframes contentPageIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 768px) {
+  .main,
+  .mainCollapsed {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .content > * {
+    padding: 12px 16px;
+  }
+}

@@ -1,0 +1,44 @@
+<?xml version="1.0" standalone="no"?>
+<svg id="crm-logo-dark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 220" width="100%" height="100%">
+                <!-- Calendar Base (White) -->
+                <rect x="100" y="40" width="120" height="90" rx="14" fill="#ffffff"/>
+                
+                <!-- Rings -->
+                <rect x="115" y="25" width="12" height="30" rx="6" fill="#f5c400"/>
+                <rect x="154" y="25" width="12" height="30" rx="6" fill="#f5c400"/>
+                <rect x="193" y="25" width="12" height="30" rx="6" fill="#f5c400"/>
+                
+                <!-- Rocket Base -->
+                <g transform="translate(210, 25) rotate(45)">
+                    <path d="M8 0 C16 8 16 24 16 32 L0 32 C0 24 0 8 8 0 Z" fill="#f5c400"/>
+                    <path d="M0 24 L-8 34 L0 30 Z" fill="#f5c400"/>
+                    <path d="M16 24 L24 34 L16 30 Z" fill="#f5c400"/>
+                    <!-- Rocket Window (Dark so it pops) -->
+                    <circle cx="8" cy="14" r="3.5" fill="#121212"/>
+                </g>
+
+                <!-- Calendar Line -->
+                <line x1="100" y1="72" x2="220" y2="72" stroke="#f5c400" stroke-width="4"/>
+                
+                <!-- 365 Text (Dark so it reads against the white block) -->
+                <text x="160" y="112" font-family="Arial Black, Impact, sans-serif" font-weight="900" font-size="38" fill="#121212" text-anchor="middle" letter-spacing="-1">365</text>
+                
+                <!-- 3 Dots -->
+                <circle cx="125" cy="122" r="4.5" fill="#f5c400"/>
+                <circle cx="160" cy="122" r="4.5" fill="#f5c400"/>
+                <circle cx="195" cy="122" r="4.5" fill="#f5c400"/>
+
+                <!-- RND CRM Text (White) -->
+                <text x="145" y="190" font-family="Arial Black, Impact, sans-serif" font-weight="900" font-size="48" fill="#ffffff" text-anchor="middle" letter-spacing="-2">RND <tspan fill="#f5c400">CRM</tspan></text>
+                
+                <!-- Dynamic Pen Swoosh -->
+                <g transform="translate(255, 135)">
+                    <!-- Main pen body -->
+                    <path d="M0 55 L22 0 L32 4 L10 60 Z" fill="#f5c400"/>
+                    <!-- Pen tip -->
+                    <path d="M25 -5 L45 -25 L36 -1 Z" fill="#f5c400"/>
+                    <!-- Accent lines (White for dark mode) -->
+                    <line x1="10" y1="20" x2="20" y2="24" stroke="#ffffff" stroke-width="2"/>
+                    <line x1="5" y1="35" x2="15" y2="39" stroke="#ffffff" stroke-width="2"/>
+                </g>
+            </svg>
