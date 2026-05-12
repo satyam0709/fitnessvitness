@@ -1,14 +1,11 @@
 const express = require("express");
 const { verifyToken } = require("../middleware/verifyToken");
 const { pool } = require("../config/database");
-const { resolveTenantContext, enforceSubscription } = require("../middleware/tenantAccess");
-const { bindTenantCrmPool } = require("../middleware/tenantCrmPool");
-const { requireCrmTenant } = require("../middleware/crmTenant");
 const { emitAdminChanged, emitCalendarChanged, emitOpportunitiesChanged } = require("../realtime/meetingsRealtime");
 const { canSeeAllTeamRecords } = require("../utils/crmTeamAccess");
 
 const router = express.Router();
-router.use(verifyToken, resolveTenantContext, bindTenantCrmPool, requireCrmTenant, enforceSubscription());
+router.use(verifyToken);
 
 const STAGE_ALIAS = {
   open: "qualification_done",

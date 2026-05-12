@@ -5,32 +5,14 @@ const multer  = require("multer");
 const { verifyToken } = require("../middleware/verifyToken");
 const { pool }        = require("../config/database");
 const { emitAdminChanged, emitCalendarChanged } = require("../realtime/meetingsRealtime");
-const {
-  resolveTenantContext,
-  enforceSubscription,
-  requireFeature,
-} = require("../middleware/tenantAccess");
-const { requirePermission } = require("../middleware/rbac");
-const { bindTenantCrmPool } = require("../middleware/tenantCrmPool");
-const { requireCrmTenant } = require("../middleware/crmTenant");
 const { canSeeAllTeamRecords } = require("../utils/crmTeamAccess");
 const { sendEmailWithRetry } = require("../services/emailService");
 
 const router = express.Router();
-router.use(
-  verifyToken,
-  resolveTenantContext,
-  bindTenantCrmPool,
-  requireCrmTenant,
-  enforceSubscription(),
-  requireFeature("lead_management", "view"),
-  requirePermission("lead.view")
-);
+router.use(verifyToken);
 
-function addTenantCondition(conditions, params, req, tableAlias = "l") {
+function addCondition(conditions, params, tableAlias = "l") {
   conditions.push(`${tableAlias}.is_deleted = 0`);
-  conditions.push(`${tableAlias}.tenant_id = ?`);
-  params.push(req.user.tenantId);
 }
 
 // ── upload dir ─────────────────────────────────────────────────────────────
@@ -119,7 +101,7 @@ router.get("/calendar-markers", async (req, res) => {
 
     const conditions = ["l.follow_up_date IS NOT NULL", "l.follow_up_date >= ?", "l.follow_up_date <= ?"];
     const params     = [from, to];
-    addTenantCondition(conditions, params, req, "l");
+    addCondition(conditions, params, "l");
 
     if (!canSeeAllTeamRecords(req)) {
       conditions.unshift("(l.created_by = ? OR l.assigned_to = ?)");
@@ -176,7 +158,7 @@ router.get("/", async (req, res) => {
     } = req.query;
     const conditions = [];
     const params     = [];
-    addTenantCondition(conditions, params, req, "l");
+    addCondition(conditions, params, "l");
 
     if (!canSeeAllTeamRecords(req) || my === "true") {
       conditions.push("(l.created_by = ? OR l.assigned_to = ?)");
@@ -380,9 +362,7 @@ async function createLeadHandler(req, res) {
 
 router.post(
   "/",
-  requireFeature("lead_management", "create"),
-  requirePermission("lead.create"),
-  (req, res, next) => {
+      (req, res, next) => {
     if (req.is("multipart/form-data")) return upload.array("attachments", 5)(req, res, next);
     next();
   },
@@ -445,8 +425,7 @@ router.post("/:id/convert", async (req, res) => {
 // ── POST /api/leads/:id/followup ────────────────────────────────────────────
 router.post(
   "/:id/followup",
-  requirePermission("lead.edit"),
-  (req, res, next) => {
+    (req, res, next) => {
     if (req.is("multipart/form-data")) return upload.array("attachments", 5)(req, res, next);
     next();
   },
@@ -570,9 +549,7 @@ CRM Team`;
 // ── PUT /api/leads/:id ─────────────────────────────────────────────────────
 router.put(
   "/:id",
-  requireFeature("lead_management", "edit"),
-  requirePermission("lead.edit"),
-  (req, res, next) => {
+      (req, res, next) => {
     if (req.is("multipart/form-data")) return upload.array("attachments", 5)(req, res, next);
     next();
   },
@@ -674,9 +651,7 @@ router.put(
 // ── PATCH /api/leads/:id/status ────────────────────────────────────────────
 router.patch(
   "/:id/status",
-  requireFeature("lead_management", "edit"),
-  requirePermission("lead.edit"),
-  async (req, res) => {
+      async (req, res) => {
   try {
     const leadId = Number(req.params.id);
     const { status } = req.body || {};
@@ -711,9 +686,7 @@ router.patch(
 // ── DELETE /api/leads/:id ──────────────────────────────────────────────────
 router.delete(
   "/:id",
-  requireFeature("lead_management", "delete"),
-  requirePermission("lead.delete"),
-  async (req, res) => {
+      async (req, res) => {
   try {
     const leadId = Number(req.params.id);
     if (!leadId) return res.status(400).json({ success: false, message: "Invalid lead id" });

@@ -762,8 +762,7 @@ async function ensureSchema() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
-  const { seedSubscriptionCatalogIfEmpty } = require("../services/packageCatalogService");
-  await seedSubscriptionCatalogIfEmpty();
+  // Subscription catalog seeding removed
 
   await pool.execute(`
     CREATE TABLE IF NOT EXISTS coupons (

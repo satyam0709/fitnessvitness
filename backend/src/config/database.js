@@ -1,8 +1,6 @@
 const mysql = require("mysql2/promise");
-const { AsyncLocalStorage } = require("node:async_hooks");
 const fs = require("fs");
 const path = require("path");
-const { decrypt } = require("./tenantCrypto");
 require("dotenv").config();
 
 const defaultCaPath = path.join(__dirname, "..", "..", "certs", "ca.pem");
@@ -10,12 +8,6 @@ const configuredCaPath = process.env.DB_SSL_CA_PATH
   ? path.resolve(process.cwd(), process.env.DB_SSL_CA_PATH)
   : defaultCaPath;
 
-/**
- * MySQL TLS options for mysql2.
- * - Set DB_SSL_DISABLE=1 for local MySQL without TLS.
- * - Prefer CA PEM file (DB_SSL_CA_PATH or backend/certs/ca.pem), else DB_SSL_CA (base64 PEM).
- * - DB_SSL_REJECT_UNAUTHORIZED=false only for explicit dev overrides (insecure).
- */
 function buildMysqlSsl() {
   const disabled =
     process.env.DB_SSL_DISABLE === "1" ||
@@ -47,37 +39,6 @@ function buildMysqlSsl() {
   return ssl;
 }
 
-/**
- * TLS options for **customer-managed** MySQL (BYOD / `tenant_databases` with own credentials).
- * Aiven and similar providers often need their CA in the chain; without it Node reports
- * "self signed certificate in certificate chain" while `rejectUnauthorized` is true.
- *
- * Preferred: download the service CA from the provider console and set:
- *   TENANT_EXTERNAL_DB_SSL_CA_PATH=./certs/aiven-ca.pem
- * Dev-only workaround (weakens verification for external DB only, not the platform DB):
- *   TENANT_EXTERNAL_DB_SSL_REJECT_UNAUTHORIZED=false
- */
-function getMysqlSslForDedicatedTenantDb() {
-  if (
-    process.env.TENANT_EXTERNAL_DB_SSL_REJECT_UNAUTHORIZED === "0" ||
-    process.env.TENANT_EXTERNAL_DB_SSL_REJECT_UNAUTHORIZED === "false"
-  ) {
-    return { rejectUnauthorized: false };
-  }
-  const extPath = String(process.env.TENANT_EXTERNAL_DB_SSL_CA_PATH || "").trim();
-if (extPath) {
-  const resolved = path.isAbsolute(extPath) ? extPath : path.resolve(process.cwd(), extPath);
-  console.log("[ssl-debug] cwd:", process.cwd());
-  console.log("[ssl-debug] resolved:", resolved);
-  console.log("[ssl-debug] exists:", fs.existsSync(resolved));
-  if (fs.existsSync(resolved)) {
-    return { rejectUnauthorized: true, ca: fs.readFileSync(resolved) };
-  }
-  console.log("[ssl-debug] FILE NOT FOUND - falling through to buildMysqlSsl");
-}
-  return buildMysqlSsl();
-}
-
 const mysqlSsl = buildMysqlSsl();
 
 function getBasePoolConfig(overrides = {}) {
@@ -99,14 +60,8 @@ function getBasePoolConfig(overrides = {}) {
   return { ...c, ...overrides };
 }
 
-/** Central / platform MySQL: tenants, users, billing, auth. */
-const mainPool = mysql.createPool(
-  getBasePoolConfig()
-);
+const mainPool = mysql.createPool(getBasePoolConfig());
 
-/**
- * Proxy for backward compatibility. In single-user mode, all operations use mainPool.
- */
 const pool = mainPool;
 
 async function testConnection() {
@@ -129,6 +84,5 @@ module.exports = {
   pool,
   getBasePoolConfig,
   buildMysqlSsl,
-  getMysqlSslForDedicatedTenantDb,
   testConnection,
 };

@@ -1,9 +1,6 @@
 const express = require("express");
 const { verifyToken } = require("../middleware/verifyToken");
 const { pool } = require("../config/database");
-const { resolveTenantContext, enforceSubscription } = require("../middleware/tenantAccess");
-const { bindTenantCrmPool } = require("../middleware/tenantCrmPool");
-const { requireCrmTenant } = require("../middleware/crmTenant");
 const { canSeeAllTeamRecords } = require("../utils/crmTeamAccess");
 const {
   emitAdminChanged,
@@ -12,7 +9,7 @@ const {
 } = require("../realtime/meetingsRealtime");
 
 const router = express.Router();
-router.use(verifyToken, resolveTenantContext, bindTenantCrmPool, requireCrmTenant, enforceSubscription());
+router.use(verifyToken);
 
 const VALID_STATUS = new Set(["open", "in_progress", "resolved", "closed", "reopened"]);
 const VALID_PRIORITY = new Set(["low", "medium", "high", "urgent"]);

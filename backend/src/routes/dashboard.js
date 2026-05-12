@@ -1,13 +1,10 @@
 const express = require("express");
 const { verifyToken } = require("../middleware/verifyToken");
 const { getDashboardStats, getDashboardInsights, getDashboardOpr } = require("../controllers/dashboardController");
-const { resolveTenantContext, enforceSubscription } = require("../middleware/tenantAccess");
-const { bindTenantCrmPool } = require("../middleware/tenantCrmPool");
-const { requireCrmTenant } = require("../middleware/crmTenant");
 
 const router = express.Router();
 
-router.use(verifyToken, resolveTenantContext, bindTenantCrmPool, requireCrmTenant, enforceSubscription());
+router.use(verifyToken);
 
 router.get("/stats", getDashboardStats);
 router.get("/insights", getDashboardInsights);

@@ -2,7 +2,7 @@ const express = require("express");
 const { getMe, syncCurrentUser } = require("../controllers/userController");
 const { submitContact, getContacts, markAsRead } = require("../controllers/contactController");
 const { verifyToken } = require("../middleware/verifyToken");
-const { getTenantPoolStats, mainPool } = require("../config/database");
+const { mainPool } = require("../config/database");
 const leadsRouter        = require("./leads");
 const opportunitiesRouter = require("./opportunities");
 const ticketsRouter      = require("./tickets");
@@ -21,7 +21,6 @@ const companiesRouter    = require("./companies");
 const crmRouter          = require("./crm");
 const authRouter         = require("./auth");
 const fitnessRouter      = require("./fitness");
-const { getMeContext } = require("../controllers/meController");
 
 const router = express.Router();
 const protectedRoute = [verifyToken];
@@ -79,7 +78,7 @@ router.use("/auth", authRouter);
 
 router.post("/users/sync", verifyToken, syncCurrentUser);
 router.get("/users/me", verifyToken, getMe);
-router.get("/me", verifyToken, getMeContext);
+router.get("/me", verifyToken, getMe);
 
 router.use("/users",        usersRouter);
 router.use("/leads", ...protectedRoute, leadsRouter);
