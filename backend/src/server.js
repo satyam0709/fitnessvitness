@@ -10,20 +10,13 @@ const rateLimit = require("express-rate-limit");
 const crypto = require("crypto");
 
 const { testConnection } = require("./config/database");
-const { ensureSchema, validateTenantDatabases } = require("./config/ensureSchema");
+const { ensureSchema } = require("./config/ensureSchema");
 const { validateRuntimeEnv } = require("./config/runtimeValidation");
 const routes = require("./routes/index");
 const reportsRouter = require("./routes/reports");
 const { verifyToken: jwtCookieAuth } = require("./middleware/verifyToken");
-const { resolveTenantContext, enforceSubscription } = require("./middleware/tenantAccess");
-const { requireCrmTenant } = require("./middleware/crmTenant");
-const { tenantDbMiddleware } = require("./middleware/tenantDbMiddleware");
-const { subdomainMiddleware } = require("./middleware/subdomain");
 const { initMeetingsRealtime } = require("./realtime/meetingsRealtime");
-const { startChatRetentionLoop } = require("./services/chatRetention");
-const { startTrialSubscriptionJobs } = require("./services/trialSubscriptionJobs");
 const { logProductionEmailConfig } = require("./services/emailService");
-const tenantDbRoutes = require("./routes/tenantDatabaseRoutes");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -140,12 +133,9 @@ app.options("*", cors(corsOptions));
 
 app.use("/api/webhook/clerk", express.raw({ type: "application/json" }));
 app.use("/api/webhook", express.raw({ type: "application/json" }));
-app.use("/api/payment/webhook/stripe", express.raw({ type: "application/json" }));
-app.use("/api/webhooks/razorpay", express.raw({ type: "application/json" }));
 
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
-app.use(subdomainMiddleware);
 
 const rateWindowMs = Number(process.env.API_RATE_WINDOW_MS) || 60 * 1000;
 const rateMax = Number(process.env.API_RATE_LIMIT_MAX || 1000);
@@ -159,8 +149,7 @@ app.use(
     legacyHeaders: false,
     skip: (req) => req.method === "OPTIONS",
     keyGenerator: (req) => {
-      const sub = String(req.tenantSubdomain || req.get("x-tenant-subdomain") || "").trim();
-      return sub ? `sub:${sub}:${req.ip || ""}` : `ip:${req.ip || ""}`;
+      return `ip:${req.ip || ""}`;
     },
   })
 );
@@ -186,7 +175,7 @@ app.use((req, res, next) => {
           path: req.originalUrl,
           status: res.statusCode,
           duration_ms: Date.now() - started,
-          tenant_id: req.user?.tenant_id || req.tenantId || null,
+          tenant_id: null,
           user_id: req.user?.id || null,
         })
       );
@@ -195,13 +184,7 @@ app.use((req, res, next) => {
   next();
 });
 
-const crmApiGuard = [
-  jwtCookieAuth,
-  resolveTenantContext,
-  tenantDbMiddleware,
-  requireCrmTenant,
-  enforceSubscription(),
-];
+const crmApiGuard = [jwtCookieAuth];
 app.use("/api/reports", ...crmApiGuard, reportsRouter);
 
 app.use(
@@ -212,21 +195,67 @@ app.use(
 );
 
 app.use("/api", routes);
-app.use(jwtCookieAuth, resolveTenantContext, tenantDbRoutes);
+
+// Health check endpoint
+app.get("/api/health", async (_req, res) => {
+  let dbStatus = "ok";
+  let dbLatency = null;
+  try {
+    const start = Date.now();
+    await testConnection();
+    dbLatency = Date.now() - start;
+  } catch (err) {
+    dbStatus = "error";
+    console.error("Health check DB error:", err.message);
+  }
+
+  const status = {
+    status: dbStatus === "ok" ? "healthy" : "degraded",
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    services: {
+      database: { status: dbStatus, latency_ms: dbLatency }
+    },
+    version: process.env.APP_VERSION || "1.0.0"
+  };
+
+  res.status(dbStatus === "ok" ? 200 : 503).json(status);
+});
+
 app.get("/", (_req, res) =>
   res.json({ status: "ok", message: "RND CRM API running" })
 );
 
+// 404 handler for unknown routes
 app.use((req, res) => {
   res.status(404).json({
     success: false,
-    message: `Route ${req.method} ${req.originalUrl} not found`,
+    message: `Route not found: ${req.method} ${req.originalUrl}`,
   });
 });
 
-app.use((err, _req, res, _next) => {
-  console.error("Server error:", err.stack || err.message);
+// Global error handler
+app.use((err, req, res, _next) => {
+  const requestId = req.request_id || 'unknown';
+  const isProduction = process.env.NODE_ENV === 'production';
 
+  // Log full error for debugging
+  if (isProduction) {
+    console.error(JSON.stringify({
+      level: 'error',
+      event: 'unhandled_error',
+      request_id: requestId,
+      method: req.method,
+      path: req.originalUrl,
+      error: err.message,
+      stack: err.stack
+    }));
+  } else {
+    console.error(`[ERROR] ${err.message}`);
+    if (err.stack) console.error(err.stack);
+  }
+
+  // Handle specific error types
   if (err.message === "Not allowed by CORS") {
     return res.status(403).json({ success: false, message: "CORS not allowed" });
   }
@@ -238,9 +267,29 @@ app.use((err, _req, res, _next) => {
     });
   }
 
-  res.status(err.status || 500).json({
+  // Handle validation errors
+  if (err.name === 'ValidationError' || err.name === 'JsonWebTokenError') {
+    return res.status(400).json({
+      success: false,
+      message: err.message
+    });
+  }
+
+  // Handle unauthorized errors
+  if (err.name === 'UnauthorizedError' || err.status === 401) {
+    return res.status(401).json({
+      success: false,
+      message: "Unauthorized"
+    });
+  }
+
+  // Generic error response - never expose stack traces in production
+  const statusCode = err.status || err.statusCode || 500;
+  res.status(statusCode).json({
     success: false,
-    message: process.env.NODE_ENV === "production" ? "Internal server error" : err.message,
+    message: isProduction
+      ? "An internal error occurred. Please try again later."
+      : err.message
   });
 });
 
@@ -249,11 +298,8 @@ async function start() {
   await logProductionEmailConfig();
   await testConnection();
   await ensureSchema();
-  await validateTenantDatabases();
   const httpServer = http.createServer(app);
   initMeetingsRealtime(httpServer);
-  startChatRetentionLoop();
-  startTrialSubscriptionJobs();
   httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`\n🚀  API → http://localhost:${PORT}/api/health`);
     console.log(`📡  Realtime (meetings + admin) → ws://localhost:${PORT}/socket.io\n`);

@@ -22,10 +22,6 @@ export default function RegisterPage() {
           <Link href="/login" style={{ color: "#111827", fontWeight: 600 }}>
             Sign in
           </Link>
-          {" · "}
-          <Link href="/invite/accept" style={{ color: "#111827", fontWeight: 600 }}>
-            Accept invitation
-          </Link>
         </p>
       </div>
 

@@ -6,9 +6,6 @@ import Link from "next/link";
 import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 import ThemeToggle from "@/components/Navbar/ThemeToggle";
-import { apiFetch } from "@/lib/api";
-import { subscriptionGrantedFromOrdersPayload } from "@/lib/trialAccess";
-import { isPlatformSuperAdmin } from "@/lib/platformUser";
 import styles from "./AppErrorPage.module.css";
 
 export default function AppErrorPage({
@@ -34,31 +31,8 @@ export default function AppErrorPage({
       return;
     }
 
-    if (isPlatformSuperAdmin(user)) {
-      setTarget({ href: "/admin/dashboard", label: "Admin home", ready: true });
-      return;
-    }
-
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await apiFetch("/orders");
-        const data = await res.json().catch(() => ({}));
-        const hasValid = subscriptionGrantedFromOrdersPayload(data);
-        if (cancelled) return;
-        if (hasValid) {
-          setTarget({ href: "/dashboard", label: "Back to home", ready: true });
-        } else {
-          setTarget({ href: "/add-package", label: "Choose a plan", ready: true });
-        }
-      } catch {
-        if (!cancelled) setTarget({ href: "/add-package", label: "Choose a plan", ready: true });
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
+    void user;
+    setTarget({ href: "/dashboard", label: "Back to home", ready: true });
   }, [isLoaded, userId, user]);
 
   const logoSrc =
@@ -113,11 +87,6 @@ export default function AppErrorPage({
           {showSecondaryLink && target.ready && !userId && (
             <Link href="/login" className={styles.btnGhost}>
               Sign in
-            </Link>
-          )}
-          {showSecondaryLink && target.ready && userId && target.href === "/dashboard" && (
-            <Link href="/add-package" className={styles.btnGhost}>
-              Plans &amp; pricing
             </Link>
           )}
         </div>

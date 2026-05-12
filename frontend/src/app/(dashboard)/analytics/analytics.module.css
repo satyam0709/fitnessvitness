@@ -1,0 +1,111 @@
+.container {
+  padding: 24px;
+}
+
+.container h1 {
+  font-size: 24px;
+  font-weight: 600;
+  color: #1f2937;
+  margin-bottom: 24px;
+}
+
+.loading, .empty {
+  text-align: center;
+  padding: 48px;
+  color: #9ca3af;
+}
+
+.section {
+  background: white;
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 24px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+.section h2 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1f2937;
+  margin-bottom: 16px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th {
+  text-align: left;
+  padding: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.table td {
+  padding: 12px;
+  font-size: 14px;
+  color: #374151;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.highlight {
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.profit { color: #10b981; font-weight: 600; }
+.loss { color: #ef4444; font-weight: 600; }
+
+.tierGrid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 16px;
+}
+
+.tierCard {
+  text-align: center;
+  padding: 20px;
+  background: #f9fafb;
+  border-radius: 12px;
+}
+
+.tierStars {
+  font-size: 24px;
+  color: #fbbf24;
+  margin-bottom: 8px;
+}
+
+.tierCount {
+  font-size: 32px;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.tierPct {
+  font-size: 14px;
+  color: #6b7280;
+  margin-bottom: 8px;
+}
+
+.tierTip {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.financialLink {
+  margin-top: 16px;
+  text-align: right;
+}
+
+.financialLink a {
+  color: #10b981;
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.financialLink a:hover {
+  text-decoration: underline;
+}

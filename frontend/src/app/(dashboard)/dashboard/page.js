@@ -5,13 +5,13 @@ import { useUser, useAuth } from "@/contexts/AuthContext";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { apiFetch, connectGlobalSocket } from "@/lib/api";
+import { getDashboardStats, getAllClients } from "@/lib/fitnessApi";
 import { LeadStatusDonut, LeadSourceArea, ChartCardMenu } from "@/components/Dashboard/DashboardCharts";
 import {
   useConfirmDialog,
   buildDeleteMessage,
 } from "@/components/ConfirmDialog/ConfirmDialogContext";
 import { useUserRole } from "@/components/Dashboard/UserRoleContext";
-import { useAdminRealtime } from "@/app/admin/AdminRealtimeProvider";
 import { taskStatusForDb } from "@/lib/taskStatus";
 import { useTenantFeatures } from "@/contexts/TenantFeaturesContext";
 import styles from "./dashboard.module.css";
@@ -131,11 +131,13 @@ export default function DashboardPage() {
   const { confirm } = useConfirmDialog();
   const { isSignedIn } = useAuth();
   const { refreshNonce: roleRefreshNonce } = useUserRole();
-  const { refreshNonce: adminRefreshNonce } = useAdminRealtime();
+  const adminRefreshNonce = 0;
   const { featureMap, isLoading: featuresLoading } = useTenantFeatures();
   const isPlatformAdmin =
     Number(user?.is_platform_admin) === 1 || Number(user?.isPlatformAdmin) === 1;
   const [stats, setStats] = useState(null);
+  const [fitnessStats, setFitnessStats] = useState(null);
+  const [fitnessLoading, setFitnessLoading] = useState(true);
   const [leads, setLeads] = useState([]);
   const [reminders, setReminders] = useState([]);
   const [meetings, setMeetings] = useState([]);
@@ -292,9 +294,7 @@ export default function DashboardPage() {
   const initDoneRef = useRef(false);
   useEffect(() => {
     if (!isLoaded) return;
-    if (isPlatformAdmin) {
-      router.replace("/admin/dashboard");
-    }
+    if (isPlatformAdmin) router.replace("/dashboard");
   }, [isLoaded, isPlatformAdmin, router]);
 
   useEffect(() => {
@@ -307,8 +307,26 @@ export default function DashboardPage() {
     if (isSignedIn) {
       fetchDashboard();
       fetchStats();
+      loadFitnessStats();
     }
   }, [isLoaded, isSignedIn, featuresLoading, isPlatformAdmin, fetchDashboard, fetchStats]);
+
+  // Fetch fitness CRM stats
+  const loadFitnessStats = useCallback(async () => {
+    setFitnessLoading(true);
+    try {
+      const [stats, clients] = await Promise.all([getDashboardStats(), getAllClients()]);
+      // Get today's follow-ups: clients with next_due_date <= today
+      const today = new Date().toISOString().split("T")[0];
+      const todaysFollowups = clients.filter(c => c.next_due_date && c.next_due_date <= today && c.status === "Active");
+      setFitnessStats({ ...stats, todaysFollowups });
+    } catch { setFitnessStats(null); }
+    finally { setFitnessLoading(false); }
+  }, []);
+
+  useEffect(() => {
+    if (isSignedIn && !isPlatformAdmin) loadFitnessStats();
+  }, [isSignedIn, isPlatformAdmin, loadFitnessStats]);
 
   useEffect(() => {
     if (!isLoaded || !isSignedIn) return undefined;
@@ -496,7 +514,7 @@ export default function DashboardPage() {
     { href: "/tasks?status=processing", label: "Activities", value: stats?.open?.activities ?? 0 },
     { href: "/reminders", label: "Today's Calls", value: stats?.open?.calls ?? 0 },
     { href: "/companies", label: "Companies", value: stats?.open?.companies ?? 0 },
-    { href: "/chat", label: "Messages", value: stats?.open?.messages ?? 0 },
+    { href: "/notifications", label: "Messages", value: stats?.open?.messages ?? 0 },
   ];
 
   const periodicCards = [
@@ -512,7 +530,7 @@ export default function DashboardPage() {
     { href: "/tasks", label: "Activities", value: stats?.periodic?.activities ?? 0 },
     { href: "/reminders", label: "Calls", value: stats?.periodic?.calls ?? 0 },
     { href: "/companies", label: "Companies", value: stats?.periodic?.companies ?? 0 },
-    { href: "/chat", label: "Messages", value: stats?.periodic?.messages ?? 0 },
+    { href: "/notifications", label: "Messages", value: stats?.periodic?.messages ?? 0 },
   ];
 
   async function toggleTodoDone(todo) {
@@ -869,6 +887,57 @@ export default function DashboardPage() {
             </div>
           </div>
         ))}
+      </div>
+
+      {/* Fitness CRM Widget */}
+      <div className={styles.panel}>
+        <div className={styles.panelHeader}>
+          <h2 className={styles.panelTitle}>
+            <i className="fas fa-heart-pulse" /> Fitness CRM
+          </h2>
+          <div className={styles.tabGroup}>
+            <Link href="/clients" className={styles.tabLink}>View Clients</Link>
+            <Link href="/business-tracker" className={styles.tabLink}>Business Tracker</Link>
+          </div>
+        </div>
+        <div className={styles.fitnessWidget}>
+          <div className={styles.fitnessStatsRow}>
+            <div className={styles.fitnessStat}>
+              <span className={styles.fitnessStatValue}>{fitnessLoading ? "—" : fitnessStats?.active_clients ?? 0}</span>
+              <span className={styles.fitnessStatLabel}>Active Clients</span>
+            </div>
+            <div className={`${styles.fitnessStat} ${(fitnessStats?.overdue_followups ?? 0) > 0 ? styles.fitnessStatDanger : ""}`}>
+              <span className={styles.fitnessStatValue}>{fitnessLoading ? "—" : fitnessStats?.overdue_followups ?? 0}</span>
+              <span className={styles.fitnessStatLabel}>Overdue Follow-ups</span>
+            </div>
+            <div className={`${styles.fitnessStat} ${(fitnessStats?.expiring_soon ?? 0) > 0 ? styles.fitnessStatWarning : ""}`}>
+              <span className={styles.fitnessStatValue}>{fitnessLoading ? "—" : fitnessStats?.expiring_soon ?? 0}</span>
+              <span className={styles.fitnessStatLabel}>Plans Expiring Soon</span>
+            </div>
+            <div className={`${styles.fitnessStat} ${(fitnessStats?.need_attention ?? 0) > 0 ? styles.fitnessStatWarning : ""}`}>
+              <span className={styles.fitnessStatValue}>{fitnessLoading ? "—" : fitnessStats?.need_attention ?? 0}</span>
+              <span className={styles.fitnessStatLabel}>Need Attention</span>
+            </div>
+            <div className={styles.fitnessStat}>
+              <span className={styles.fitnessStatValue}>{fitnessLoading ? "—" : fitnessStats?.on_hold ?? 0}</span>
+              <span className={styles.fitnessStatLabel}>On Hold</span>
+            </div>
+          </div>
+          {fitnessStats?.todaysFollowups?.length > 0 && (
+            <div className={styles.fitnessFollowups}>
+              <h3 className={styles.fitnessFollowupsTitle}>Today's Follow-ups</h3>
+              <div className={styles.fitnessFollowupsList}>
+                {fitnessStats.todaysFollowups.slice(0, 8).map(c => (
+                  <Link key={c.client_id} href={`/clients/${c.client_id}`} className={styles.fitnessFollowupItem}>
+                    <span className={styles.fitnessFollowupName}>{c.full_name}</span>
+                    <span className={styles.fitnessFollowupDue}>{c.next_due_date}</span>
+                    <span className={`${styles.fitnessFollowupStatus} ${c.progress === "Very Poor" || c.progress === "Poor" ? styles.fitnessFollowupDanger : ""}`}>{c.progress}</span>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Tasks */}
