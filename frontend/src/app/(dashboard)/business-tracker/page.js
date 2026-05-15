@@ -191,9 +191,14 @@ export default function BusinessTrackerPage() {
 
       <div className={styles.header}>
         <h1>Business Tracker</h1>
-        <button className={styles.addBtn} onClick={() => setShowAdd(true)}>
-          <i className="fa-solid fa-plus"></i> Add Transaction
-        </button>
+        <div className={styles.headerActions}>
+          <Link href="/external-sales" className={styles.externalLink}>
+            Walk-in / external sale
+          </Link>
+          <button className={styles.addBtn} onClick={() => setShowAdd(true)}>
+            <i className="fa-solid fa-plus"></i> Add Transaction
+          </button>
+        </div>
       </div>
 
       <div className={styles.statsBar}>

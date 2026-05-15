@@ -206,6 +206,12 @@ function emitFitnessChanged() {
   ioRef.emit("fitness:changed");
 }
 
+/** Broadcast CRM opportunity list changes to connected clients (same pattern as fitness). */
+function emitOpportunitiesChanged(payload) {
+  if (!ioRef) return;
+  ioRef.emit("opportunities:changed", payload || {});
+}
+
 function getIO() {
   return ioRef;
 }
@@ -220,5 +226,6 @@ module.exports = {
   emitNotificationCreated,
   emitNotificationReadState,
   emitFitnessChanged,
+  emitOpportunitiesChanged,
   getIO,
 };

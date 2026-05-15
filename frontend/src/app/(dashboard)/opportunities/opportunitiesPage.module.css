@@ -53,7 +53,7 @@
 
 .stageStrip {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   gap: 8px;
 }
 
@@ -377,4 +377,48 @@
   .modalFormGrid {
     grid-template-columns: 1fr;
   }
+}
+
+.listViewTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.listViewTab {
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-main);
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.listViewTab:hover {
+  border-color: var(--yellow);
+}
+
+.listViewTabActive {
+  background: rgba(245, 158, 11, 0.15);
+  border-color: #f59e0b;
+  color: #b45309;
+}
+
+.helpHint {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.45;
+}
+
+.stagePill {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--bg-muted, #f1f5f9);
+  font-size: 13px;
+  font-weight: 600;
 }

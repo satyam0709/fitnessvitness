@@ -27,7 +27,6 @@ const createClientValidation = [
 ];
 
 const createTransactionValidation = [
-  body("client_id").trim().notEmpty().withMessage("Client ID is required"),
   body("transaction_date").notEmpty().withMessage("Transaction date is required").isISO8601().withMessage("Transaction date must be a valid date"),
   body("product_plan").trim().notEmpty().withMessage("Product/Plan is required"),
   body("type").trim().notEmpty().withMessage("Type is required"),
@@ -89,6 +88,13 @@ router.get("/clients/:clientId/supplements", fitnessController.getSupplements);
 router.post("/clients/:clientId/supplements", fitnessController.createSupplement);
 router.put("/supplements/:id", fitnessController.updateSupplement);
 router.delete("/supplements/:id", fitnessController.deleteSupplement);
+
+// ─────────────────────────────────────────────────────────────────
+// EXTERNAL WALK-IN SALES
+// ─────────────────────────────────────────────────────────────────
+router.get("/external/stats", fitnessController.getExternalStats);
+router.get("/external/buyers/search", fitnessController.searchExternalBuyers);
+router.get("/external/buyers", fitnessController.getExternalBuyers);
 
 // ─────────────────────────────────────────────────────────────────
 // TRANSACTIONS

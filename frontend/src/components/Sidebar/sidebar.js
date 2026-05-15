@@ -40,6 +40,7 @@ const NAV = [
     items: [
       { label: "Clients", icon: "fa-users", href: "/clients", color: "#10b981", bg: "rgba(16,185,129,0.15)" },
       { label: "Business Tracker", icon: "fa-chart-line", href: "/business-tracker", color: "#f59e0b", bg: "rgba(245,158,11,0.15)" },
+      { label: "External / walk-in", icon: "fa-store", href: "/external-sales", color: "#14b8a6", bg: "rgba(20,184,166,0.15)" },
       { label: "Consultations", icon: "fa-stethoscope", href: "/consultations", color: "#0ea5e9", bg: "rgba(14,165,233,0.15)" },
       { label: "Analytics", icon: "fa-chart-pie", href: "/analytics", color: "#8b5cf6", bg: "rgba(139,92,246,0.15)" },
       { label: "Meal Plans", icon: "fa-utensils", href: "/meal-plans", color: "#f97316", bg: "rgba(249,115,22,0.15)" },
