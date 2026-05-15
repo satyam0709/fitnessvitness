@@ -294,7 +294,6 @@ if (typeof window !== "undefined") {
   });
 }
 
-const inFlightGets = new Map();
 
 export async function apiFetch(path, getTokenOrOptions, maybeOptions) {
   const options =
@@ -313,7 +312,6 @@ export async function apiFetch(path, getTokenOrOptions, maybeOptions) {
 
   const url = `${base}${p}`;
   const isForm = options.body instanceof FormData;
-  const isGet = !options.method || options.method.toUpperCase() === "GET";
 
   const doFetch = async () => {
     const token = getAccessToken();
@@ -368,24 +366,7 @@ export async function apiFetch(path, getTokenOrOptions, maybeOptions) {
     return res;
   };
 
-  if (isGet) {
-    const cacheKey = url;
-    if (inFlightGets.has(cacheKey)) {
-      return inFlightGets.get(cacheKey).then((res) => res.clone());
-    }
-    const sharedPromise = (async () => {
-      try {
-        let res = await doFetch();
-        res = await processResponse(res);
-        return res;
-      } finally {
-        inFlightGets.delete(cacheKey);
-      }
-    })();
-    inFlightGets.set(cacheKey, sharedPromise);
-    return sharedPromise.then((res) => res.clone());
-  }
-
   let res = await doFetch();
-  return processResponse(res);
+  res = await processResponse(res);
+  return res;
 }

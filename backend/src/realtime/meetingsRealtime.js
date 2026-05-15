@@ -78,14 +78,11 @@ function initMeetingsRealtime(httpServer) {
     const userId = socket.data.userId;
     if (!userId) return;
 
-    const dbId = socket.data.userDbId;
-    if (!dbId && !clerkId) return;
-    const sql = dbId
-      ? "SELECT id, role, COALESCE(is_platform_admin, 0) AS is_platform_admin FROM users WHERE id = ? AND is_active = 1 LIMIT 1"
-      : "SELECT id, role, COALESCE(is_platform_admin, 0) AS is_platform_admin FROM users WHERE clerk_user_id = ? AND is_active = 1 LIMIT 1";
-    const params = dbId ? [dbId] : [clerkId];
     mainPool
-      .query(sql, params)
+      .query(
+        "SELECT id, role, COALESCE(is_platform_admin, 0) AS is_platform_admin FROM users WHERE id = ? AND is_active = 1 LIMIT 1",
+        [userId]
+      )
       .then(([rows]) => {
         const row = rows?.[0];
         if (!row) return;
@@ -161,21 +158,52 @@ function emitAdminChanged(tenantId) {
   ioRef.to(room).emit("admin:changed", { tenantId });
 }
 
-function emitCalendarChanged(tenantId, event) {
-  if (!ioRef) return;
-  const room = tenantId ? `tenant:${tenantId}` : "admin";
-  ioRef.to(room).emit("calendar:changed", event);
+function emitCalendarChanged(event) {
+  if (!ioRef || !event) return;
+  const tenantId = event.tenantId;
+  if (tenantId != null && tenantId !== "") {
+    ioRef.to(`tenant:${tenantId}`).emit("calendar:changed", event);
+  } else {
+    ioRef.emit("calendar:changed", event);
+  }
 }
 
-function emitTodosChanged(tenantId, event) {
-  if (!ioRef) return;
-  const room = tenantId ? `tenant:${tenantId}` : "admin";
-  ioRef.to(room).emit("todos:changed", event);
+function emitMeetingsChanged(event) {
+  if (!ioRef || !event) return;
+  ioRef.emit("meetings:changed", event);
+}
+
+function emitTodosChanged(event) {
+  if (!ioRef || !event) return;
+  const tenantId = event.tenantId;
+  if (tenantId != null && tenantId !== "") {
+    ioRef.to(`tenant:${tenantId}`).emit("todos:changed", event);
+  } else {
+    ioRef.emit("todos:changed", event);
+  }
 }
 
 function emitNotification(userId, notif) {
   if (!ioRef) return;
   ioRef.to(`user:${userId}`).emit("notification", notif);
+}
+
+/** Alias for services that create DB rows then push to the user's socket room. */
+function emitNotificationCreated(userId, notif) {
+  emitNotification(userId, notif);
+}
+
+/** Pushes read-state to the user's socket (used after mark-all-read). */
+function emitNotificationReadState(userId, payload) {
+  if (!ioRef || userId == null) return;
+  const uid = Number(userId);
+  if (!Number.isFinite(uid) || uid <= 0) return;
+  ioRef.to(`user:${uid}`).emit("notifications:read", payload || {});
+}
+
+function emitFitnessChanged() {
+  if (!ioRef) return;
+  ioRef.emit("fitness:changed");
 }
 
 function getIO() {
@@ -186,7 +214,11 @@ module.exports = {
   initMeetingsRealtime,
   emitAdminChanged,
   emitCalendarChanged,
+  emitMeetingsChanged,
   emitTodosChanged,
   emitNotification,
+  emitNotificationCreated,
+  emitNotificationReadState,
+  emitFitnessChanged,
   getIO,
 };

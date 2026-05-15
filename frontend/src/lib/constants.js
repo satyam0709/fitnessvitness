@@ -17,4 +17,9 @@ export const PROTECTED_PREFIXES = [
   "/settings",
   "/search",
   "/profile",
+  "/clients",
+  "/business-tracker",
+  "/analytics",
+  "/consultations",
+  "/meal-plans",
 ];

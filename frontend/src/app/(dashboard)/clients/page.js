@@ -1,35 +1,33 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, connectGlobalSocket } from "@/lib/api";
 import styles from "./clients.module.css";
 
 const STATUS_COLORS = {
-  Active: { color: "#10b981", bg: "rgba(16,185,129,0.15)" },
-  Hold: { color: "#f59e0b", bg: "rgba(245,158,11,0.15)" },
-  Inactive: { color: "#6b7280", bg: "rgba(107,114,128,0.15)" },
+  Active: { color: "#10b981", bg: "#dcfce7" },
+  Hold: { color: "#f59e0b", bg: "#fef3c7" },
+  Inactive: { color: "#64748b", bg: "#f1f5f9" },
 };
 
 const PROGRESS_COLORS = {
   'Very Good': "#10b981",
   'Good': "#22c55e",
-  'Neutral': "#6b7280",
+  'Neutral': "#64748b",
   'Poor': "#f59e0b",
   'Very Poor': "#ef4444",
 };
 
-function getFollowUpPriority(nextDueDate) {
-  if (!nextDueDate) return { label: "—", className: "" };
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const due = new Date(nextDueDate);
-  due.setHours(0, 0, 0, 0);
-  const diffDays = Math.ceil((due - today) / (1000 * 60 * 60 * 24));
+function formatDate(d) {
+  if (!d) return "—";
+  return new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+}
 
-  if (diffDays < 0) return { label: "🔴 OVERDUE", className: styles.overdue };
-  if (diffDays <= 3) return { label: "🟡 DUE SOON", className: styles.dueSoon };
-  return { label: "✅ OK", className: styles.ok };
+function getPriorityDisplay(priority) {
+  if (priority === '🔴 OVERDUE') return { label: priority, className: styles.overdue };
+  if (priority === '🟡 DUE SOON') return { label: priority, className: styles.dueSoon };
+  return { label: priority || '✅ OK', className: styles.ok };
 }
 
 function getDaysRemaining(planExpiryDate) {
@@ -44,9 +42,7 @@ function getDaysRemaining(planExpiryDate) {
 function renderTier(tier) {
   return (
     <span className={styles.tier}>
-      {[...Array(5)].map((_, i) => (
-        <span key={i} style={{ color: i < tier ? "#fbbf24" : "#d1d5db" }}>★</span>
-      ))}
+      {"★".repeat(tier)}{"☆".repeat(5 - tier)}
     </span>
   );
 }
@@ -57,11 +53,7 @@ export default function ClientsPage() {
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
 
-  useEffect(() => {
-    loadClients();
-  }, [filter, search]);
-
-  async function loadClients() {
+  const loadClients = useCallback(async () => {
     try {
       setLoading(true);
       const params = new URLSearchParams();
@@ -78,7 +70,27 @@ export default function ClientsPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [filter, search]);
+
+  useEffect(() => {
+    loadClients();
+  }, [loadClients]);
+
+  useEffect(() => {
+    let mounted = true;
+    let sockRef = null;
+    const onFitness = () => loadClients();
+    (async () => {
+      const s = await connectGlobalSocket(true);
+      if (!mounted || !s) return;
+      sockRef = s;
+      s.on("fitness:changed", onFitness);
+    })();
+    return () => {
+      mounted = false;
+      if (sockRef) sockRef.off("fitness:changed", onFitness);
+    };
+  }, [loadClients]);
 
   const stats = {
     active: clients.filter(c => c.status === "Active").length,
@@ -99,19 +111,22 @@ export default function ClientsPage() {
   return (
     <div className={styles.container}>
       <div className={styles.header}>
-        <h1>Fitness Clients</h1>
+        <div>
+          <h1>Fitness Clients</h1>
+          <p style={{color: '#64748b', margin: '4px 0 0', fontSize: '15px'}}>Manage your portfolio and track progress</p>
+        </div>
         <Link href="/clients/new" className={styles.addBtn}>
           <i className="fa-solid fa-plus"></i> Add Client
         </Link>
       </div>
 
       <div className={styles.statsBar}>
-        <div className={styles.stat}><span className={styles.statValue}>{stats.active}</span>Active</div>
-        <div className={styles.stat}><span className={styles.statValue}>{stats.onHold}</span>On Hold</div>
-        <div className={styles.stat}><span className={styles.statValue}>{stats.needAttention}</span>Need Attention</div>
-        <div className={styles.stat}><span className={styles.statValue}>{stats.overdue}</span>Overdue Follow-ups</div>
-        <div className={styles.stat}><span className={styles.statValue}>{stats.expiringSoon}</span>Expiring Soon</div>
-        <div className={styles.stat}><span className={styles.statValue}>{stats.fiveStar}</span>5-Star Clients</div>
+        <div className={styles.stat}><span className={styles.statValue}>{stats.active}</span><span className={styles.statLabel}>Active</span></div>
+        <div className={styles.stat}><span className={styles.statValue}>{stats.onHold}</span><span className={styles.statLabel}>On Hold</span></div>
+        <div className={styles.stat}><span className={styles.statValue}>{stats.needAttention}</span><span className={styles.statLabel}>Attention</span></div>
+        <div className={styles.stat}><span className={styles.statValue}>{stats.overdue}</span><span className={styles.statLabel}>Overdue</span></div>
+        <div className={styles.stat}><span className={styles.statValue}>{stats.expiringSoon}</span><span className={styles.statLabel}>Expiring</span></div>
+        <div className={styles.stat}><span className={styles.statValue}>{stats.fiveStar}</span><span className={styles.statLabel}>5-Star</span></div>
       </div>
 
       <div className={styles.filters}>
@@ -122,13 +137,13 @@ export default function ClientsPage() {
               className={`${styles.filterBtn} ${filter === f ? styles.active : ""}`}
               onClick={() => setFilter(f)}
             >
-              {f === "all" ? "All" : f === "Overdue" ? "Overdue" : f === "High Risk" ? "High Risk" : f}
+              {f === "all" ? "All Base" : f}
             </button>
           ))}
         </div>
         <input
           type="text"
-          placeholder="Search clients..."
+          placeholder="Search portfolio..."
           className={styles.search}
           value={search}
           onChange={e => setSearch(e.target.value)}
@@ -136,70 +151,72 @@ export default function ClientsPage() {
       </div>
 
       {loading ? (
-        <div className={styles.loading}>Loading...</div>
+        <div className={styles.loading}>
+          <div style={{width: '40px', height: '40px', border: '4px solid #f1f5f9', borderTopColor: '#f5c400', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 16px'}}></div>
+          Synchronizing client database...
+          <style jsx>{` @keyframes spin { to { transform: rotate(360deg); } } `}</style>
+        </div>
       ) : (
         <div className={styles.tableWrap}>
           <table className={styles.table}>
             <thead>
               <tr>
                 <th>ID</th>
-                <th>Name</th>
+                <th>Client Name</th>
+                <th>Risk</th>
                 <th>Status</th>
                 <th>Progress</th>
-                <th>Last Consult</th>
                 <th>Next Due</th>
-                <th>Days Left</th>
                 <th>Follow-up</th>
-                <th>Plan Expiry</th>
-                <th>Plan Type</th>
-                <th>Source</th>
+                <th>Days</th>
+                <th>Expiry</th>
                 <th>Tier</th>
               </tr>
             </thead>
             <tbody>
               {clients.map(client => {
-                const daysLeft = getDaysRemaining(client.plan_expiry_date);
-                const priority = getFollowUpPriority(client.next_due_date);
-                const isHighRisk = (client.progress === "Poor" || client.progress === "Very Poor") &&
-                  (priority.className === styles.overdue || (daysLeft !== null && daysLeft >= 0 && daysLeft <= 7));
+                const daysLeft = client.days_remaining;
+                const priority = getPriorityDisplay(client.follow_up_priority);
+                const risk = client.risk_status || '✅ OK';
 
                 return (
                   <tr
                     key={client.client_id}
-                    className={`${client.tier === 5 ? styles.goldRow : ""} ${isHighRisk ? styles.highRisk : ""}`}
+                    className={`${client.tier === 5 ? styles.goldRow : ""} ${client.is_high_risk ? styles.highRisk : ""}`}
                   >
                     <td><Link href={`/clients/${client.client_id}`} className={styles.clientLink}>{client.client_id}</Link></td>
-                    <td>{client.full_name}</td>
+                    <td><strong>{client.full_name}</strong></td>
+                    <td><span className={`${styles.riskBadge} ${client.is_high_risk ? styles.highRiskBadge : ""}`}>{risk}</span></td>
                     <td>
-                      <span className={styles.badge} style={STATUS_COLORS[client.status] || STATUS_COLORS.Active}>
+                      <span className={styles.badge} style={{ 
+                        color: STATUS_COLORS[client.status]?.color || "#64748b",
+                        background: STATUS_COLORS[client.status]?.bg || "#f1f5f9"
+                      }}>
                         {client.status}
                       </span>
                     </td>
                     <td>
-                      <span style={{ color: PROGRESS_COLORS[client.progress] || "#6b7280" }}>
+                      <span style={{ fontWeight: 700, color: PROGRESS_COLORS[client.progress] || "#64748b" }}>
                         {client.progress}
                       </span>
                     </td>
-                    <td>{client.last_consultation_date || "—"}</td>
-                    <td>{client.next_due_date || "—"}</td>
+                    <td>{formatDate(client.next_due_date)}</td>
+                    <td><span className={`${styles.priority} ${priority.className}`}>{priority.label}</span></td>
                     <td>
                       {daysLeft !== null && (
                         <span className={`${styles.daysLeft} ${daysLeft < 0 ? styles.expired : daysLeft <= 7 ? styles.urgent : ""}`}>
-                          {daysLeft < 0 ? "Expired" : daysLeft}
+                          {daysLeft < 0 ? "EX" : daysLeft}
                         </span>
                       )}
                     </td>
-                    <td><span className={`${styles.priority} ${priority.className}`}>{priority.label}</span></td>
-                    <td>{client.plan_expiry_date || "—"}</td>
-                    <td>{client.plan_type || "—"}</td>
-                    <td>{client.source || "—"}</td>
+                    <td>{formatDate(client.plan_expiry_date)}</td>
                     <td>{renderTier(client.tier)}</td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
-          {clients.length === 0 && <div className={styles.empty}>No clients found</div>}
+          {clients.length === 0 && <div className={styles.empty}>No matching clients in current view</div>}
         </div>
       )}
     </div>

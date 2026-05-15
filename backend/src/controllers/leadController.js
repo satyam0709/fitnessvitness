@@ -22,7 +22,7 @@ async function getLeads(req, res) {
 
     const [leads] = await pool.execute(
       `SELECT l.*,
-              CONCAT(u.first_name, ' ', u.last_name) as assigned_name,
+              u.full_name as assigned_name,
               u.email as assigned_email
        FROM leads l
        LEFT JOIN users u ON u.id = l.assigned_to
@@ -44,7 +44,7 @@ async function getLead(req, res) {
 
     const [[lead]] = await pool.execute(
       `SELECT l.*,
-              CONCAT(u.first_name, ' ', u.last_name) as assigned_name,
+              u.full_name as assigned_name,
               u.email as assigned_email
        FROM leads l
        LEFT JOIN users u ON u.id = l.assigned_to

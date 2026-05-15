@@ -79,6 +79,34 @@ router.use("/auth", authRouter);
 router.post("/users/sync", verifyToken, syncCurrentUser);
 router.get("/users/me", verifyToken, getMe);
 router.get("/me", verifyToken, getMe);
+router.get("/me/features", verifyToken, (req, res) => {
+  // Standalone CRM has all features enabled for the single user
+  res.json({
+    success: true,
+    data: {
+      features: ["leads", "opportunities", "tickets", "tasks", "reminders", "meetings", "todos", "calendar", "contacts", "companies", "storage", "reports", "fitness", "analytics"],
+      featureMap: {
+        leads: true,
+        opportunities: true,
+        tickets: true,
+        tasks: true,
+        reminders: true,
+        meetings: true,
+        todos: true,
+        calendar: true,
+        contacts: true,
+        companies: true,
+        storage: true,
+        reports: true,
+        fitness: true,
+        analytics: true
+      },
+      planStatus: "pro",
+      packageName: "Standalone Lifetime",
+      validUntil: null
+    }
+  });
+});
 
 router.use("/users",        usersRouter);
 router.use("/leads", ...protectedRoute, leadsRouter);

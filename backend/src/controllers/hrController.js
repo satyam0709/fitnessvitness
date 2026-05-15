@@ -2,10 +2,9 @@ const { pool } = require("../config/database");
 
 async function getAttendance(req, res) {
   try {
-    const { tenantId } = req;
     const { date, userId } = req.query;
-    let query = "SELECT * FROM hr_attendance WHERE tenant_id = ?";
-    const params = [tenantId];
+    let query = "SELECT * FROM hr_attendance WHERE 1=1";
+    const params = [];
     if (date) { query += " AND date = ?"; params.push(date); }
     if (userId) { query += " AND user_id = ?"; params.push(userId); }
     query += " ORDER BY date DESC, created_at DESC";
@@ -19,12 +18,11 @@ async function getAttendance(req, res) {
 
 async function markAttendance(req, res) {
   try {
-    const { tenantId } = req;
     const { date, status, notes } = req.body;
     if (!date || !status) return res.status(400).json({ error: "Date and status required" });
     const [existing] = await pool.execute(
-      "SELECT id FROM hr_attendance WHERE tenant_id = ? AND user_id = ? AND date = ?",
-      [tenantId, req.user.id, date]
+      "SELECT id FROM hr_attendance WHERE user_id = ? AND date = ?",
+      [req.user.id, date]
     );
     if (existing.length) {
       await pool.execute(
@@ -34,8 +32,8 @@ async function markAttendance(req, res) {
       return res.json({ success: true, message: "Attendance updated" });
     }
     const [result] = await pool.execute(
-      "INSERT INTO hr_attendance (tenant_id, user_id, date, status, notes) VALUES (?, ?, ?, ?, ?)",
-      [tenantId, req.user.id, date, status, notes || ""]
+      "INSERT INTO hr_attendance (user_id, date, status, notes) VALUES (?, ?, ?, ?)",
+      [req.user.id, date, status, notes || ""]
     );
     res.status(201).json({ success: true, id: result.insertId });
   } catch (err) {
@@ -46,10 +44,9 @@ async function markAttendance(req, res) {
 
 async function getLeaves(req, res) {
   try {
-    const { tenantId } = req;
     const { userId, status } = req.query;
-    let query = "SELECT * FROM hr_leaves WHERE tenant_id = ?";
-    const params = [tenantId];
+    let query = "SELECT * FROM hr_leaves WHERE 1=1";
+    const params = [];
     if (userId) { query += " AND user_id = ?"; params.push(userId); }
     if (status) { query += " AND status = ?"; params.push(status); }
     query += " ORDER BY start_date DESC";
@@ -63,12 +60,11 @@ async function getLeaves(req, res) {
 
 async function createLeaveRequest(req, res) {
   try {
-    const { tenantId } = req;
     const { startDate, endDate, leaveType, reason } = req.body;
     if (!startDate || !endDate || !leaveType) return res.status(400).json({ error: "Missing required fields" });
     const [result] = await pool.execute(
-      "INSERT INTO hr_leaves (tenant_id, user_id, start_date, end_date, leave_type, reason, status) VALUES (?, ?, ?, ?, ?, ?, 'pending')",
-      [tenantId, req.user.id, startDate, endDate, leaveType, reason || ""]
+      "INSERT INTO hr_leaves (user_id, start_date, end_date, leave_type, reason, status) VALUES (?, ?, ?, ?, ?, 'pending')",
+      [req.user.id, startDate, endDate, leaveType, reason || ""]
     );
     res.status(201).json({ success: true, id: result.insertId });
   } catch (err) {
@@ -80,8 +76,7 @@ async function createLeaveRequest(req, res) {
 async function approveLeave(req, res) {
   try {
     const { leaveId } = req.params;
-    const { tenantId } = req;
-    await pool.execute("UPDATE hr_leaves SET status = 'approved', approved_by = ?, updated_at = NOW() WHERE id = ? AND tenant_id = ?", [req.user.id, leaveId, tenantId]);
+    await pool.execute("UPDATE hr_leaves SET status = 'approved', approved_by = ?, updated_at = NOW() WHERE id = ?", [req.user.id, leaveId]);
     res.json({ success: true });
   } catch (err) {
     console.error("approveLeave error:", err);
@@ -92,8 +87,7 @@ async function approveLeave(req, res) {
 async function rejectLeave(req, res) {
   try {
     const { leaveId } = req.params;
-    const { tenantId } = req;
-    await pool.execute("UPDATE hr_leaves SET status = 'rejected', approved_by = ?, updated_at = NOW() WHERE id = ? AND tenant_id = ?", [req.user.id, leaveId, tenantId]);
+    await pool.execute("UPDATE hr_leaves SET status = 'rejected', approved_by = ?, updated_at = NOW() WHERE id = ?", [req.user.id, leaveId]);
     res.json({ success: true });
   } catch (err) {
     console.error("rejectLeave error:", err);

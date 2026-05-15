@@ -2,12 +2,11 @@ const { pool } = require("../config/database");
 
 async function listChatUsers(req, res) {
   try {
-    const { tenantId } = req;
     const [users] = await pool.execute(
-      `SELECT id, first_name, last_name, email, avatar_url FROM users
-       WHERE tenant_id = ? AND is_active = 1 AND id != ?
-       ORDER BY first_name, last_name`,
-      [tenantId, req.user.id]
+      `SELECT id, full_name, email, avatar_url FROM users
+       WHERE is_active = 1 AND id != ?
+       ORDER BY full_name`,
+      [req.user.id]
     );
     res.json({ users });
   } catch (err) {
@@ -18,15 +17,14 @@ async function listChatUsers(req, res) {
 
 async function listThreads(req, res) {
   try {
-    const { tenantId } = req;
     const [threads] = await pool.execute(
-      `SELECT t.*, u.first_name, u.last_name, u.avatar_url,
+      `SELECT t.*, u.full_name, u.avatar_url,
               (SELECT content FROM chat_thread_messages WHERE thread_id = t.id ORDER BY created_at DESC LIMIT 1) as last_message
        FROM chat_threads t
        LEFT JOIN users u ON (t.participant_id = u.id)
-       WHERE t.tenant_id = ? AND t.user_id = ?
+       WHERE t.user_id = ?
        ORDER BY t.updated_at DESC`,
-      [tenantId, req.user.id]
+      [req.user.id]
     );
     res.json({ threads });
   } catch (err) {
@@ -38,13 +36,12 @@ async function listThreads(req, res) {
 async function getThreadDetails(req, res) {
   try {
     const { threadId } = req.params;
-    const { tenantId } = req;
     const [threads] = await pool.execute(
-      `SELECT t.*, u.first_name, u.last_name, u.avatar_url
+      `SELECT t.*, u.full_name, u.avatar_url
        FROM chat_threads t
        LEFT JOIN users u ON (t.participant_id = u.id)
-       WHERE t.id = ? AND t.tenant_id = ?`,
-      [threadId, tenantId]
+       WHERE t.id = ?`,
+      [threadId]
     );
     if (!threads.length) return res.status(404).json({ error: "Thread not found" });
     res.json({ thread: threads[0] });
@@ -56,20 +53,19 @@ async function getThreadDetails(req, res) {
 
 async function createThread(req, res) {
   try {
-    const { tenantId } = req;
     const { participantId } = req.body;
     if (!participantId) return res.status(400).json({ error: "Participant required" });
 
     const [existing] = await pool.execute(
       `SELECT id FROM chat_threads
-       WHERE tenant_id = ? AND user_id = ? AND participant_id = ?`,
-      [tenantId, req.user.id, participantId]
+       WHERE user_id = ? AND participant_id = ?`,
+      [req.user.id, participantId]
     );
     if (existing.length) return res.json({ thread: existing[0] });
 
     const [result] = await pool.execute(
-      `INSERT INTO chat_threads (tenant_id, user_id, participant_id) VALUES (?, ?, ?)`,
-      [tenantId, req.user.id, participantId]
+      `INSERT INTO chat_threads (user_id, participant_id) VALUES (?, ?)`,
+      [req.user.id, participantId]
     );
     res.status(201).json({ thread: { id: result.insertId, user_id: req.user.id, participant_id: participantId } });
   } catch (err) {
@@ -81,15 +77,14 @@ async function createThread(req, res) {
 async function listMessages(req, res) {
   try {
     const { threadId } = req.params;
-    const { tenantId } = req;
     const [messages] = await pool.execute(
-      `SELECT m.*, u.first_name, u.last_name, u.avatar_url
+      `SELECT m.*, u.full_name, u.avatar_url
        FROM chat_thread_messages m
        LEFT JOIN users u ON (m.sender_id = u.id)
-       WHERE m.thread_id = ? AND m.tenant_id = ?
+       WHERE m.thread_id = ?
        ORDER BY m.created_at ASC
        LIMIT 100`,
-      [threadId, tenantId]
+      [threadId]
     );
     res.json({ messages });
   } catch (err) {
@@ -102,12 +97,11 @@ async function sendMessageToThread(req, res) {
   try {
     const { threadId } = req.params;
     const { content } = req.body;
-    const { tenantId } = req;
     if (!content) return res.status(400).json({ error: "Content required" });
 
     const [result] = await pool.execute(
-      `INSERT INTO chat_thread_messages (tenant_id, thread_id, sender_id, content) VALUES (?, ?, ?, ?)`,
-      [tenantId, threadId, req.user.id, content]
+      `INSERT INTO chat_thread_messages (thread_id, sender_id, content) VALUES (?, ?, ?)`,
+      [threadId, req.user.id, content]
     );
     await pool.execute(`UPDATE chat_threads SET updated_at = NOW() WHERE id = ?`, [threadId]);
     res.status(201).json({ id: result.insertId, content, sender_id: req.user.id });
@@ -120,10 +114,9 @@ async function sendMessageToThread(req, res) {
 async function markThreadRead(req, res) {
   try {
     const { threadId } = req.params;
-    const { tenantId } = req;
     await pool.execute(
-      `UPDATE chat_thread_messages SET is_read = 1 WHERE thread_id = ? AND receiver_id = ? AND tenant_id = ?`,
-      [threadId, req.user.id, tenantId]
+      `UPDATE chat_thread_messages SET is_read = 1 WHERE thread_id = ? AND receiver_id = ?`,
+      [threadId, req.user.id]
     );
     res.json({ success: true });
   } catch (err) {
@@ -135,8 +128,7 @@ async function markThreadRead(req, res) {
 async function deleteThread(req, res) {
   try {
     const { threadId } = req.params;
-    const { tenantId } = req;
-    await pool.execute(`DELETE FROM chat_threads WHERE id = ? AND tenant_id = ? AND user_id = ?`, [threadId, tenantId, req.user.id]);
+    await pool.execute(`DELETE FROM chat_threads WHERE id = ? AND user_id = ?`, [threadId, req.user.id]);
     res.json({ success: true });
   } catch (err) {
     console.error("deleteThread error:", err);

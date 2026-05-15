@@ -638,7 +638,100 @@ async function setupDb() {
   KEY idx_stripe_session (stripe_session_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
+    console.log("Table: payment_sessions");
 
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS clients (
+        id              INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+        client_id       VARCHAR(20)   UNIQUE NOT NULL,
+        full_name       VARCHAR(150)  NOT NULL,
+        phone           VARCHAR(20)   DEFAULT NULL,
+        email           VARCHAR(150)  DEFAULT NULL,
+        age             INT           DEFAULT NULL,
+        height_cm       DECIMAL(5,2)  DEFAULT NULL,
+        start_weight_kg DECIMAL(5,2)  DEFAULT NULL,
+        current_weight_kg DECIMAL(5,2) DEFAULT NULL,
+        target_weight_kg DECIMAL(5,2) DEFAULT NULL,
+        bmi             DECIMAL(5,2)  DEFAULT NULL,
+        bmi_category    VARCHAR(50)   DEFAULT NULL,
+        health_goal     VARCHAR(150)  DEFAULT NULL,
+        plan_type       VARCHAR(100)  DEFAULT NULL,
+        plan_start_date DATE          DEFAULT NULL,
+        plan_expiry     DATE          DEFAULT NULL,
+        follow_up_freq_days INT       DEFAULT NULL,
+        client_tier     VARCHAR(50)   DEFAULT NULL,
+        source          VARCHAR(100)  DEFAULT NULL,
+        status          VARCHAR(50)   DEFAULT 'Active',
+        progress        VARCHAR(50)   DEFAULT NULL,
+        city            VARCHAR(100)  DEFAULT NULL,
+        address         TEXT          DEFAULT NULL,
+        occupation      VARCHAR(150)  DEFAULT NULL,
+        emergency_contact VARCHAR(150) DEFAULT NULL,
+        medical_conditions TEXT       DEFAULT NULL,
+        allergies       TEXT          DEFAULT NULL,
+        activity_level  VARCHAR(100)  DEFAULT NULL,
+        current_medications TEXT      DEFAULT NULL,
+        referred_by     VARCHAR(100)  DEFAULT NULL,
+        created_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    console.log("Table: clients");
+
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS consultations (
+        id              INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+        client_id       INT UNSIGNED  NOT NULL,
+        date            DATE          NOT NULL,
+        type            VARCHAR(100)  NOT NULL,
+        weight_kg       DECIMAL(5,2)  DEFAULT NULL,
+        key_observations TEXT         DEFAULT NULL,
+        diet_changes    TEXT          DEFAULT NULL,
+        next_steps      TEXT          DEFAULT NULL,
+        next_appt       VARCHAR(50)   DEFAULT NULL,
+        created_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    console.log("Table: consultations");
+
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS transactions (
+        id              INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+        client_id       INT UNSIGNED  NOT NULL,
+        date            DATE          NOT NULL,
+        product_plan    VARCHAR(150)  NOT NULL,
+        type            VARCHAR(50)   DEFAULT NULL,
+        rate            DECIMAL(10,2) DEFAULT 0,
+        received        DECIMAL(10,2) DEFAULT 0,
+        pending         DECIMAL(10,2) DEFAULT 0,
+        profit          DECIMAL(10,2) DEFAULT 0,
+        mode            VARCHAR(50)   DEFAULT NULL,
+        created_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    console.log("Table: transactions");
+
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS supplements (
+        id              INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+        client_id       INT UNSIGNED  NOT NULL,
+        product         VARCHAR(150)  NOT NULL,
+        date            DATE          NOT NULL,
+        qty             INT           DEFAULT 1,
+        mrp             DECIMAL(10,2) DEFAULT 0,
+        rate            DECIMAL(10,2) DEFAULT 0,
+        notes           TEXT          DEFAULT NULL,
+        created_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    console.log("Table: supplements");
     console.log("\nAll tables created. Database is ready!\n");
 
   } catch (error) {

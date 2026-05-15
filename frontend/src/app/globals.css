@@ -234,9 +234,13 @@ input, textarea, select { font-family: inherit; }
   object-fit: contain;
 }
 
-[data-theme="dark"] .logo-blend,
+[data-theme="dark"] .logo-blend {
+  mix-blend-mode: screen;
+  filter: invert(1) hue-rotate(180deg) brightness(1.2);
+}
+
 @media (prefers-color-scheme: dark) {
-  .logo-blend {
+  :root:not([data-theme="light"]) .logo-blend {
     mix-blend-mode: screen;
     filter: invert(1) hue-rotate(180deg) brightness(1.2);
   }

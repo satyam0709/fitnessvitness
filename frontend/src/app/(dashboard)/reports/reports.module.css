@@ -140,6 +140,29 @@
   padding: 14px;
 }
 
+.pieRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 16px;
+  align-items: stretch;
+}
+
+.invoiceMixSummary {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.invoiceMixSummary strong {
+  color: var(--text-main);
+  font-weight: 800;
+}
+
 .empty {
   padding: 48px 20px;
   text-align: center;
@@ -148,6 +171,10 @@
 
 @media (max-width: 900px) {
   .metricsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .pieRow {
     grid-template-columns: 1fr;
   }
 }

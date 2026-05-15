@@ -72,8 +72,8 @@ function getBMICategory(bmi) {
 
   if (bmi < 18.5) return { label: 'Underweight', status: 'warning' };
   if (bmi < 25) return { label: 'Normal', status: 'good' };
-  if (bmi < 30) return { label: 'Overweight', status: 'warning' };
-  return { label: 'Obese', status: 'danger' };
+  if (bmi < 30) return { label: '⚠️ Overweight', status: 'warning' };
+  return { label: '🚨 Obese', status: 'danger' };
 }
 
 /**
@@ -120,10 +120,10 @@ function isFollowUpOverdue(nextDueDate) {
  * @returns {string} - Priority: 'overdue', 'due_soon', or 'ok'
  */
 function getFollowUpPriority(nextDueDate) {
-  if (!nextDueDate) return 'ok';
+  if (!nextDueDate) return '✅ OK';
 
   const due = new Date(nextDueDate);
-  if (isNaN(due.getTime())) return 'ok';
+  if (isNaN(due.getTime())) return '✅ OK';
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -131,9 +131,9 @@ function getFollowUpPriority(nextDueDate) {
 
   const diffDays = Math.ceil((due - today) / (1000 * 60 * 60 * 24));
 
-  if (diffDays < 0) return 'overdue';
-  if (diffDays <= 3) return 'due_soon';
-  return 'ok';
+  if (diffDays < 0) return '🔴 OVERDUE';
+  if (diffDays <= 3) return '🟡 DUE SOON';
+  return '✅ OK';
 }
 
 /**
@@ -144,13 +144,15 @@ function getFollowUpPriority(nextDueDate) {
  * @param {number|null} daysRemaining - Days until plan expiry
  * @returns {boolean} - True if high risk
  */
-function isHighRisk(progress, isFollowUpOverdue, daysRemaining) {
+function getRiskStatus(progress, followUpPriority, daysRemaining) {
   const poorProgress = progress === 'Poor' || progress === 'Very Poor';
-  if (!poorProgress) return false;
+  const overdue = followUpPriority === '🔴 OVERDUE';
+  const expiringSoon = daysRemaining !== null && daysRemaining <= 7;
 
-  const expiringSoon = daysRemaining !== null && daysRemaining <= 7 && daysRemaining >= 0;
-
-  return isFollowUpOverdue || expiringSoon;
+  if (poorProgress || overdue || expiringSoon) {
+    return '🔴 HIGH RISK';
+  }
+  return '✅ OK';
 }
 
 /**
@@ -237,11 +239,12 @@ function computeClientFields(client) {
   computed.follow_up_priority = getFollowUpPriority(client.next_due_date || computed.next_due_date);
 
   // Determine risk flag
-  computed.is_high_risk = isHighRisk(
+  computed.risk_status = getRiskStatus(
     client.progress,
-    computed.follow_up_overdue,
+    computed.follow_up_priority,
     computed.days_remaining
   );
+  computed.is_high_risk = computed.risk_status === '🔴 HIGH RISK';
 
   // Calculate weight change
   computed.weight_change = calculateWeightChange(client.start_weight_kg, client.current_weight_kg);
@@ -274,7 +277,7 @@ module.exports = {
   calculateDaysRemaining,
   isFollowUpOverdue,
   getFollowUpPriority,
-  isHighRisk,
+  getRiskStatus,
   calculateWeightChange,
   calculateGoalProgress,
   generateClientId,

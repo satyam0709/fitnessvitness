@@ -113,8 +113,10 @@ export async function updateClient(clientId, data) {
   return handleResponse(res);
 }
 
-export async function deleteClient(clientId) {
-  const res = await apiFetch(`/fitness/clients/${encodeURIComponent(clientId)}`, {
+export async function deleteClient(clientId, opts = {}) {
+  const soft = opts.soft === true;
+  const q = soft ? "?soft=1" : "";
+  const res = await apiFetch(`/fitness/clients/${encodeURIComponent(clientId)}${q}`, {
     method: "DELETE",
   });
   return handleResponse(res);
@@ -123,6 +125,11 @@ export async function deleteClient(clientId) {
 // ─────────────────────────────────────────────────────────────────
 // CONSULTATIONS
 // ─────────────────────────────────────────────────────────────────
+export async function getAllConsultations() {
+  const res = await apiFetch("/fitness/consultations");
+  return handleResponse(res);
+}
+
 export async function getConsultations(clientId) {
   const res = await apiFetch(`/fitness/clients/${encodeURIComponent(clientId)}/consultations`);
   return handleResponse(res);
@@ -146,6 +153,34 @@ export async function updateConsultation(id, data) {
 
 export async function deleteConsultation(id) {
   const res = await apiFetch(`/fitness/consultations/${id}`, {
+    method: "DELETE",
+  });
+  return handleResponse(res);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// MEAL PLANS
+// ─────────────────────────────────────────────────────────────────
+export async function getAllMealPlans() {
+  const res = await apiFetch("/fitness/meal-plans");
+  return handleResponse(res);
+}
+
+export async function getMealPlans(clientId) {
+  const res = await apiFetch(`/fitness/clients/${encodeURIComponent(clientId)}/meal-plans`);
+  return handleResponse(res);
+}
+
+export async function createMealPlan(clientId, data) {
+  const res = await apiFetch(`/fitness/clients/${encodeURIComponent(clientId)}/meal-plans`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+  return handleResponse(res);
+}
+
+export async function deleteMealPlan(id) {
+  const res = await apiFetch(`/fitness/meal-plans/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
   return handleResponse(res);
@@ -248,6 +283,22 @@ export async function getTransactionSummaryMonthly() {
 
 export async function getTransactionSummaryYearly() {
   const res = await apiFetch("/fitness/transactions/summary/yearly");
+  return handleResponse(res);
+}
+
+/** @param {{ date_from?: string, date_to?: string }} params — YYYY-MM-DD; defaults to YTD */
+export async function getFitnessTransactionCharts(params = {}) {
+  const res = await apiFetch(`/fitness/charts/transaction-mix${getParams(params)}`);
+  return handleResponse(res);
+}
+
+/** @param {{ window?: 'day'|'month'|'year', date?: string }} params */
+export async function getRevenueSplit(params = {}) {
+  const q = new URLSearchParams();
+  if (params.window) q.set("window", params.window);
+  if (params.date) q.set("date", params.date);
+  const qs = q.toString();
+  const res = await apiFetch(`/fitness/revenue/split${qs ? `?${qs}` : ""}`);
   return handleResponse(res);
 }
 
@@ -357,4 +408,28 @@ export async function getAllAnalytics() {
     getAnalyticsFinancial(),
   ]);
   return { sources, tiers, referrers, financial };
+}
+
+// ─────────────────────────────────────────────────────────────────
+// EXCEL IMPORT / EXPORT
+// ─────────────────────────────────────────────────────────────────
+export async function importClientsExcel(formData) {
+  const res = await apiFetch("/fitness/import", {
+    method: "POST",
+    body: formData,
+  });
+  return handleResponse(res);
+}
+
+export async function exportClientsExcel() {
+  const res = await apiFetch("/fitness/export");
+  if (!res.ok) throw new FitnessApiError("Export failed", res.status);
+  const blob = await res.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "fitness_clients.xlsx";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 }

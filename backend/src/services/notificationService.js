@@ -41,7 +41,13 @@ async function createUserNotification({
     [result.insertId]
   );
   const notification = rows[0] || null;
-  if (notification) emitNotificationCreated(uid, notification);
+  if (notification) {
+    try {
+      emitNotificationCreated(uid, notification);
+    } catch (e) {
+      console.warn("emitNotificationCreated:", e?.message || e);
+    }
+  }
   return notification;
 }
 

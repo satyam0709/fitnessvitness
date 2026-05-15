@@ -108,9 +108,7 @@ async function verifyToken(req, res, next) {
 
     // Use execute() for parameterized DB reads
     const [rows] = await mainPool.execute(
-      `SELECT id, email, first_name, last_name, role, is_active,
-              COALESCE(is_platform_admin, 0) AS is_platform_admin,
-              COALESCE(must_change_password, 0) AS must_change_password
+      `SELECT id, email, full_name, role, is_active
        FROM users
        WHERE id = ?
        LIMIT 1`,
@@ -131,16 +129,22 @@ async function verifyToken(req, res, next) {
     }
 
     const role = String(user.role || "staff").toLowerCase();
+    
+    // Split full_name safely into first and last name for frontend compatibility if needed
+    const nameParts = (user.full_name || "").split(" ");
+    const firstName = nameParts[0] || "";
+    const lastName = nameParts.slice(1).join(" ") || "";
 
     req.user = {
       id: user.id,
       email: user.email,
-      first_name: user.first_name || "",
-      last_name: user.last_name || "",
+      first_name: firstName,
+      last_name: lastName,
+      full_name: user.full_name || "",
       role,
       isAdmin: role === "admin",
-      is_platform_admin: Number(user.is_platform_admin) === 1,
-      mustChangePassword: Number(user.must_change_password) === 1,
+      is_platform_admin: false,
+      mustChangePassword: false,
     };
 
     req.tenantId = null; // No multi-tenancy

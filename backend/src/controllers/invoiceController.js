@@ -36,7 +36,6 @@ function queryDate(val) {
 
 async function getInvoices(req, res) {
   try {
-    const tenantId = req.user?.tenantId || null;
     if (!req.user?.id) {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
@@ -58,8 +57,8 @@ async function getInvoices(req, res) {
     const dateTo = queryDate(req.query.date_to);
     const gstBucket = (queryScalar(req.query.gst_bucket, "all") || "all").toLowerCase();
 
-    const conditions = ["i.type = ?", "i.is_deleted = 0", "(? IS NULL OR i.tenant_id = ?)"];
-    const params = [type, tenantId, tenantId];
+    const conditions = ["i.type = ?", "i.is_deleted = 0"];
+    const params = [type];
 
     if (status) {
       conditions.push("i.status = ?");
@@ -97,10 +96,6 @@ async function getInvoices(req, res) {
 
     const whereSql = conditions.join(" AND ");
 
-    // Use pool.query (text protocol), not pool.execute (binary prepared statements).
-    // Aiven / ProxySQL / some MySQL 8 builds return ER_WRONG_ARGUMENTS /
-    // "Incorrect arguments to mysqld_stmt_execute" for otherwise valid execute() calls.
-    // Values are still bound via mysql2 escaping — only scalars from queryScalar/queryDate above.
     const [countRows] = await pool.query(
       `SELECT COUNT(*) as total FROM invoices i WHERE ${whereSql}`,
       params
@@ -110,7 +105,7 @@ async function getInvoices(req, res) {
 
     const [rows] = await pool.query(
       `SELECT i.*,
-              TRIM(CONCAT(COALESCE(u.first_name,''), ' ', COALESCE(u.last_name,''))) AS creator_name,
+              u.full_name AS creator_name,
               u.email AS creator_email
        FROM invoices i
        LEFT JOIN users u ON u.id = i.created_by
@@ -149,7 +144,6 @@ function parseLineItemsJson(raw) {
 
 async function getInvoiceById(req, res) {
   try {
-    const tenantId = req.user?.tenantId || null;
     if (!req.user?.id) {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
@@ -160,13 +154,13 @@ async function getInvoiceById(req, res) {
 
     const [rows] = await pool.query(
       `SELECT i.*,
-              TRIM(CONCAT(COALESCE(u.first_name,''), ' ', COALESCE(u.last_name,''))) AS creator_name,
+              u.full_name AS creator_name,
               u.email AS creator_email
        FROM invoices i
        LEFT JOIN users u ON u.id = i.created_by
-       WHERE i.id = ? AND i.is_deleted = 0 AND (? IS NULL OR i.tenant_id = ?)
+       WHERE i.id = ? AND i.is_deleted = 0
        LIMIT 1`,
-      [id, tenantId, tenantId]
+      [id]
     );
     const row = rows[0];
     if (!row) {
@@ -211,7 +205,6 @@ async function createInvoice(req, res) {
     } = req.body;
 
     const uid = req.user.id;
-    const tenantId = req.user?.tenantId || null;
     if (!invoice_date || !String(invoice_date).trim()) {
       return res.status(400).json({ success: false, message: "invoice_date is required" });
     }
@@ -230,12 +223,11 @@ async function createInvoice(req, res) {
 
     const [result] = await pool.execute(
       `INSERT INTO invoices
-         (tenant_id, invoice_number, type, customer_name, customer_email, vendor_name,
+         (invoice_number, type, customer_name, customer_email, vendor_name,
           invoice_date, due_date, subtotal, tax, total, status, notes, created_by,
           gst_mode, currency, customer_id, line_items_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        tenantId,
         invoiceNumber,
         n(type, "sales"),
         customer_name || null,
@@ -264,7 +256,6 @@ async function createInvoice(req, res) {
 
 async function updateInvoiceStatus(req, res) {
   try {
-    const tenantId = req.user?.tenantId || null;
     if (!req.user?.id) return res.status(401).json({ success: false, message: "Unauthorized" });
     const { status } = req.body;
     const allowed = ["draft", "sent", "paid", "cancelled"];
@@ -276,18 +267,16 @@ async function updateInvoiceStatus(req, res) {
       return res.status(400).json({ success: false, message: "Invalid id" });
     }
     const [[row]] = await pool.execute(
-      "SELECT created_by FROM invoices WHERE id = ? AND is_deleted = 0 AND (? IS NULL OR tenant_id = ?)",
-      [id, tenantId, tenantId]
+      "SELECT created_by FROM invoices WHERE id = ? AND is_deleted = 0",
+      [id]
     );
     if (!row) return res.status(404).json({ success: false, message: "Not found" });
     if (req.user.role !== "admin" && row.created_by !== req.user.id) {
       return res.status(403).json({ success: false, message: "Not allowed" });
     }
-    await pool.execute("UPDATE invoices SET status = ? WHERE id = ? AND (? IS NULL OR tenant_id = ?)", [
+    await pool.execute("UPDATE invoices SET status = ? WHERE id = ?", [
       String(status),
       id,
-      tenantId,
-      tenantId,
     ]);
     res.json({ success: true });
   } catch (err) {
@@ -297,15 +286,14 @@ async function updateInvoiceStatus(req, res) {
 
 async function deleteInvoice(req, res) {
   try {
-    const tenantId = req.user?.tenantId || null;
     if (!req.user?.id) return res.status(401).json({ success: false, message: "Unauthorized" });
     const id = Number.parseInt(String(req.params.id), 10);
     if (!Number.isFinite(id) || id < 1) {
       return res.status(400).json({ success: false, message: "Invalid id" });
     }
     const [[row]] = await pool.execute(
-      "SELECT created_by FROM invoices WHERE id = ? AND is_deleted = 0 AND (? IS NULL OR tenant_id = ?)",
-      [id, tenantId, tenantId]
+      "SELECT created_by FROM invoices WHERE id = ? AND is_deleted = 0",
+      [id]
     );
     if (!row) return res.status(404).json({ success: false, message: "Not found" });
     if (req.user.role !== "admin" && row.created_by !== req.user.id) {
@@ -314,8 +302,8 @@ async function deleteInvoice(req, res) {
     await pool.execute(
       `UPDATE invoices
        SET is_deleted = 1, deleted_at = NOW(), updated_at = NOW()
-       WHERE id = ? AND is_deleted = 0 AND (? IS NULL OR tenant_id = ?)`,
-      [id, tenantId, tenantId]
+       WHERE id = ? AND is_deleted = 0`,
+      [id]
     );
     res.json({ success: true });
   } catch (err) {

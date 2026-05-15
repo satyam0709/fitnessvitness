@@ -7,12 +7,14 @@ const {
   deleteCalendarEvent,
   getGoogleCalendarStatus,
   postGoogleCalendarSync,
+  quickAddFromCalendar,
 } = require("../controllers/calendarController");
 
 const router = express.Router();
 router.use(verifyToken);
 
 router.get("/feed", getCalendarFeed);
+router.post("/quick-add", quickAddFromCalendar);
 router.post("/events", createCalendarEvent);
 router.put("/events/:id", updateCalendarEvent);
 router.delete("/events/:id", deleteCalendarEvent);

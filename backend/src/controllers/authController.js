@@ -218,10 +218,9 @@ function publicUserRow(row) {
   return {
     id: row.id,
     email: row.email,
-    first_name: row.first_name || "",
-    last_name: row.last_name || "",
+    full_name: row.full_name || "",
     role: String(row.role || "staff").toLowerCase(),
-    is_platform_admin: Number(row.is_platform_admin) === 1,
+    is_platform_admin: false,
     email_verified: Number(row.email_verified) === 1,
   };
 }
@@ -229,8 +228,7 @@ function publicUserRow(row) {
 
 async function loadUserById(id) {
   const [rows] = await mainPool.execute(
-    `SELECT id, email, first_name, last_name, role, is_active,
-            COALESCE(is_platform_admin, 0) AS is_platform_admin,
+    `SELECT id, email, full_name, role, is_active,
             COALESCE(email_verified, 0) AS email_verified,
             password_hash
      FROM users WHERE id = ? LIMIT 1`,
@@ -301,7 +299,7 @@ async function login(req, res) {
     const access = generateAccessToken({
       userId: user.id,
       role: user.role,
-      is_platform_admin: user.is_platform_admin,
+      is_platform_admin: false,
     });
     const refresh = generateRefreshToken({ userId: user.id });
     await saveRefreshToken(user.id, refresh);
@@ -320,9 +318,8 @@ async function login(req, res) {
         id: user.id,
         email: user.email,
         role: String(user.role || "staff").toLowerCase(),
-        is_platform_admin: Number(user.is_platform_admin) === 1 ? 1 : 0,
-        first_name: user.first_name || "",
-        last_name: user.last_name || "",
+        is_platform_admin: 0,
+        full_name: user.full_name || "",
       },
       redirectUrl,
     });
@@ -404,7 +401,7 @@ async function refresh(req, res) {
     const access = generateAccessToken({
       userId: user.id,
       role: user.role,
-      is_platform_admin: user.is_platform_admin,
+      is_platform_admin: false,
     });
     setAccessCookie(req, res, access);
 
@@ -545,9 +542,9 @@ async function signup(req, res) {
     let userId;
     try {
       const [ins] = await mainPool.execute(
-        `INSERT INTO users (email, password_hash, first_name, last_name, role, is_active, email_verified)
-          VALUES (?, ?, ?, ?, 'manager', 1, 0)`,
-        [emailNorm, pwHash, firstName, lastName]
+        `INSERT INTO users (email, password_hash, full_name, role, is_active, email_verified)
+          VALUES (?, ?, ?, 'manager', 1, 0)`,
+        [emailNorm, pwHash, name]
       );
       userId = ins.insertId;
     } catch (e) {
@@ -563,7 +560,7 @@ async function signup(req, res) {
     const access = generateAccessToken({
       userId: user.id,
       role: user.role,
-      is_platform_admin: user.is_platform_admin,
+      is_platform_admin: false,
     });
     const refresh = generateRefreshToken({ userId: user.id });
     await saveRefreshToken(user.id, refresh);

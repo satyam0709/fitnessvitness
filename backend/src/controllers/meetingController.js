@@ -56,8 +56,6 @@ function safeLeadId(lead_id) {
 
 /**
  * WHERE: meetings the viewer organizes or attends.
- * Optional filters: search, created_by, assign_to, meeting_type, recurrence, status, status_group,
- * range_start / range_end (meeting start_time window), lead_id
  */
 function buildMeetingFilter(req, viewerUserId) {
   const parts = [
@@ -65,10 +63,7 @@ function buildMeetingFilter(req, viewerUserId) {
   ];
   const uidNum = Number(viewerUserId);
   const params = [uidNum, uidNum];
-  const tenantId = req.user?.tenantId || null;
   parts.push("m.is_deleted = 0");
-  parts.push("(? IS NULL OR m.tenant_id = ?)");
-  params.push(tenantId, tenantId);
 
   const q = req.query || {};
   const rawSearch = q.search != null ? String(q.search).trim() : "";
@@ -153,14 +148,12 @@ function buildMeetingFilter(req, viewerUserId) {
   return { whereSql: parts.join(" AND "), params };
 }
 
-/** Express can duplicate query keys → arrays; String(array) breaks parseInt → NaN → bad LIMIT. */
 function firstQueryScalar(val, fallback) {
   const v = Array.isArray(val) ? val[0] : val;
   const n = Number.parseInt(String(v ?? "").trim(), 10);
   return Number.isFinite(n) ? n : fallback;
 }
 
-/** MySQL/MariaDB prepared LIMIT/OFFSET can throw "Incorrect arguments"; use validated ints. */
 function clampLimitOffset(limit, page) {
   const lim = Math.min(Math.max(firstQueryScalar(limit, 50), 1), 500);
   const pg = Math.max(firstQueryScalar(page, 1), 1);
@@ -174,7 +167,6 @@ function sanitizeParams(arr) {
 
 let recurrenceMigrationAttempted = false;
 
-/** Older DBs without `recurrence` break filters/quotes; add column once at runtime if missing. */
 async function ensureMeetingsRecurrenceColumn() {
   if (recurrenceMigrationAttempted) return;
   recurrenceMigrationAttempted = true;
@@ -190,7 +182,6 @@ async function ensureMeetingsRecurrenceColumn() {
       try {
         await pool.query("ALTER TABLE meetings ADD INDEX idx_meeting_recurrence (recurrence)");
       } catch (_) {
-        /* index may exist */
       }
       console.log("meetings: added recurrence column (runtime migration)");
     }
@@ -203,7 +194,6 @@ async function ensureMeetingsRecurrenceColumn() {
 async function resolveUserRowById(id) {
   const idNum = Number(id);
   if (!Number.isFinite(idNum) || idNum <= 0) return null;
-  /* pool.query: some MySQL/MariaDB builds error on LIMIT with pool.execute() */
   const [rows] = await pool.query(
     "SELECT id FROM users WHERE id = ? AND is_active = 1 LIMIT 1",
     [idNum]
@@ -233,8 +223,8 @@ async function getMeetings(req, res) {
     const listSql = `
       SELECT DISTINCT m.*,
         l.name AS lead_name,
-        TRIM(CONCAT_WS(' ', uo.first_name, uo.last_name)) AS organizer_name,
-        TRIM(CONCAT_WS(' ', ua.first_name, ua.last_name)) AS assignee_name,
+        uo.full_name AS organizer_name,
+        ua.full_name AS assignee_name,
         (SELECT COUNT(*) FROM meeting_attendees c WHERE c.meeting_id = m.id) AS attendee_count,
         (SELECT GROUP_CONCAT(ma2.user_id) FROM meeting_attendees ma2 WHERE ma2.meeting_id = m.id) AS attendee_ids_csv
       FROM meetings m
@@ -270,7 +260,6 @@ async function getMeetingStats(req, res) {
 
     const { whereSql, params } = buildMeetingFilter(req, uid);
     const bind = sanitizeParams(params);
-    /* One row per meeting (JOIN attendees duplicates rows; SUM would be wrong) */
     const sql = `
       SELECT
         COUNT(*) AS total,
@@ -317,8 +306,8 @@ async function exportMeetingsCsv(req, res) {
     const sql = `
       SELECT DISTINCT m.*,
         l.name AS lead_name,
-        TRIM(CONCAT_WS(' ', uo.first_name, uo.last_name)) AS organizer_name,
-        TRIM(CONCAT_WS(' ', ua.first_name, ua.last_name)) AS assignee_name,
+        uo.full_name AS organizer_name,
+        ua.full_name AS assignee_name,
         (SELECT COUNT(*) FROM meeting_attendees c WHERE c.meeting_id = m.id) AS attendee_count,
         (SELECT GROUP_CONCAT(ma3.user_id) FROM meeting_attendees ma3 WHERE ma3.meeting_id = m.id) AS attendee_ids_csv
       FROM meetings m
@@ -382,7 +371,6 @@ async function exportMeetingsCsv(req, res) {
 async function createMeeting(req, res) {
   try {
     const uid = viewerId(req);
-    const tenantId = req.user?.tenantId || null;
     if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
 
     await ensureMeetingsRecurrenceColumn();
@@ -422,11 +410,10 @@ async function createMeeting(req, res) {
     if (!startSql) return res.status(400).json({ success: false, message: "Invalid start_time" });
 
     const [result] = await pool.query(
-      `INSERT INTO meetings (tenant_id, title, description, start_time, end_time, location, meet_link,
+      `INSERT INTO meetings (title, description, start_time, end_time, location, meet_link,
         meeting_type, status, recurrence, organizer_id, assigned_to_user_id, lead_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        tenantId,
         title.trim(),
         description || null,
         startSql,
@@ -489,7 +476,6 @@ async function createMeeting(req, res) {
 async function updateMeeting(req, res) {
   try {
     const uid = viewerId(req);
-    const tenantId = req.user?.tenantId || null;
     if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
 
     await ensureMeetingsRecurrenceColumn();
@@ -513,8 +499,8 @@ async function updateMeeting(req, res) {
     } = req.body;
 
     const [rows] = await pool.query(
-      "SELECT * FROM meetings WHERE id = ? AND organizer_id = ? AND is_deleted = 0 AND (? IS NULL OR tenant_id = ?)",
-      [id, uid, tenantId, tenantId]
+      "SELECT * FROM meetings WHERE id = ? AND organizer_id = ? AND is_deleted = 0",
+      [id, uid]
     );
     const cur = rows[0];
     if (!cur) {
@@ -616,7 +602,6 @@ async function updateMeeting(req, res) {
 async function deleteMeeting(req, res) {
   try {
     const uid = viewerId(req);
-    const tenantId = req.user?.tenantId || null;
     if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
 
     const mid = Number(req.params.id);
@@ -625,8 +610,8 @@ async function deleteMeeting(req, res) {
     }
 
     const [r] = await pool.query(
-      "UPDATE meetings SET is_deleted = 1, deleted_at = NOW() WHERE id = ? AND organizer_id = ? AND is_deleted = 0 AND (? IS NULL OR tenant_id = ?)",
-      [mid, uid, tenantId, tenantId]
+      "UPDATE meetings SET is_deleted = 1, deleted_at = NOW() WHERE id = ? AND organizer_id = ? AND is_deleted = 0",
+      [mid, uid]
     );
     if (r.affectedRows) {
       emitMeetingsChanged({ action: "delete", id: mid });
@@ -643,7 +628,6 @@ async function deleteMeeting(req, res) {
 async function bulkDeleteMeetings(req, res) {
   try {
     const uid = viewerId(req);
-    const tenantId = req.user?.tenantId || null;
     if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
 
     const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(Number).filter((n) => n > 0) : [];
@@ -655,8 +639,8 @@ async function bulkDeleteMeetings(req, res) {
     const [r] = await pool.query(
       `UPDATE meetings
        SET is_deleted = 1, deleted_at = NOW()
-       WHERE organizer_id = ? AND is_deleted = 0 AND (? IS NULL OR tenant_id = ?) AND id IN (${placeholders})`,
-      [uid, tenantId, tenantId, ...uniq]
+       WHERE organizer_id = ? AND is_deleted = 0 AND id IN (${placeholders})`,
+      [uid, ...uniq]
     );
     if (r.affectedRows) {
       emitMeetingsChanged({ action: "bulk_delete", ids: uniq });
@@ -672,7 +656,6 @@ async function bulkDeleteMeetings(req, res) {
 async function bulkAssignMeetings(req, res) {
   try {
     const uid = viewerId(req);
-    const tenantId = req.user?.tenantId || null;
     if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
 
     await ensureMeetingsRecurrenceColumn();
@@ -696,8 +679,8 @@ async function bulkAssignMeetings(req, res) {
 
     const [r] = await pool.query(
       `UPDATE meetings SET assigned_to_user_id = ?
-       WHERE organizer_id = ? AND (? IS NULL OR tenant_id = ?) AND id IN (${placeholders})`,
-      [cand, uid, tenantId, tenantId, ...uniq]
+       WHERE organizer_id = ? AND id IN (${placeholders})`,
+      [cand, uid, ...uniq]
     );
 
     const updated = Number(r.affectedRows) || 0;

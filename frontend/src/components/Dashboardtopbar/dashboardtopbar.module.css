@@ -10,7 +10,8 @@
   align-items: center;
   justify-content: space-between;
   padding: 0 16px 0 0;
-  z-index: 100;
+  /* Above dashboard content and page-local stacking; below modal overlays (1000+) */
+  z-index: 200;
   gap: 12px;
   transition: left 300ms cubic-bezier(0.16, 1, 0.3, 1);
 }

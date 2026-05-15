@@ -6,10 +6,8 @@ async function getMe(req, res) {
       return res.status(401).json({ success: false, message: "Not authenticated" });
     }
     const [rows] = await mainPool.query(
-      `SELECT u.id, u.email, u.first_name, u.last_name, u.profile_image, u.role, u.is_active,
-              u.last_login, u.created_at,
-              COALESCE(u.is_platform_admin, 0) AS is_platform_admin,
-              COALESCE(u.must_change_password, 0) AS must_change_password
+      `SELECT u.id, u.email, u.full_name, u.role, u.is_active,
+              u.last_login, u.created_at
        FROM users u
        WHERE u.id = ?
        LIMIT 1`,
@@ -33,16 +31,19 @@ async function getMe(req, res) {
     mainPool.query("UPDATE users SET last_login = NOW() WHERE id = ?", [row.id]).catch((err) => {
       console.error("last_login update error:", err.message);
     });
+    const nameParts = (row.full_name || "").split(" ");
+    const firstName = nameParts[0] || "";
+    const lastName = nameParts.slice(1).join(" ") || "";
+
     return res.json({
       success: true,
       data: {
         ...row,
+        first_name: firstName,
+        last_name: lastName,
         role: effectiveRole,
-        is_platform_admin:
-          req.user?.is_platform_admin != null
-            ? Number(req.user.is_platform_admin)
-            : Number(row.is_platform_admin),
-        mustChangePassword: Number(row?.must_change_password) === 1,
+        is_platform_admin: 0,
+        mustChangePassword: false,
       },
     });
   } catch (err) {
@@ -57,10 +58,8 @@ async function syncCurrentUser(req, res) {
       return res.status(401).json({ success: false, message: "Not authenticated" });
     }
     const [rows] = await mainPool.execute(
-      `SELECT u.id, u.email, u.first_name, u.last_name, u.profile_image, u.role, u.is_active,
-              u.last_login, u.created_at,
-              COALESCE(u.is_platform_admin, 0) AS is_platform_admin,
-              COALESCE(u.must_change_password, 0) AS must_change_password
+      `SELECT u.id, u.email, u.full_name, u.role, u.is_active,
+              u.last_login, u.created_at
        FROM users u
        WHERE u.id = ?
        LIMIT 1`,
@@ -75,13 +74,13 @@ async function syncCurrentUser(req, res) {
       });
     }
     const effectiveRole = String(req.user?.role || row.role || "staff").toLowerCase();
+    const nameParts = (row.full_name || "").split(" ");
     const user = {
       ...row,
+      first_name: nameParts[0] || "",
+      last_name: nameParts.slice(1).join(" ") || "",
       role: effectiveRole,
-      is_platform_admin:
-        req.user?.is_platform_admin != null
-          ? Number(req.user.is_platform_admin)
-          : Number(row.is_platform_admin),
+      is_platform_admin: 0,
     };
     return res.json({
       success: true,
@@ -111,7 +110,7 @@ async function clearMustChangePassword(req, res) {
 async function listUsers(req, res) {
   try {
     const [rows] = await mainPool.query(
-      `SELECT id, email, first_name, last_name,
+      `SELECT id, email, full_name,
               role, is_active, last_login, created_at
        FROM users
        ORDER BY created_at DESC`
@@ -127,21 +126,19 @@ async function updateProfile(req, res) {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ success: false, message: "Unauthorized" });
 
-    const { firstName, lastName, profileImage } = req.body;
+    const { firstName, lastName, full_name } = req.body;
     let updates = [];
     let params = [];
 
-    if (firstName !== undefined) {
-      updates.push("first_name = ?");
-      params.push(firstName);
+    // Allow updating full_name directly, or combining firstName + lastName if passed
+    let computedFullName = full_name;
+    if (!computedFullName && (firstName !== undefined || lastName !== undefined)) {
+      computedFullName = `${firstName || ''} ${lastName || ''}`.trim();
     }
-    if (lastName !== undefined) {
-      updates.push("last_name = ?");
-      params.push(lastName);
-    }
-    if (profileImage !== undefined) {
-      updates.push("profile_image = ?");
-      params.push(profileImage);
+
+    if (computedFullName !== undefined) {
+      updates.push("full_name = ?");
+      params.push(computedFullName);
     }
 
     if (updates.length > 0) {

@@ -61,10 +61,19 @@ router.delete("/clients/:clientId", fitnessController.deleteClient);
 // ─────────────────────────────────────────────────────────────────
 // CONSULTATIONS
 // ─────────────────────────────────────────────────────────────────
+router.get("/consultations", fitnessController.getAllConsultations);
 router.get("/clients/:clientId/consultations", fitnessController.getConsultations);
 router.post("/clients/:clientId/consultations", createConsultationValidation, handleValidationErrors, fitnessController.createConsultation);
 router.put("/consultations/:id", fitnessController.updateConsultation);
 router.delete("/consultations/:id", fitnessController.deleteConsultation);
+
+// ─────────────────────────────────────────────────────────────────
+// MEAL PLANS
+// ─────────────────────────────────────────────────────────────────
+router.get("/meal-plans", fitnessController.getAllMealPlans);
+router.get("/clients/:clientId/meal-plans", fitnessController.getMealPlans);
+router.post("/clients/:clientId/meal-plans", fitnessController.createMealPlan);
+router.delete("/meal-plans/:id", fitnessController.deleteMealPlan);
 
 // ─────────────────────────────────────────────────────────────────
 // BODY STATS
@@ -90,6 +99,8 @@ router.put("/transactions/:id", fitnessController.updateTransaction);
 router.delete("/transactions/:id", fitnessController.deleteTransaction);
 router.get("/transactions/summary/monthly", fitnessController.getTransactionSummary);
 router.get("/transactions/summary/yearly", fitnessController.getTransactionSummary);
+router.get("/charts/transaction-mix", fitnessController.getFitnessTransactionCharts);
+router.get("/revenue/split", fitnessController.getRevenueSplit);
 router.get("/clients/:clientId/transactions", fitnessController.getClientTransactions);
 
 // ─────────────────────────────────────────────────────────────────
@@ -117,5 +128,14 @@ router.get("/analytics/sources", fitnessController.getAnalyticsSources);
 router.get("/analytics/tiers", fitnessController.getAnalyticsTiers);
 router.get("/analytics/referrers", fitnessController.getAnalyticsReferrers);
 router.get("/analytics/financial", fitnessController.getAnalyticsFinancial);
+
+// ─────────────────────────────────────────────────────────────────
+// EXCEL IMPORT / EXPORT
+// ─────────────────────────────────────────────────────────────────
+const multer = require("multer");
+const upload = multer({ dest: "uploads/" });
+
+router.post("/import", upload.single("file"), fitnessController.importClientsExcel);
+router.get("/export", fitnessController.exportClientsExcel);
 
 module.exports = router;
