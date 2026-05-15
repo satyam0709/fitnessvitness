@@ -1,0 +1,130 @@
+.card {
+  background: var(--bg-card, #ffffff);
+  border: 1px solid var(--border, #e4e7f0);
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 300px;
+  box-shadow: 0 1px 4px rgba(26, 26, 46, 0.04);
+  transition: box-shadow 220ms ease, border-color 220ms ease;
+}
+
+.card:hover {
+  box-shadow: 0 6px 24px rgba(26, 26, 46, 0.08);
+  border-color: var(--border-strong, #c9cfe0);
+}
+
+[data-theme="dark"] .card {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+[data-theme="dark"] .card:hover {
+  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.55);
+  border-color: var(--border-strong, #2a2a3e);
+}
+
+[data-theme="dark"] .tooltip {
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+}
+
+.header {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border, #e4e7f0);
+  background: var(--bg-hover, #f5f6fa);
+}
+
+[data-theme="dark"] .header {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.title {
+  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text-main, #1a1a2e);
+  margin: 0;
+}
+
+.subtitle {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted, #9ca3af);
+  margin-top: 5px;
+}
+
+.body {
+  flex: 1;
+  padding: 8px 8px 16px;
+  min-height: 240px;
+}
+
+.state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 220px;
+  gap: 10px;
+  color: var(--text-muted, #9ca3af);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--border, #e4e7f0);
+  border-top-color: #0ea5e9;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.tooltip {
+  background: var(--bg-card, #fff);
+  border: 1px solid var(--border, #e4e7f0);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+
+.tooltipTitle {
+  font-weight: 800;
+  margin-bottom: 6px;
+  color: var(--text-main, #1a1a2e);
+}
+
+.tooltipLine {
+  color: var(--text-main, #1a1a2e);
+  opacity: 0.92;
+  line-height: 1.35;
+}
+
+.legend {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-main, #1a1a2e);
+}
+
+.sliceLabel {
+  font-size: 12px;
+  font-weight: 800;
+  fill: #0f172a;
+  paint-order: stroke fill;
+  stroke: rgba(255, 255, 255, 0.88);
+  stroke-width: 3px;
+}
+
+[data-theme="dark"] .sliceLabel {
+  fill: #f8fafc;
+  stroke: rgba(15, 23, 42, 0.85);
+}

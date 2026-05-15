@@ -174,15 +174,6 @@ async function resolveFallbackOwnerId() {
   return users[0]?.id || null;
 }
 
-async function resolveUserTenantId(userId) {
-  if (!userId) return null;
-  const [rows] = await pool.execute(
-    "SELECT tenant_id FROM users WHERE id = ? AND is_active = 1 LIMIT 1",
-    [Number(userId)]
-  );
-  return rows[0]?.tenant_id ?? null;
-}
-
 async function createLeadFromIntegration({
   integration,
   rawPayload,
@@ -207,19 +198,12 @@ async function createLeadFromIntegration({
     err.status = 400;
     throw err;
   }
-  const tenantId = await resolveUserTenantId(assignedUserId);
-  if (!tenantId) {
-    const err = new Error("Could not resolve tenant context for integration lead owner");
-    err.status = 400;
-    throw err;
-  }
 
   const [result] = await pool.execute(
     `INSERT INTO leads
-      (tenant_id, name, company_name, phone, email, source, status, label, assigned_to, created_by, follow_up_date, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (name, company_name, phone, email, source, status, label, assigned_to, created_by, follow_up_date, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      tenantId,
       lead.name,
       lead.company_name || null,
       lead.phone,

@@ -22,7 +22,13 @@ export default function Providers({ children }) {
   }, []);
 
   return (
-    <ThemeProvider attribute="data-theme" defaultTheme="system" enableSystem>
+    <ThemeProvider
+      attribute="data-theme"
+      defaultTheme="system"
+      enableSystem
+      storageKey="rnd-crm-theme"
+      enableColorScheme
+    >
       <AuthProvider>
         <TenantProvider>{children}</TenantProvider>
       </AuthProvider>

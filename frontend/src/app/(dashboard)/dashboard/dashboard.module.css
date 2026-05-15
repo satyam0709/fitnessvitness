@@ -740,6 +740,36 @@
   min-height: 280px;
   box-shadow: 0 1px 4px rgba(26, 26, 46, 0.04);
 }
+ 
+.viewAllBtn {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--yellow, #f5c400);
+  text-decoration: none;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: rgba(245, 196, 0, 0.08);
+  border: 1px solid rgba(245, 196, 0, 0.2);
+  transition: all 160ms ease;
+}
+
+.viewAllBtn:hover {
+  background: rgba(245, 196, 0, 0.14);
+  border-color: rgba(245, 196, 0, 0.4);
+  transform: translateY(-1px);
+}
+
+.scheduleDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 5px;
+  box-shadow: 0 0 0 2px var(--bg-card, #fff), 0 0 0 4px rgba(0,0,0,0.03);
+}
 
 .stickyPanel {
   min-height: 220px;
@@ -1622,4 +1652,286 @@
 .fitnessFollowupDanger .fitnessFollowupStatus {
   background: rgba(239, 68, 68, 0.12);
   color: #dc2626;
+}
+/* Fitness CRM Dashboard Section */
+.fitnessCRMCard {
+  grid-column: span 3;
+  background: var(--bg-card, #ffffff);
+  border: 1px solid var(--border, #e4e7f0);
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.04);
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 24px;
+  animation: slideUp 500ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.fitnessHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 22px 28px;
+  background: linear-gradient(90deg, #f8f9fc 0%, #ffffff 100%);
+  border-bottom: 1px solid var(--border, #e4e7f0);
+}
+
+.fitnessTitleGroup {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.fitnessIcon {
+  font-size: 24px;
+  color: #f5c400;
+  filter: drop-shadow(0 2px 4px rgba(245, 196, 0, 0.2));
+}
+
+.fitnessTitle {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 18px;
+  font-weight: 800;
+  color: #1a1a2e;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.fitnessActions {
+  display: flex;
+  gap: 12px;
+}
+
+.fitnessBtn {
+  padding: 10px 20px;
+  border-radius: 10px;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  background: white;
+  border: 1px solid #e4e7f0;
+  color: #5a5f7d;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
+}
+
+.fitnessBtn:hover {
+  background: #ffffff;
+  border-color: #f5c400;
+  color: #1a1a2e;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(245, 196, 0, 0.15);
+}
+
+.fitnessStatsGrid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  padding: 28px;
+  gap: 20px;
+  background: #ffffff;
+}
+
+.fitnessStatItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 28px 20px;
+  background: #f8fafc;
+  border-radius: 18px;
+  border: 1px solid #e2e8f0;
+  text-align: center;
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  text-decoration: none;
+  color: inherit;
+  position: relative;
+  overflow: hidden;
+}
+
+.fitnessStatItem::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 4px;
+  background: #f5c400;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.fitnessStatItem:hover {
+  transform: translateY(-8px);
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.08);
+  border-color: #f5c400;
+  background: #ffffff;
+}
+
+.fitnessStatItem:hover::before {
+  opacity: 1;
+}
+
+.fitnessStatValue {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 42px;
+  font-weight: 800;
+  color: #1a1a2e;
+  line-height: 1;
+  margin-bottom: 12px;
+  letter-spacing: -0.03em;
+}
+
+.fitnessStatLabel {
+  font-family: 'Montserrat', sans-serif;
+  line-height: 1.4;
+}
+
+.financialStrip {
+  display: flex;
+  align-items: center;
+  gap: 32px;
+  padding: 16px 28px;
+  background: #f8fafc;
+  border-top: 1px solid #e4e7f0;
+}
+
+.finItem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.finLabel {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.finValue {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 18px;
+  font-weight: 800;
+  color: #1a1a2e;
+}
+
+.finLink {
+  margin-left: auto;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  color: #f5c400;
+  text-decoration: none;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: transform 0.2s;
+}
+
+.finLink:hover {
+  transform: translateX(4px);
+}
+
+@media (max-width: 1200px) {
+  .fitnessStatsGrid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .fitnessStatsGrid {
+    grid-template-columns: repeat(2, 1fr);
+    padding: 20px;
+    gap: 12px;
+  }
+}
+
+.fitnessAlertsSection {
+  margin-top: 1px;
+  background: color-mix(in srgb, #ef4444 4%, transparent);
+  border-top: 1px solid color-mix(in srgb, #ef4444 12%, #e4e7f0);
+  padding: 20px 28px;
+}
+
+.fitnessAlertsHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  font-family: 'Montserrat', sans-serif;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #ef4444;
+}
+
+.fitnessAlertsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.fitnessAlertItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  background: var(--bg-card, #ffffff);
+  border: 1px solid color-mix(in srgb, #ef4444 15%, #e4e7f0);
+  border-left: 4px solid #ef4444;
+  padding: 14px 18px;
+  border-radius: 12px;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.05);
+}
+
+.fitnessAlertItem:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(239, 68, 68, 0.08);
+  border-color: color-mix(in srgb, #ef4444 30%, #e4e7f0);
+}
+
+.fitnessAlertIcon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: color-mix(in srgb, #ef4444 10%, transparent);
+  color: #ef4444;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.fitnessAlertContent {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fitnessAlertTitle {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 13px;
+  font-weight: 800;
+  color: #1a1a2e;
+}
+
+.fitnessAlertBody {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.4;
 }

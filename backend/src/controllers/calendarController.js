@@ -1,5 +1,11 @@
 const { pool } = require("../config/database");
-const { emitCalendarChanged } = require("../realtime/meetingsRealtime");
+const {
+  emitCalendarChanged,
+  emitTodosChanged,
+  emitAdminChanged,
+  emitMeetingsChanged,
+} = require("../realtime/meetingsRealtime");
+const { createUserNotification } = require("../services/notificationService");
 
 const {
   fetchGoogleEvents,
@@ -89,6 +95,78 @@ function staticHolidaysInRange(fromStr, toStr) {
     });
   }
   return out;
+}
+
+async function countUserScheduledItemsOnDate(uid, ymd) {
+  const rs = `${ymd} 00:00:00`;
+  const re = `${ymd} 23:59:59`;
+  const [[a]] = await pool.query(
+    `SELECT COUNT(*) AS c FROM crm_calendar_events
+     WHERE user_id = ? AND start_at <= ? AND COALESCE(end_at, start_at) >= ?`,
+    [uid, re, rs]
+  );
+  const [[b]] = await pool.query(
+    `SELECT COUNT(*) AS c FROM meetings m
+     WHERE m.is_deleted = 0
+       AND (m.organizer_id = ? OR EXISTS (SELECT 1 FROM meeting_attendees ma WHERE ma.meeting_id = m.id AND ma.user_id = ?))
+       AND m.start_time >= ? AND m.start_time <= ?`,
+    [uid, uid, rs, re]
+  );
+  const [[c]] = await pool.query(
+    `SELECT COUNT(*) AS c FROM reminders r
+     WHERE r.is_deleted = 0 AND (r.user_id = ? OR r.assigned_to_user_id = ?)
+       AND r.remind_at >= ? AND r.remind_at <= ? AND r.is_done = 0`,
+    [uid, uid, rs, re]
+  );
+  const [[d]] = await pool.query(
+    `SELECT COUNT(*) AS c FROM tasks t
+     WHERE (t.assigned_to = ? OR t.created_by = ?)
+       AND t.due_date IS NOT NULL AND DATE(t.due_date) = ?
+       AND t.status NOT IN ('done','completed')`,
+    [uid, uid, ymd]
+  );
+  const [[e]] = await pool.query(
+    `SELECT COUNT(*) AS c FROM crm_todos t
+     WHERE t.is_deleted = 0
+       AND (t.created_by = ? OR EXISTS (SELECT 1 FROM crm_todo_assignees a WHERE a.todo_id = t.id AND a.user_id = ?))
+       AND t.todo_date = ? AND t.status = 'pending'`,
+    [uid, uid, ymd]
+  );
+  const [[f]] = await pool.query(
+    `SELECT COUNT(*) AS c FROM leads l
+     WHERE (l.created_by = ? OR l.assigned_to = ?) AND l.follow_up_date = ?`,
+    [uid, uid, ymd]
+  );
+  return (
+    Number(a?.c || 0) +
+    Number(b?.c || 0) +
+    Number(c?.c || 0) +
+    Number(d?.c || 0) +
+    Number(e?.c || 0) +
+    Number(f?.c || 0)
+  );
+}
+
+async function maybeNotifyCalendarDayDigest(uid, fromStr, toStr) {
+  const uidn = Number(uid);
+  if (!uidn) return;
+  const today = new Date().toISOString().slice(0, 10);
+  if (today < fromStr || today > toStr) return;
+  const digestId = Number(today.replace(/-/g, ""));
+  const [[existing]] = await pool.query(
+    `SELECT id FROM notifications WHERE user_id = ? AND entity_type = 'calendar_day' AND entity_id = ? LIMIT 1`,
+    [uidn, digestId]
+  );
+  if (existing) return;
+  const n = await countUserScheduledItemsOnDate(uidn, today);
+  if (n < 1) return;
+  await createUserNotification({
+    userId: uidn,
+    entityType: "calendar_day",
+    entityId: digestId,
+    title: `Today's schedule (${today})`,
+    body: `You have ${n} item(s) on your calendar today. Open Calendar to review your day.`,
+  });
 }
 
 async function getCalendarFeed(req, res) {
@@ -206,6 +284,136 @@ async function getCalendarFeed(req, res) {
       });
     });
 
+    const [todoRows] = await pool.query(
+      `SELECT t.id, t.body, t.todo_date, t.status, t.priority
+       FROM crm_todos t
+       WHERE t.is_deleted = 0
+         AND (t.created_by = ? OR EXISTS (
+           SELECT 1 FROM crm_todo_assignees a WHERE a.todo_id = t.id AND a.user_id = ?
+         ))
+         AND t.todo_date BETWEEN ? AND ?
+         AND t.status = 'pending'`,
+      [uid, uid, from, to]
+    );
+    todoRows.forEach((t) => {
+      const d = parseYmd(t.todo_date);
+      if (!d) return;
+      items.push({
+        id: `todo-${t.id}`,
+        source: "todo",
+        type: "todo",
+        title: t.body ? String(t.body).slice(0, 120) : "To-do",
+        description: t.priority ? `Priority: ${t.priority}` : null,
+        start: `${d}T08:00:00`,
+        end: `${d}T08:30:00`,
+        allDay: false,
+        meta: { todoId: t.id },
+      });
+    });
+
+    // --- Fitness CRM: Client Milestones & Consultations ---
+    const [fitnessRows] = await pool.query(
+      `SELECT client_id, full_name, plan_start_date, plan_expiry_date, next_due_date, status
+       FROM fitness_clients
+       WHERE (plan_start_date BETWEEN ? AND ?)
+          OR (plan_expiry_date BETWEEN ? AND ?)
+          OR (next_due_date BETWEEN ? AND ?)`,
+      [from, to, from, to, from, to]
+    );
+
+    fitnessRows.forEach((f) => {
+      // Plan Start
+      if (f.plan_start_date && parseYmd(f.plan_start_date) >= from && parseYmd(f.plan_start_date) <= to) {
+        items.push({
+          id: `fitness-start-${f.client_id}`,
+          source: "fitness",
+          type: "fitness",
+          title: `Start: ${f.full_name}`,
+          description: `Plan started for ${f.full_name}`,
+          start: `${parseYmd(f.plan_start_date)}T09:00:00`,
+          end: `${parseYmd(f.plan_start_date)}T09:30:00`,
+          allDay: false,
+          meta: { clientId: f.client_id, category: 'plan_start' },
+        });
+      }
+      // Plan Expiry
+      if (f.plan_expiry_date && parseYmd(f.plan_expiry_date) >= from && parseYmd(f.plan_expiry_date) <= to) {
+        items.push({
+          id: `fitness-expiry-${f.client_id}`,
+          source: "fitness",
+          type: "fitness", 
+          title: `Expiry: ${f.full_name}`,
+          description: `Plan expires for ${f.full_name}`,
+          start: `${parseYmd(f.plan_expiry_date)}T00:00:00`,
+          end: `${parseYmd(f.plan_expiry_date)}T23:59:59`,
+          allDay: true,
+          meta: { clientId: f.client_id, category: 'plan_expiry' },
+        });
+      }
+      // Next Due
+      if (f.next_due_date && parseYmd(f.next_due_date) >= from && parseYmd(f.next_due_date) <= to) {
+        items.push({
+          id: `fitness-due-${f.client_id}`,
+          source: "fitness",
+          type: "fitness",
+          title: `Due: ${f.full_name}`,
+          description: `Next consult due for ${f.full_name}`,
+          start: `${parseYmd(f.next_due_date)}T10:00:00`,
+          end: `${parseYmd(f.next_due_date)}T11:00:00`,
+          allDay: false,
+          meta: { clientId: f.client_id, category: 'consultation_due' },
+        });
+      }
+    });
+
+    // Actual consultations (column names match fitness_consultations schema)
+    const [consultRows] = await pool.query(
+      `SELECT c.id, c.client_id, cl.full_name, c.consult_date, c.consult_type, c.key_observations
+       FROM fitness_consultations c
+       JOIN fitness_clients cl ON cl.client_id = c.client_id
+       WHERE c.consult_date BETWEEN ? AND ?`,
+      [from, to]
+    );
+    consultRows.forEach((c) => {
+      const d = parseYmd(c.consult_date);
+      if (!d) return;
+      items.push({
+        id: `fitness-consult-${c.id}`,
+        source: "fitness",
+        type: "fitness",
+        title: `Consult: ${c.full_name}`,
+        description: `${c.consult_type || "Consultation"}: ${c.key_observations || ""}`,
+        start: `${d}T11:00:00`,
+        end: `${d}T12:00:00`,
+        allDay: false,
+        meta: { clientId: c.client_id, consultationId: c.id },
+      });
+    });
+
+    // Fitness client tasks (schema: task_description, status enum without "Completed")
+    const [fTaskRows] = await pool.query(
+      `SELECT t.id, t.client_id, cl.full_name, t.task_description, t.due_date, t.status
+       FROM fitness_client_tasks t
+       JOIN fitness_clients cl ON cl.client_id = t.client_id
+       WHERE t.due_date BETWEEN ? AND ? AND t.status NOT IN ('Done','Carried Forward')`,
+      [from, to]
+    );
+    fTaskRows.forEach((t) => {
+      const d = parseYmd(t.due_date);
+      if (!d) return;
+      items.push({
+        id: `fitness-task-${t.id}`,
+        source: "fitness",
+        type: "fitness",
+        title: `Client Task: ${t.full_name}`,
+        description: t.task_description,
+        start: `${d}T14:00:00`,
+        end: `${d}T15:00:00`,
+        allDay: false,
+        meta: { clientId: t.client_id, taskId: t.id },
+      });
+    });
+
     const [leadRows] = await pool.query(
       `SELECT l.id, l.name, l.follow_up_date, l.status
        FROM leads l
@@ -244,6 +452,9 @@ async function getCalendarFeed(req, res) {
     }
 
     items.sort((a, b) => new Date(a.start) - new Date(b.start));
+    await maybeNotifyCalendarDayDigest(uid, from, to).catch((e) =>
+      console.warn("calendar day digest:", e.message)
+    );
     return res.json({ success: true, range: { from, to }, items });
   } catch (err) {
     console.error("getCalendarFeed", err);
@@ -469,6 +680,224 @@ async function postGoogleCalendarSync(req, res) {
   }
 }
 
+let calendarMeetingRecurrenceChecked = false;
+async function ensureMeetingsRecurrenceColumnCal() {
+  if (calendarMeetingRecurrenceChecked) return;
+  calendarMeetingRecurrenceChecked = true;
+  try {
+    const [cols] = await pool.query(
+      `SELECT 1 AS ok FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'meetings' AND COLUMN_NAME = 'recurrence' LIMIT 1`
+    );
+    if (!cols.length) {
+      await pool.query(
+        "ALTER TABLE meetings ADD COLUMN recurrence VARCHAR(50) NOT NULL DEFAULT 'once'"
+      );
+    }
+  } catch (e) {
+    calendarMeetingRecurrenceChecked = false;
+    console.warn("calendar meetings recurrence check:", e.message);
+  }
+}
+
+const REMINDER_TYPES_CAL = new Set(["general", "follow_up", "payment", "meeting", "customer_reminder"]);
+function normalizeReminderTypeCal(t) {
+  const v = (t && String(t).trim()) || "general";
+  return REMINDER_TYPES_CAL.has(v) ? v : "general";
+}
+
+async function quickAddFromCalendar(req, res) {
+  try {
+    const uid = Number(req.user?.id);
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const tenantId = req.user?.tenantId ?? null;
+    const b = req.body || {};
+    const kind = String(b.kind || "").toLowerCase().trim();
+
+    if (kind === "calendar_event" || kind === "event") {
+      req.body = {
+        title: b.title,
+        description: b.description,
+        start_at: b.start_at,
+        end_at: b.end_at,
+        all_day: b.all_day,
+        category: b.category || "event",
+      };
+      return createCalendarEvent(req, res);
+    }
+
+    if (kind === "task") {
+      const title = String(b.title || "").trim();
+      if (!title) return res.status(400).json({ success: false, message: "title is required" });
+      let dueDate = b.due_date ? String(b.due_date).slice(0, 10) : null;
+      if (!dueDate && b.start_at) dueDate = String(b.start_at).slice(0, 10);
+      const leadId = b.lead_id ? Number(b.lead_id) : null;
+      const lid = Number.isFinite(leadId) && leadId > 0 ? leadId : null;
+      let insertId;
+      try {
+        const [result] = await pool.execute(
+          `INSERT INTO tasks (tenant_id, title, description, lead_id, assigned_to, created_by, due_date, priority, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'medium', 'todo')`,
+          [tenantId || null, title, b.description || null, lid, uid, uid, dueDate]
+        );
+        insertId = result.insertId;
+      } catch (e1) {
+        const msg = String(e1?.message || "");
+        if (e1?.code !== "ER_BAD_FIELD_ERROR" && !/Unknown column/i.test(msg)) throw e1;
+        const [result] = await pool.execute(
+          `INSERT INTO tasks (title, description, status, priority, assigned_to, lead_id, due_date, created_by)
+           VALUES (?, ?, 'todo', 'medium', ?, ?, ?, ?)`,
+          [title, b.description || null, uid, lid, dueDate, uid]
+        );
+        insertId = result.insertId;
+      }
+      emitCalendarChanged({ reason: "tasks", action: "quick_add", id: insertId });
+      emitAdminChanged({ scope: "stats", reason: "tasks", action: "create" });
+      return res.status(201).json({ success: true, kind: "task", id: insertId });
+    }
+
+    if (kind === "reminder") {
+      const title = String(b.title || "").trim();
+      if (!title) return res.status(400).json({ success: false, message: "title is required" });
+      const remindAt = toMysqlDateTime(b.start_at || b.remind_at);
+      if (!remindAt) return res.status(400).json({ success: false, message: "start_at or remind_at is required" });
+      const leadId = b.lead_id ? Number(b.lead_id) : null;
+      const lid = Number.isFinite(leadId) && leadId > 0 ? leadId : null;
+      const typeVal = normalizeReminderTypeCal(b.reminder_type);
+      const [result] = await pool.query(
+        `INSERT INTO reminders (user_id, title, note, remind_at, lead_id, assigned_to_user_id, reminder_type)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [uid, title, b.note || b.description || null, remindAt, lid, null, typeVal]
+      );
+      const insertId = result.insertId;
+      emitCalendarChanged({ reason: "reminders", action: "quick_add", id: insertId });
+      emitAdminChanged({ scope: "stats", reason: "reminders", action: "create" });
+      return res.status(201).json({ success: true, kind: "reminder", id: insertId });
+    }
+
+    if (kind === "meeting") {
+      await ensureMeetingsRecurrenceColumnCal();
+      const title = String(b.title || "").trim();
+      if (!title) return res.status(400).json({ success: false, message: "title is required" });
+      const startSql = toMysqlDateTime(b.start_at);
+      if (!startSql) return res.status(400).json({ success: false, message: "start_at is required" });
+      let endSql = toMysqlDateTime(b.end_at);
+      if (!endSql) {
+        const d = new Date(startSql.replace(" ", "T"));
+        if (!Number.isNaN(d.getTime())) {
+          d.setHours(d.getHours() + 1);
+          endSql = toMysqlDateTime(d);
+        }
+      }
+      const leadId = b.lead_id ? Number(b.lead_id) : null;
+      const lid = Number.isFinite(leadId) && leadId > 0 ? leadId : null;
+      const [result] = await pool.query(
+        `INSERT INTO meetings (title, description, start_time, end_time, location, meet_link,
+          meeting_type, status, recurrence, organizer_id, assigned_to_user_id, lead_id)
+         VALUES (?, ?, ?, ?, ?, ?, 'virtual', 'scheduled', 'once', ?, ?, ?)`,
+        [
+          title,
+          b.description || null,
+          startSql,
+          endSql,
+          b.location || null,
+          b.meet_link || null,
+          uid,
+          uid,
+          lid,
+        ]
+      );
+      const meetingId = result.insertId;
+      await pool.query("INSERT IGNORE INTO meeting_attendees (meeting_id, user_id) VALUES (?, ?)", [
+        meetingId,
+        uid,
+      ]);
+      emitMeetingsChanged({ action: "create", id: meetingId });
+      emitCalendarChanged({ reason: "meetings", action: "quick_add", id: meetingId });
+      emitAdminChanged({ scope: "stats", reason: "meetings" });
+      return res.status(201).json({ success: true, kind: "meeting", id: meetingId });
+    }
+
+    if (kind === "todo") {
+      const body = String(b.body || b.title || "").trim();
+      if (!body) return res.status(400).json({ success: false, message: "body or title is required" });
+      let todoDate = b.todo_date ? String(b.todo_date).slice(0, 10) : null;
+      if (!todoDate && b.start_at) todoDate = String(b.start_at).slice(0, 10);
+      if (!todoDate) return res.status(400).json({ success: false, message: "todo_date or start_at date is required" });
+      const pri = ["low", "medium", "high"].includes(String(b.priority || "").toLowerCase())
+        ? String(b.priority).toLowerCase()
+        : "medium";
+      const conn = await pool.getConnection();
+      try {
+        await conn.beginTransaction();
+        let todoId;
+        try {
+          const [result] = await conn.execute(
+            `INSERT INTO crm_todos
+              (tenant_id, body, frequency, todo_date, priority, carry_forward, status, attachment_json, created_by)
+             VALUES (?, ?, 'once', ?, ?, 0, 'pending', NULL, ?)`,
+            [tenantId, body, todoDate, pri, uid]
+          );
+          todoId = result.insertId;
+        } catch (e2) {
+          const msg = String(e2?.message || "");
+          if (e2?.code !== "ER_BAD_FIELD_ERROR" && !/Unknown column/i.test(msg)) throw e2;
+          const [result] = await conn.execute(
+            `INSERT INTO crm_todos
+              (body, frequency, todo_date, priority, carry_forward, status, attachment_json, created_by)
+             VALUES (?, 'once', ?, ?, 0, 'pending', NULL, ?)`,
+            [body, todoDate, pri, uid]
+          );
+          todoId = result.insertId;
+        }
+        await conn.execute(`DELETE FROM crm_todo_assignees WHERE todo_id = ?`, [todoId]);
+        await conn.execute(`INSERT INTO crm_todo_assignees (todo_id, user_id) VALUES (?, ?)`, [todoId, uid]);
+        await conn.commit();
+        emitTodosChanged({ action: "create", id: todoId, tenantId: tenantId || undefined });
+        emitCalendarChanged({ reason: "todos", action: "quick_add", id: todoId });
+        return res.status(201).json({ success: true, kind: "todo", id: todoId });
+      } catch (e) {
+        await conn.rollback();
+        throw e;
+      } finally {
+        conn.release();
+      }
+    }
+
+    if (kind === "lead_followup") {
+      const leadId = Number(b.lead_id);
+      if (!Number.isFinite(leadId) || leadId <= 0) {
+        return res.status(400).json({ success: false, message: "lead_id is required" });
+      }
+      let fu = b.follow_up_date ? String(b.follow_up_date).slice(0, 10) : null;
+      if (!fu && b.start_at) {
+        const s = toMysqlDateTime(b.start_at);
+        if (s) fu = String(s).slice(0, 10);
+      }
+      if (!fu) return res.status(400).json({ success: false, message: "follow_up_date or start_at is required" });
+      const [r] = await pool.execute(
+        `UPDATE leads SET follow_up_date = ? WHERE id = ? AND (created_by = ? OR assigned_to = ?)`,
+        [fu, leadId, uid, uid]
+      );
+      if (!r.affectedRows) {
+        return res.status(404).json({ success: false, message: "Lead not found or no access" });
+      }
+      emitCalendarChanged({ reason: "leads", action: "follow_up", id: leadId });
+      emitAdminChanged({ scope: "stats", reason: "leads", action: "update" });
+      return res.json({ success: true, kind: "lead_followup", id: leadId });
+    }
+
+    return res.status(400).json({
+      success: false,
+      message:
+        "Invalid kind. Use: event, task, reminder, meeting, todo, lead_followup",
+    });
+  } catch (err) {
+    console.error("quickAddFromCalendar", err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+}
+
 module.exports = {
   getCalendarFeed,
   createCalendarEvent,
@@ -476,4 +905,5 @@ module.exports = {
   deleteCalendarEvent,
   getGoogleCalendarStatus,
   postGoogleCalendarSync,
+  quickAddFromCalendar,
 };

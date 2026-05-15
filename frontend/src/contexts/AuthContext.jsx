@@ -138,14 +138,16 @@ export function AuthProvider({ children }) {
 
       const body = await parseJsonSafe(res);
       const data = body?.data;
-      if (!data?.user) {
+      
+      // The user object might be nested inside data.user or it might BE data itself
+      const u = data?.user || data;
+      
+      if (!u || !u.id) {
         globalAuthData = { user: null, mePayload: null };
         setUser(null);
         setMePayload(null);
         return;
       }
-
-      const u = data.user;
       const finalUser = {
         ...u,
         mustChangePassword: Boolean(u.mustChangePassword ?? Number(u.must_change_password) === 1),

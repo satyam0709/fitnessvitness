@@ -2,7 +2,19 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, LineChart, Line, Legend } from "recharts";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  Legend,
+} from "recharts";
+import { RevenuePieCard } from "@/components/Dashboard/RevenuePieCard";
 import { apiFetch, getApiBase } from "@/lib/api";
 import styles from "./reports.module.css";
 
@@ -15,6 +27,20 @@ const TABS = [
 
 function formatNum(n) {
   return Number(n || 0).toLocaleString("en-IN");
+}
+
+function formatInr(n) {
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: 0,
+  }).format(Number(n || 0));
+}
+
+function labelPretty(s) {
+  return String(s || "")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function formatPct(n) {
@@ -40,6 +66,7 @@ export default function ReportsPage() {
     conversion: [],
     activity: [],
     revenue: [],
+    invoiceMix: null,
   });
 
   const loadReports = useCallback(async () => {
@@ -52,14 +79,15 @@ export default function ReportsPage() {
       if (dateTo) qp.set("date_to", dateTo);
       const q = qp.toString();
       const suffix = q ? `?${q}` : "";
-      const [pipelineRes, conversionRes, activityRes, revenueRes] = await Promise.all([
+      const [pipelineRes, conversionRes, activityRes, revenueRes, invoiceMixRes] = await Promise.all([
         apiFetch(`/reports/pipeline${suffix}`),
         apiFetch(`/reports/conversion${suffix}`),
         apiFetch(`/reports/activity${suffix}`),
         apiFetch(`/reports/revenue${suffix}`),
+        apiFetch(`/reports/invoice-mix${suffix}`),
       ]);
 
-      const responses = [pipelineRes, conversionRes, activityRes, revenueRes];
+      const responses = [pipelineRes, conversionRes, activityRes, revenueRes, invoiceMixRes];
       for (const res of responses) {
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
@@ -67,11 +95,12 @@ export default function ReportsPage() {
         }
       }
 
-      const [pipeline, conversion, activity, revenue] = await Promise.all([
+      const [pipeline, conversion, activity, revenue, invoiceMixBody] = await Promise.all([
         pipelineRes.json(),
         conversionRes.json(),
         activityRes.json(),
         revenueRes.json(),
+        invoiceMixRes.json(),
       ]);
 
       setData({
@@ -79,10 +108,11 @@ export default function ReportsPage() {
         conversion: conversion.data || [],
         activity: activity.data || [],
         revenue: revenue.data || [],
+        invoiceMix: invoiceMixBody.data || null,
       });
     } catch (e) {
       setError(e.message || "Could not load reports");
-      setData({ pipeline: [], conversion: [], activity: [], revenue: [] });
+      setData({ pipeline: [], conversion: [], activity: [], revenue: [], invoiceMix: null });
     } finally {
       setLoading(false);
     }
@@ -129,10 +159,35 @@ export default function ReportsPage() {
     };
   }, [data]);
 
+  const invoicePieSlices = useMemo(() => {
+    const mix = data.invoiceMix;
+    if (!mix) return { status: [], type: [] };
+    const tot = Number(mix.totals?.amount) || 0;
+    const mapRow = (r) => {
+      const v = Number(r.amount) || 0;
+      const share = tot > 0 ? ((v / tot) * 100).toFixed(1) : "0.0";
+      return {
+        name: labelPretty(r.key_label),
+        value: v,
+        count: r.cnt,
+        tooltipLines: [
+          `Total: ${formatInr(v)}`,
+          `${Number(r.cnt) || 0} invoice(s)`,
+          `Share of range: ${share}%`,
+        ],
+      };
+    };
+    return {
+      status: (mix.byStatus || []).map(mapRow),
+      type: (mix.byType || []).map(mapRow),
+    };
+  }, [data.invoiceMix]);
+
   const activeMeta = TABS.find((t) => t.id === activeTab) || TABS[0];
 
   async function exportCsv(type) {
-    try {      const qp = new URLSearchParams();
+    try {
+      const qp = new URLSearchParams();
       if (dateFrom) qp.set("date_from", dateFrom);
       if (dateTo) qp.set("date_to", dateTo);
       const q = qp.toString();
@@ -213,57 +268,85 @@ export default function ReportsPage() {
         </div>
       </div>
 
-      <div className={styles.chartCard}>
-        {loading ? (
+      {loading ? (
+        <div className={styles.chartCard}>
           <div className={styles.empty}>Loading report...</div>
-        ) : activeTab === "pipeline" ? (
-          <ResponsiveContainer width="100%" height={360}>
-            <BarChart data={data.pipeline}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="status" />
-              <YAxis />
-              <Tooltip />
-              <Bar dataKey="count" fill="#f5c400" radius={[6, 6, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        ) : activeTab === "conversion" ? (
-          <ResponsiveContainer width="100%" height={360}>
-            <LineChart data={data.conversion}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="month" />
-              <YAxis />
-              <Tooltip />
-              <Legend />
-              <Line type="monotone" dataKey="total_leads" stroke="#f59e0b" strokeWidth={2} />
-              <Line type="monotone" dataKey="won_leads" stroke="#16a34a" strokeWidth={2} />
-              <Line type="monotone" dataKey="conversion_rate" stroke="#2563eb" strokeWidth={2} />
-            </LineChart>
-          </ResponsiveContainer>
-        ) : activeTab === "activity" ? (
-          <ResponsiveContainer width="100%" height={360}>
-            <BarChart data={data.activity}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="user_name" />
-              <YAxis />
-              <Tooltip />
-              <Legend />
-              <Bar dataKey="tasks_completed" fill="#f59e0b" />
-              <Bar dataKey="notes_added" fill="#22c55e" />
-              <Bar dataKey="calls_logged" fill="#3b82f6" />
-            </BarChart>
-          </ResponsiveContainer>
-        ) : (
-          <ResponsiveContainer width="100%" height={360}>
-            <LineChart data={data.revenue}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="month" />
-              <YAxis />
-              <Tooltip />
-              <Line type="monotone" dataKey="revenue_total" stroke="#f5c400" strokeWidth={3} />
-            </LineChart>
-          </ResponsiveContainer>
-        )}
-      </div>
+        </div>
+      ) : (
+        <>
+          <div className={styles.chartCard}>
+            {activeTab === "pipeline" ? (
+              <ResponsiveContainer width="100%" height={360}>
+                <BarChart data={data.pipeline}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="status" />
+                  <YAxis />
+                  <Tooltip />
+                  <Bar dataKey="count" fill="#f5c400" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : activeTab === "conversion" ? (
+              <ResponsiveContainer width="100%" height={360}>
+                <LineChart data={data.conversion}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="month" />
+                  <YAxis />
+                  <Tooltip />
+                  <Legend />
+                  <Line type="monotone" dataKey="total_leads" stroke="#f59e0b" strokeWidth={2} />
+                  <Line type="monotone" dataKey="won_leads" stroke="#16a34a" strokeWidth={2} />
+                  <Line type="monotone" dataKey="conversion_rate" stroke="#2563eb" strokeWidth={2} />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : activeTab === "activity" ? (
+              <ResponsiveContainer width="100%" height={360}>
+                <BarChart data={data.activity}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="user_name" />
+                  <YAxis />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="tasks_completed" fill="#f59e0b" />
+                  <Bar dataKey="notes_added" fill="#22c55e" />
+                  <Bar dataKey="calls_logged" fill="#3b82f6" />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <ResponsiveContainer width="100%" height={360}>
+                <LineChart data={data.revenue}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="month" />
+                  <YAxis />
+                  <Tooltip />
+                  <Line type="monotone" dataKey="revenue_total" stroke="#f5c400" strokeWidth={3} />
+                </LineChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+          {activeTab === "revenue" ? (
+            <>
+              <div className={styles.pieRow}>
+                <RevenuePieCard
+                  title="Invoice totals by status"
+                  slices={invoicePieSlices.status}
+                  emptyLabel="No invoices in this range"
+                />
+                <RevenuePieCard
+                  title="Invoice totals by type"
+                  slices={invoicePieSlices.type}
+                  emptyLabel="No invoices in this range"
+                />
+              </div>
+              {data.invoiceMix?.totals ? (
+                <div className={styles.invoiceMixSummary}>
+                  In selected range: <strong>{formatInr(data.invoiceMix.totals.amount)}</strong> total across{" "}
+                  {formatNum(data.invoiceMix.totals.count)} invoice(s).
+                </div>
+              ) : null}
+            </>
+          ) : null}
+        </>
+      )}
     </div>
   );
 }

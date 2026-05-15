@@ -10,16 +10,18 @@ import styles from "./calendar.module.css";
 
 const HOUR_H = 64;
 
-const TYPE_ORDER = ["event", "lead", "reminder", "meeting", "holiday", "service", "task"];
+const TYPE_ORDER = ["event", "lead", "reminder", "meeting", "holiday", "service", "task", "todo", "fitness"];
 
 const TYPE_STYLE = {
   event:    { label: "Event",    color: "#f97316" },
   lead:     { label: "Lead",     color: "#22c55e" },
   reminder: { label: "Reminder", color: "#8b5cf6" },
   meeting:  { label: "Meeting",  color: "#ef4444" },
-  holiday:  { label: "Holiday",  color: "#06b6d4" },
+  holiday:  { label: "Holiday",  color: "#ef4444" },
   service:  { label: "Service",  color: "#94a3b8" },
   task:     { label: "Task",     color: "#0ea5e9" },
+  todo:     { label: "To-do",    color: "#a855f7" },
+  fitness:  { label: "Fitness",  color: "#10b981" },
 };
 
 function pad2(n) {
@@ -72,6 +74,25 @@ function gridRange(anchor) {
   return { from: toYMD(start), to: toYMD(end) };
 }
 
+/** First / last calendar day of the month (for agenda list + overview). */
+function monthBounds(anchor) {
+  const y = anchor.getFullYear();
+  const m = anchor.getMonth();
+  const from = toYMD(new Date(y, m, 1));
+  const to = toYMD(new Date(y, m + 1, 0));
+  return { from, to };
+}
+
+/** Widen fetch range so month grid + strict-month list stay in one request. */
+function combinedFeedRange(anchor) {
+  const grid = gridRange(anchor);
+  const month = monthBounds(anchor);
+  return {
+    from: grid.from < month.from ? grid.from : month.from,
+    to: grid.to > month.to ? grid.to : month.to,
+  };
+}
+
 function toDatetimeLocalValue(d) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
@@ -115,16 +136,20 @@ export default function CalendarPage() {
   });
 
   const [drawer, setDrawer] = useState(false);
+  const [drawerTab, setDrawerTab] = useState("event");
   const [saving, setSaving] = useState(false);
+  const [quickSaving, setQuickSaving] = useState(false);
+  const [monthOverviewOpen, setMonthOverviewOpen] = useState(false);
   const [formTitle, setFormTitle] = useState("");
   const [formStart, setFormStart] = useState("");
   const [formEnd, setFormEnd] = useState("");
   const [formDesc, setFormDesc] = useState("");
   const [formCat, setFormCat] = useState("event");
+  const [formLeadId, setFormLeadId] = useState("");
 
   const timelineScrollRef = useRef(null);
 
-  const { from, to } = useMemo(() => gridRange(anchor), [anchor]);
+  const { from, to } = useMemo(() => combinedFeedRange(anchor), [anchor]);
 
   const load = useCallback(async () => {
     if (!isLoaded) return;
@@ -223,10 +248,34 @@ export default function CalendarPage() {
     [filtered, selectedKey]
   );
 
+  const strictMonthItems = useMemo(() => {
+    const { from: mf, to: mt } = monthBounds(anchor);
+    return filtered.filter((it) => {
+      const k = dateKeyLocal(it.start);
+      return k >= mf && k <= mt;
+    });
+  }, [filtered, anchor]);
+
   const listItems = useMemo(
-    () => [...filtered].sort((a, b) => new Date(a.start) - new Date(b.start)),
-    [filtered]
+    () => {
+      const src = view === "list" ? strictMonthItems : filtered;
+      return [...src].sort((a, b) => new Date(a.start) - new Date(b.start));
+    },
+    [view, filtered, strictMonthItems]
   );
+
+  const monthOverviewGroups = useMemo(() => {
+    const { from: mf, to: mt } = monthBounds(anchor);
+    const m = {};
+    for (const it of strictMonthItems) {
+      const k = dateKeyLocal(it.start);
+      if (!k || k < mf || k > mt) continue;
+      if (!m[k]) m[k] = [];
+      m[k].push(it);
+    }
+    const keys = Object.keys(m).sort();
+    return keys.map((k) => ({ date: k, items: m[k] }));
+  }, [strictMonthItems, anchor]);
 
   const nowMinutes = useMemo(() => {
     if (toYMD(new Date()) !== selectedKey) return null;
@@ -274,7 +323,75 @@ export default function CalendarPage() {
     setFormEnd("");
     setFormDesc("");
     setFormCat("event");
+    setFormLeadId("");
+    setDrawerTab("event");
     setDrawer(true);
+  }
+
+  async function submitQuickAdd() {
+    const startIso = formStart ? new Date(formStart).toISOString() : null;
+    const endIso = formEnd ? new Date(formEnd).toISOString() : null;
+    setQuickSaving(true);
+    try {
+      let body;
+      if (drawerTab === "task") {
+        if (!formTitle.trim()) throw new Error("Title is required");
+        body = {
+          kind: "task",
+          title: formTitle.trim(),
+          description: formDesc.trim() || null,
+          start_at: startIso,
+          lead_id: formLeadId.trim() ? Number(formLeadId) : null,
+        };
+      } else if (drawerTab === "reminder") {
+        if (!formTitle.trim()) throw new Error("Title is required");
+        if (!startIso) throw new Error("When is required");
+        body = {
+          kind: "reminder",
+          title: formTitle.trim(),
+          note: formDesc.trim() || null,
+          start_at: startIso,
+          lead_id: formLeadId.trim() ? Number(formLeadId) : null,
+        };
+      } else if (drawerTab === "meeting") {
+        if (!formTitle.trim()) throw new Error("Title is required");
+        if (!startIso) throw new Error("Start is required");
+        body = {
+          kind: "meeting",
+          title: formTitle.trim(),
+          description: formDesc.trim() || null,
+          start_at: startIso,
+          end_at: endIso,
+        };
+      } else if (drawerTab === "todo") {
+        const bodyText = formTitle.trim() || formDesc.trim();
+        if (!bodyText) throw new Error("To-do text is required");
+        if (!formStart) throw new Error("Date is required");
+        const d = new Date(formStart);
+        const ymd = toYMD(d);
+        body = { kind: "todo", body: bodyText, todo_date: ymd };
+      } else if (drawerTab === "lead_followup") {
+        const lid = Number(formLeadId);
+        if (!Number.isFinite(lid) || lid <= 0) throw new Error("Lead ID is required");
+        if (!startIso) throw new Error("Follow-up date is required");
+        body = { kind: "lead_followup", lead_id: lid, start_at: startIso };
+      } else {
+        throw new Error("Choose a tab to add");
+      }
+      const res = await apiFetch("/calendar/quick-add", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) throw new Error(json.message || "Could not save");
+      showToast("Added to calendar");
+      setDrawer(false);
+      void load();
+    } catch (er) {
+      showToast(er.message || "Save failed", "error");
+    } finally {
+      setQuickSaving(false);
+    }
   }
 
   async function submitEvent(e) {
@@ -296,7 +413,7 @@ export default function CalendarPage() {
           end_at: endIso,
           all_day: false,
           category: formCat,
-        }),     
+        }),
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json.success) throw new Error(json.message || "Could not save");
@@ -346,8 +463,10 @@ export default function CalendarPage() {
   function itemLink(it) {
     if (it.type === "meeting" && it.meta?.meetingId) return `/meetings`;
     if (it.type === "task" && it.meta?.taskId) return `/tasks`;
+    if (it.type === "todo" && it.meta?.todoId) return `/todos`;
     if (it.type === "lead" && it.meta?.leadId) return `/leads/${it.meta.leadId}`;
     if (it.type === "reminder" && it.meta?.reminderId) return `/reminders`;
+    if (it.source === "fitness" && it.meta?.clientId) return `/clients/${it.meta.clientId}`;
     return null;
   }
 
@@ -388,6 +507,15 @@ export default function CalendarPage() {
             Today
           </button>
 
+          <button
+            type="button"
+            className={styles.todayBtn}
+            onClick={() => setMonthOverviewOpen(true)}
+            title="See everything scheduled this month"
+          >
+            Month schedule
+          </button>
+
           <span className={live ? styles.livePill : `${styles.livePill} ${styles.off}`}>
             {live ? "Live" : "Idle"}
           </span>
@@ -401,7 +529,7 @@ export default function CalendarPage() {
               className={view === v ? styles.active : ""}
               onClick={() => setView(v)}
             >
-              {v === "month" ? "Month" : v === "day" ? "Day" : "List"}
+              {v === "month" ? "Month" : v === "day" ? "Day" : "Month list"}
             </button>
           ))}
         </div>
@@ -619,7 +747,9 @@ export default function CalendarPage() {
             </div>
           ) : (
             <div className={styles.listView}>
-              <h3 className={styles.subheading}>All items in view</h3>
+              <h3 className={styles.subheading}>
+                {monthLabel(anchor)} — all items in this calendar month
+              </h3>
               {listItems.length === 0 ? (
                 <p className={styles.empty}>No events to display</p>
               ) : (
@@ -695,7 +825,7 @@ export default function CalendarPage() {
         >
           <aside className={styles.drawer} onClick={(e) => e.stopPropagation()}>
             <div className={styles.drawerHead}>
-              <h2>Add Event</h2>
+              <h2>Add to calendar</h2>
               <button
                 type="button"
                 className={styles.iconBtn}
@@ -705,19 +835,90 @@ export default function CalendarPage() {
                 <i className="fas fa-times" />
               </button>
             </div>
-            <form onSubmit={submitEvent}>
-              <div className={styles.field}>
-                <label htmlFor="ce-title">Title</label>
-                <input
-                  id="ce-title"
-                  value={formTitle}
-                  onChange={(e) => setFormTitle(e.target.value)}
-                  placeholder="Event title"
-                  required
-                />
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (drawerTab === "event") void submitEvent(e);
+                else void submitQuickAdd();
+              }}
+            >
+              <div className={styles.drawerTabs} role="tablist" aria-label="Item type">
+                {[
+                  ["event", "Event"],
+                  ["task", "Task"],
+                  ["reminder", "Reminder"],
+                  ["meeting", "Meeting"],
+                  ["todo", "To-do"],
+                  ["lead_followup", "Lead date"],
+                ].map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={drawerTab === key ? styles.drawerTabActive : styles.drawerTab}
+                    onClick={() => setDrawerTab(key)}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
+
+              {drawerTab === "lead_followup" ? (
+                <div className={styles.field}>
+                  <label htmlFor="ce-lead-only">Lead ID</label>
+                  <input
+                    id="ce-lead-only"
+                    type="number"
+                    min={1}
+                    value={formLeadId}
+                    onChange={(e) => setFormLeadId(e.target.value)}
+                    placeholder="Lead # from Leads list"
+                    required
+                  />
+                </div>
+              ) : (
+                <div className={styles.field}>
+                  <label htmlFor="ce-title">
+                    {drawerTab === "todo" ? "To-do" : "Title"}
+                  </label>
+                  <input
+                    id="ce-title"
+                    value={formTitle}
+                    onChange={(e) => setFormTitle(e.target.value)}
+                    placeholder={drawerTab === "todo" ? "What needs to be done?" : "Title"}
+                    required={
+                      drawerTab === "event" ||
+                      drawerTab === "task" ||
+                      drawerTab === "reminder" ||
+                      drawerTab === "meeting"
+                    }
+                  />
+                </div>
+              )}
+
+              {(drawerTab === "task" || drawerTab === "reminder") && (
+                <div className={styles.field}>
+                  <label htmlFor="ce-lead">Lead ID (optional)</label>
+                  <input
+                    id="ce-lead"
+                    type="number"
+                    min={1}
+                    value={formLeadId}
+                    onChange={(e) => setFormLeadId(e.target.value)}
+                    placeholder="Link to a lead"
+                  />
+                </div>
+              )}
+
               <div className={styles.field}>
-                <label htmlFor="ce-start">Start</label>
+                <label htmlFor="ce-start">
+                  {drawerTab === "task"
+                    ? "Due (date & time)"
+                    : drawerTab === "todo"
+                      ? "Due date"
+                      : drawerTab === "lead_followup"
+                        ? "Follow-up date & time"
+                        : "Start"}
+                </label>
                 <input
                   id="ce-start"
                   type="datetime-local"
@@ -726,46 +927,149 @@ export default function CalendarPage() {
                   required
                 />
               </div>
+
+              {(drawerTab === "event" || drawerTab === "meeting") && (
+                <div className={styles.field}>
+                  <label htmlFor="ce-end">End (optional)</label>
+                  <input
+                    id="ce-end"
+                    type="datetime-local"
+                    value={formEnd}
+                    onChange={(e) => setFormEnd(e.target.value)}
+                  />
+                </div>
+              )}
+
+              {drawerTab === "event" && (
+                <div className={styles.field}>
+                  <label htmlFor="ce-cat">Type</label>
+                  <select
+                    id="ce-cat"
+                    value={formCat}
+                    onChange={(e) => setFormCat(e.target.value)}
+                  >
+                    <option value="event">Event</option>
+                    <option value="holiday">Holiday</option>
+                    <option value="service">Service</option>
+                  </select>
+                </div>
+              )}
+
               <div className={styles.field}>
-                <label htmlFor="ce-end">End (optional)</label>
-                <input
-                  id="ce-end"
-                  type="datetime-local"
-                  value={formEnd}
-                  onChange={(e) => setFormEnd(e.target.value)}
-                />
-              </div>
-              <div className={styles.field}>
-                <label htmlFor="ce-cat">Type</label>
-                <select
-                  id="ce-cat"
-                  value={formCat}
-                  onChange={(e) => setFormCat(e.target.value)}
-                >
-                  <option value="event">Event</option>
-                  <option value="holiday">Holiday</option>
-                  <option value="service">Service</option>
-                </select>
-              </div>
-              <div className={styles.field}>
-                <label htmlFor="ce-desc">Description</label>
+                <label htmlFor="ce-desc">
+                  {drawerTab === "reminder" ? "Note" : "Description"}
+                </label>
                 <textarea
                   id="ce-desc"
                   value={formDesc}
                   onChange={(e) => setFormDesc(e.target.value)}
-                  placeholder="Details…"
+                  placeholder={drawerTab === "todo" ? "Extra detail (optional)…" : "Details…"}
                 />
               </div>
+
+              <p className={styles.drawerHint}>
+                {drawerTab === "event"
+                  ? "Saves a personal calendar entry. Other tabs create real CRM records and appear for everyone with access."
+                  : drawerTab === "lead_followup"
+                    ? "Sets that lead’s follow-up date."
+                    : "Creates the same records as Tasks, Reminders, Meetings, or To-dos elsewhere in the app."}
+              </p>
+
               <div className={styles.drawerActions}>
                 <button type="button" className={styles.btnGhost} onClick={() => setDrawer(false)}>
                   Cancel
                 </button>
-                <button type="submit" className={styles.btnPrimary} disabled={saving}>
-                  {saving ? "Saving…" : "Add"}
+                <button
+                  type="submit"
+                  className={styles.btnPrimary}
+                  disabled={drawerTab === "event" ? saving : quickSaving}
+                >
+                  {drawerTab === "event"
+                    ? saving
+                      ? "Saving…"
+                      : "Add"
+                    : quickSaving
+                      ? "Saving…"
+                      : "Add"}
                 </button>
               </div>
             </form>
           </aside>
+        </div>
+      ) : null}
+
+      {monthOverviewOpen ? (
+        <div
+          className={styles.monthModalOverlay}
+          role="presentation"
+          onClick={(e) => e.target === e.currentTarget && setMonthOverviewOpen(false)}
+        >
+          <div className={styles.monthModal} role="dialog" aria-labelledby="month-modal-title">
+            <div className={styles.monthModalHead}>
+              <h2 id="month-modal-title">{monthLabel(anchor)}</h2>
+              <button
+                type="button"
+                className={styles.iconBtn}
+                aria-label="Close"
+                onClick={() => setMonthOverviewOpen(false)}
+              >
+                <i className="fas fa-times" />
+              </button>
+            </div>
+            <div className={styles.monthModalBody}>
+              {monthOverviewGroups.length === 0 ? (
+                <p className={styles.empty}>Nothing scheduled in this month.</p>
+              ) : (
+                monthOverviewGroups.map(({ date, items: dayItems }) => (
+                  <div key={date} className={styles.monthModalDay}>
+                    <div className={styles.monthModalDayLabel}>
+                      {new Date(`${date}T12:00:00`).toLocaleDateString(undefined, {
+                        weekday: "short",
+                        month: "short",
+                        day: "numeric",
+                      })}
+                    </div>
+                    <ul className={styles.monthModalList}>
+                      {dayItems.map((it) => {
+                        const href = itemLink(it);
+                        const row = (
+                          <>
+                            <span
+                              className={styles.monthModalDot}
+                              style={{ background: TYPE_STYLE[it.type]?.color || "#64748b" }}
+                            />
+                            <div className={styles.monthModalText}>
+                              <span className={styles.monthModalItemTitle}>{it.title}</span>
+                              <span className={styles.monthModalItemMeta}>
+                                {TYPE_STYLE[it.type]?.label || it.type}
+                                {!it.allDay
+                                  ? ` · ${new Date(it.start).toLocaleTimeString(undefined, {
+                                      hour: "2-digit",
+                                      minute: "2-digit",
+                                    })}`
+                                  : ""}
+                              </span>
+                            </div>
+                          </>
+                        );
+                        return (
+                          <li key={it.id} className={styles.monthModalLi}>
+                            {href ? (
+                              <Link href={href} className={styles.monthModalLink}>
+                                {row}
+                              </Link>
+                            ) : (
+                              row
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         </div>
       ) : null}
     </div>

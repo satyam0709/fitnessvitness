@@ -34,13 +34,9 @@ async function resolvePath(context) {
   return parts.map((part) => encodeURIComponent(part)).join("/");
 }
 
-function buildBackendUrl(req, path) {
-  const backend = getBackendApiUrl().replace(/\/+$/, "");
-  if (!backend) {
-    throw new Error("BACKEND_API_URL is not configured.");
-  }
+function buildBackendUrl(req, path, backendBase) {
   const sourceUrl = new URL(req.url);
-  const target = new URL(`${backend}/api/${path}`);
+  const target = new URL(`${backendBase}/api/${path}`);
   target.search = sourceUrl.search;
   return target;
 }
@@ -103,8 +99,21 @@ async function proxy(req, context) {
   const method = req.method.toUpperCase();
   const hasBody = method !== "GET" && method !== "HEAD";
 
+  const backendBase = getBackendApiUrl().replace(/\/+$/, "");
+  if (!backendBase) {
+    return Response.json(
+      {
+        success: false,
+        message: "Backend URL is not configured for the API proxy.",
+        code: "MISSING_BACKEND_URL",
+        hint: "Set BACKEND_API_URL, BACKEND_URL, or NEXT_PUBLIC_API_URL. On Vercel with routePrefix /_/backend, VERCEL_URL is used when those are unset.",
+      },
+      { status: 502 }
+    );
+  }
+
   try {
-    const target = buildBackendUrl(req, path);
+    const target = buildBackendUrl(req, path, backendBase);
     const response = await fetch(target, {
       method,
       headers: buildForwardHeaders(req),
@@ -119,11 +128,18 @@ async function proxy(req, context) {
       headers: copyResponseHeaders(response),
     });
   } catch (error) {
+    const detail = error?.message || "proxy_error";
+    console.error("[api-proxy] upstream fetch failed", {
+      targetPath: path,
+      backendBase,
+      detail,
+    });
     return Response.json(
       {
         success: false,
-        message: `Unable to reach backend at ${getBackendApiUrl()}.`,
-        detail: error?.message || "proxy_error",
+        message: `Unable to reach backend at ${backendBase}.`,
+        code: "UPSTREAM_FETCH_FAILED",
+        detail,
       },
       { status: 502 }
     );

@@ -1,0 +1,161 @@
+.container {
+  padding: 2rem;
+  background: radial-gradient(circle at top right, rgba(245, 196, 0, 0.05), transparent),
+              radial-gradient(circle at bottom left, rgba(0, 102, 204, 0.05), transparent);
+  min-height: 100vh;
+  font-family: 'Outfit', sans-serif;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2rem;
+  padding: 1.5rem 2rem;
+  background: #004d7a;
+  border-radius: 12px;
+  color: white;
+  box-shadow: 0 10px 30px rgba(0, 77, 122, 0.2);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-weight: 700;
+  letter-spacing: 1px;
+  font-size: 1.2rem;
+}
+
+.backLink {
+  color: rgba(255, 255, 255, 0.7);
+  text-decoration: none;
+  font-size: 0.9rem;
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.backLink:hover {
+  color: white;
+  transform: translateX(-5px);
+}
+
+.profileGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.section {
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(10px);
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03);
+  overflow: hidden;
+}
+
+.sectionHeader {
+  background: #3a86ff;
+  color: white;
+  padding: 0.75rem 1.5rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 1rem;
+  text-transform: uppercase;
+}
+
+.formBody {
+  padding: 1.5rem;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.field label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #475569;
+}
+
+.field input, .field select, .field textarea {
+  padding: 0.75rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  background: white;
+  transition: border-color 0.3s ease;
+}
+
+.field input:focus, .field select:focus, .field textarea:focus {
+  border-color: #3a86ff;
+  outline: none;
+}
+
+.formActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1.5rem;
+  margin-top: 2rem;
+  padding-bottom: 4rem;
+}
+
+.submitBtn {
+  background: #3a86ff;
+  color: white;
+  border: none;
+  padding: 1rem 2.5rem;
+  border-radius: 10px;
+  font-weight: 700;
+  font-size: 1rem;
+  cursor: pointer;
+  box-shadow: 0 10px 20px rgba(58, 134, 255, 0.2);
+  transition: all 0.3s ease;
+}
+
+.submitBtn:hover {
+  background: #2563eb;
+  transform: translateY(-2px);
+  box-shadow: 0 15px 30px rgba(58, 134, 255, 0.3);
+}
+
+.submitBtn:disabled {
+  background: #94a3b8;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.cancelBtn {
+  background: #f1f5f9;
+  color: #475569;
+  border: none;
+  padding: 1rem 2rem;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.cancelBtn:hover {
+  background: #e2e8f0;
+}
+
+@media (max-width: 768px) {
+  .formGrid { grid-template-columns: 1fr; }
+}

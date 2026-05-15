@@ -1,4 +1,8 @@
 const { mainPool } = require("../config/database");
+const { emitFitnessChanged } = require("../realtime/meetingsRealtime");
+const XLSX = require("xlsx");
+const path = require("path");
+const fs = require("fs");
 const { generateClientId, computeClientFields } = require("../services/fitnessComputedFields");
 const { body, validationResult } = require("express-validator");
 
@@ -152,13 +156,26 @@ async function updateFitnessSettings(req, res) {
 async function getAllClients(req, res) {
   try {
     const { status, search } = req.query;
+    const statusRaw = String(status || "").trim();
+    const isOverdueView = statusRaw === "Overdue";
+    const isHighRiskView = statusRaw === "High Risk";
+    const isSpecialView = isOverdueView || isHighRiskView;
+
     let query = "SELECT * FROM fitness_clients WHERE 1=1";
     const params = [];
 
-    if (status) {
+    if (statusRaw && !isSpecialView) {
       query += " AND status = ?";
-      params.push(status);
+      params.push(statusRaw);
     }
+
+    // Narrow SQL for virtual tabs (same rules as dashboard list stats)
+    if (isOverdueView) {
+      query += " AND status = 'Active'";
+    } else if (isHighRiskView) {
+      query += " AND status != 'Inactive'";
+    }
+
     if (search) {
       query += " AND (full_name LIKE ? OR client_id LIKE ? OR phone LIKE ? OR email LIKE ?)";
       const searchTerm = `%${search}%`;
@@ -167,7 +184,14 @@ async function getAllClients(req, res) {
 
     query += " ORDER BY created_at DESC";
     const [rows] = await mainPool.execute(query, params);
-    const computed = rows.map(computeClientFields);
+    let computed = rows.map(computeClientFields);
+
+    if (isOverdueView) {
+      computed = computed.filter((c) => c.follow_up_priority === "🔴 OVERDUE");
+    } else if (isHighRiskView) {
+      computed = computed.filter((c) => c.is_high_risk);
+    }
+
     res.json({ success: true, data: computed });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -204,6 +228,7 @@ async function getClientSummary(req, res) {
     if (!rows.length) {
       return res.status(404).json({ success: false, message: "Client not found" });
     }
+    emitFitnessChanged();
     res.json({ success: true, data: computeClientFields(rows[0]) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -276,7 +301,8 @@ async function createClient(req, res) {
       full_name, phone, email, age, city, address, occupation, emergency_contact,
       referred_by_client_id, source, tier, health_goal, plan_type, plan_start_date,
       follow_up_freq_days, medical_conditions, allergies, activity_level,
-      current_medications, height_cm, start_weight_kg, current_weight_kg, target_weight_kg
+      current_medications, height_cm, start_weight_kg, current_weight_kg, target_weight_kg,
+      status, progress,
     } = req.body;
 
     // Express-validator validation
@@ -383,6 +409,7 @@ async function createClient(req, res) {
       "SELECT * FROM fitness_clients WHERE id = ?", [result.insertId]
     );
 
+    emitFitnessChanged();
     res.status(201).json({ success: true, data: computeClientFields(rows[0]) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -498,32 +525,125 @@ async function updateClient(req, res) {
       return res.status(404).json({ success: false, message: "Client not found" });
     }
 
+    emitFitnessChanged();
     res.json({ success: true, data: computeClientFields(rows[0]) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 }
 
+function isValidFitnessClientId(clientId) {
+  return (
+    typeof clientId === "string" &&
+    clientId.length >= 4 &&
+    clientId.length <= 32 &&
+    /^FV-[A-Za-z0-9_-]+$/.test(clientId)
+  );
+}
+
 async function deleteClient(req, res) {
+  const { clientId } = req.params;
+  const soft =
+    req.query.soft === "1" ||
+    req.query.soft === "true" ||
+    String(req.query.mode || "").toLowerCase() === "inactive";
+
+  if (!isValidFitnessClientId(clientId)) {
+    return res.status(400).json({ success: false, message: "Invalid client ID" });
+  }
+
+  if (soft) {
+    try {
+      const [result] = await mainPool.execute(
+        "UPDATE fitness_clients SET status = 'Inactive' WHERE client_id = ?",
+        [clientId]
+      );
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ success: false, message: "Client not found" });
+      }
+      emitFitnessChanged();
+      return res.json({ success: true, message: "Client marked as inactive" });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
+  const conn = await mainPool.getConnection();
   try {
-    const { clientId } = req.params;
-    // Soft delete - set status to Inactive
-    const [result] = await mainPool.execute(
-      "UPDATE fitness_clients SET status = 'Inactive' WHERE client_id = ?",
+    await conn.beginTransaction();
+    const [clients] = await conn.execute(
+      "SELECT id FROM fitness_clients WHERE client_id = ? FOR UPDATE",
       [clientId]
     );
-    if (result.affectedRows === 0) {
+    if (!clients.length) {
+      await conn.rollback();
       return res.status(404).json({ success: false, message: "Client not found" });
     }
-    res.json({ success: true, message: "Client marked as inactive" });
+    const internalId = clients[0].id;
+
+    await conn.execute(
+      `DELETE FROM notifications WHERE entity_type IN ('fitness_expiry', 'fitness_due') AND entity_id = ?`,
+      [internalId]
+    );
+    await conn.execute(
+      `DELETE FROM fitness_referrals WHERE referrer_client_id = ? OR referred_client_id = ?`,
+      [clientId, clientId]
+    );
+    await conn.execute(`DELETE FROM fitness_meal_plans WHERE client_id = ?`, [clientId]);
+    await conn.execute(`DELETE FROM fitness_client_tasks WHERE client_id = ?`, [clientId]);
+    await conn.execute(`DELETE FROM fitness_supplements WHERE client_id = ?`, [clientId]);
+    await conn.execute(`DELETE FROM fitness_transactions WHERE client_id = ?`, [clientId]);
+    await conn.execute(`DELETE FROM fitness_body_stats WHERE client_id = ?`, [clientId]);
+    await conn.execute(`DELETE FROM fitness_consultations WHERE client_id = ?`, [clientId]);
+    await conn.execute(
+      `UPDATE fitness_clients SET referred_by_client_id = NULL WHERE referred_by_client_id = ?`,
+      [clientId]
+    );
+    const [delResult] = await conn.execute(
+      `DELETE FROM fitness_clients WHERE client_id = ?`,
+      [clientId]
+    );
+    if (delResult.affectedRows === 0) {
+      await conn.rollback();
+      return res.status(404).json({ success: false, message: "Client not found" });
+    }
+
+    await conn.commit();
+    emitFitnessChanged();
+    res.json({
+      success: true,
+      message: "Client and all related fitness records were removed from the database",
+    });
   } catch (error) {
+    try {
+      await conn.rollback();
+    } catch (_) {
+      /* ignore */
+    }
     res.status(500).json({ success: false, message: error.message });
+  } finally {
+    conn.release();
   }
 }
 
 // ─────────────────────────────────────────────────────────────────
 // CONSULTATIONS
 // ─────────────────────────────────────────────────────────────────
+async function getAllConsultations(req, res) {
+  try {
+    const [rows] = await mainPool.execute(`
+      SELECT c.*, fc.full_name, fc.status as client_status
+      FROM fitness_consultations c
+      JOIN fitness_clients fc ON c.client_id = fc.client_id
+      ORDER BY c.consult_date DESC
+      LIMIT 500
+    `);
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
 async function getConsultations(req, res) {
   try {
     const { clientId } = req.params;
@@ -596,6 +716,7 @@ async function createConsultation(req, res) {
     const [rows] = await mainPool.execute(
       "SELECT * FROM fitness_consultations WHERE id = ?", [result.insertId]
     );
+    emitFitnessChanged();
     res.status(201).json({ success: true, data: rows[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -727,6 +848,7 @@ async function createBodyStat(req, res) {
     const [rows] = await mainPool.execute(
       "SELECT * FROM fitness_body_stats WHERE id = ?", [result.insertId]
     );
+    emitFitnessChanged();
     res.status(201).json({ success: true, data: rows[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -802,6 +924,7 @@ async function createSupplement(req, res) {
     const [rows] = await mainPool.execute(
       "SELECT * FROM fitness_supplements WHERE id = ?", [result.insertId]
     );
+    emitFitnessChanged();
     res.status(201).json({ success: true, data: rows[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -965,6 +1088,7 @@ async function createTransaction(req, res) {
       "SELECT ft.*, fc.full_name as client_name FROM fitness_transactions ft LEFT JOIN fitness_clients fc ON ft.client_id = fc.client_id WHERE ft.id = ?",
       [result.insertId]
     );
+    emitFitnessChanged();
     res.status(201).json({ success: true, data: rows[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1023,6 +1147,7 @@ async function updateTransaction(req, res) {
     if (!rows.length) {
       return res.status(404).json({ success: false, message: "Transaction not found" });
     }
+    emitFitnessChanged();
     res.json({ success: true, data: rows[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1038,6 +1163,7 @@ async function deleteTransaction(req, res) {
     if (result.affectedRows === 0) {
       return res.status(404).json({ success: false, message: "Transaction not found" });
     }
+    emitFitnessChanged();
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1109,6 +1235,239 @@ async function getTransactionSummary(req, res) {
   }
 }
 
+function parseYmdQuery(value) {
+  if (value == null) return null;
+  const t = String(value).trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) return null;
+  return t;
+}
+
+/** Aggregates for pie charts: by transaction type and pay mode in a date range. */
+async function getFitnessTransactionCharts(req, res) {
+  try {
+    const today = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const y = today.getFullYear();
+    const mo = today.getMonth() + 1;
+    const defaultTo = `${y}-${pad(mo)}-${pad(today.getDate())}`;
+    const defaultFrom = `${y}-${pad(mo)}-01`;
+
+    let fromStr = parseYmdQuery(req.query.date_from);
+    let toStr = parseYmdQuery(req.query.date_to);
+    if (!fromStr && !toStr) {
+      fromStr = defaultFrom;
+      toStr = defaultTo;
+    } else if (fromStr && !toStr) {
+      toStr = fromStr;
+    } else if (!fromStr && toStr) {
+      fromStr = toStr;
+    }
+    if (fromStr > toStr) {
+      return res.status(400).json({ success: false, message: "date_from must be on or before date_to" });
+    }
+
+    const [byType] = await mainPool.execute(
+      `SELECT COALESCE(type, 'Other') AS key_label,
+              SUM(received_inr) AS received,
+              SUM(pending_inr) AS pending,
+              SUM(received_inr - cost_inr) AS profit,
+              COUNT(*) AS cnt
+       FROM fitness_transactions
+       WHERE transaction_date >= ? AND transaction_date <= ?
+       GROUP BY COALESCE(type, 'Other')
+       ORDER BY received DESC`,
+      [fromStr, toStr]
+    );
+    const [byPayMode] = await mainPool.execute(
+      `SELECT COALESCE(pay_mode, 'Unknown') AS key_label,
+              SUM(received_inr) AS received,
+              SUM(pending_inr) AS pending,
+              COUNT(*) AS cnt
+       FROM fitness_transactions
+       WHERE transaction_date >= ? AND transaction_date <= ?
+       GROUP BY COALESCE(pay_mode, 'Unknown')
+       ORDER BY received DESC`,
+      [fromStr, toStr]
+    );
+    const [[totals]] = await mainPool.execute(
+      `SELECT SUM(received_inr) AS received,
+              SUM(pending_inr) AS pending,
+              SUM(received_inr - cost_inr) AS profit,
+              COUNT(*) AS cnt
+       FROM fitness_transactions
+       WHERE transaction_date >= ? AND transaction_date <= ?`,
+      [fromStr, toStr]
+    );
+
+    const num = (v) => Number(v) || 0;
+    res.json({
+      success: true,
+      data: {
+        range: { from: fromStr, to: toStr },
+        byType: byType.map((r) => ({
+          key_label: r.key_label,
+          received: num(r.received),
+          pending: num(r.pending),
+          profit: num(r.profit),
+          cnt: num(r.cnt),
+        })),
+        byPayMode: byPayMode.map((r) => ({
+          key_label: r.key_label,
+          received: num(r.received),
+          pending: num(r.pending),
+          cnt: num(r.cnt),
+        })),
+        totals: {
+          received: num(totals.received),
+          pending: num(totals.pending),
+          profit: num(totals.profit),
+          cnt: num(totals.cnt),
+        },
+      },
+    });
+  } catch (error) {
+    console.error("getFitnessTransactionCharts", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+/** Revenue split: plans/diet (Membership + Other) vs Supplement sales. */
+async function getRevenueSplit(req, res) {
+  try {
+    const window = String(req.query.window || "month").toLowerCase();
+    if (!["day", "month", "year"].includes(window)) {
+      return res.status(400).json({ success: false, message: "window must be day, month, or year" });
+    }
+    const refRaw = req.query.date != null && String(req.query.date).trim() !== "" ? String(req.query.date).trim() : null;
+    const today = new Date();
+    const defaultRef = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+    const ref = refRaw && /^\d{4}-\d{2}-\d{2}$/.test(refRaw.slice(0, 10)) ? refRaw.slice(0, 10) : defaultRef;
+    const [yStr, mStr] = ref.split("-");
+    const y = Number(yStr);
+    const mo = Number(mStr);
+    const da = Number(ref.split("-")[2]);
+    if (!Number.isFinite(y) || mo < 1 || mo > 12 || da < 1 || da > 31) {
+      return res.status(400).json({ success: false, message: "date must be a valid YYYY-MM-DD" });
+    }
+
+    let fromStr;
+    let toStr;
+    let periodLabel;
+    if (window === "day") {
+      fromStr = ref;
+      toStr = ref;
+      const d = new Date(y, mo - 1, da);
+      periodLabel = d.toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+    } else if (window === "month") {
+      const lastDay = new Date(y, mo, 0).getDate();
+      fromStr = `${yStr}-${mStr}-01`;
+      toStr = `${yStr}-${mStr}-${String(lastDay).padStart(2, "0")}`;
+      periodLabel = new Date(y, mo - 1, 1).toLocaleString(undefined, { month: "long", year: "numeric" });
+    } else {
+      fromStr = `${y}-01-01`;
+      toStr = `${y}-12-31`;
+      periodLabel = `Year ${y}`;
+    }
+
+    const dietCond = `type IN ('Membership','Other')`;
+    const supCond = `type = 'Supplement'`;
+
+    const [[periodAgg]] = await mainPool.execute(
+      `SELECT
+         SUM(CASE WHEN ${dietCond} THEN received_inr ELSE 0 END) AS diet_received,
+         SUM(CASE WHEN ${dietCond} THEN pending_inr ELSE 0 END) AS diet_pending,
+         SUM(CASE WHEN ${dietCond} THEN cost_inr ELSE 0 END) AS diet_cost,
+         SUM(CASE WHEN ${dietCond} THEN (received_inr - cost_inr) ELSE 0 END) AS diet_profit,
+         SUM(CASE WHEN ${dietCond} THEN 1 ELSE 0 END) AS diet_count,
+         SUM(CASE WHEN ${supCond} THEN received_inr ELSE 0 END) AS sup_received,
+         SUM(CASE WHEN ${supCond} THEN pending_inr ELSE 0 END) AS sup_pending,
+         SUM(CASE WHEN ${supCond} THEN cost_inr ELSE 0 END) AS sup_cost,
+         SUM(CASE WHEN ${supCond} THEN (received_inr - cost_inr) ELSE 0 END) AS sup_profit,
+         SUM(CASE WHEN ${supCond} THEN 1 ELSE 0 END) AS sup_count
+       FROM fitness_transactions
+       WHERE transaction_date >= ? AND transaction_date <= ?`,
+      [fromStr, toStr]
+    );
+
+    const endYear = today.getFullYear();
+    const startYear = endYear - 9;
+    const [yearRows] = await mainPool.execute(
+      `SELECT
+         YEAR(transaction_date) AS yr,
+         SUM(CASE WHEN ${dietCond} THEN received_inr ELSE 0 END) AS diet_received,
+         SUM(CASE WHEN ${dietCond} THEN pending_inr ELSE 0 END) AS diet_pending,
+         SUM(CASE WHEN ${dietCond} THEN (received_inr - cost_inr) ELSE 0 END) AS diet_profit,
+         SUM(CASE WHEN ${dietCond} THEN 1 ELSE 0 END) AS diet_count,
+         SUM(CASE WHEN ${supCond} THEN received_inr ELSE 0 END) AS sup_received,
+         SUM(CASE WHEN ${supCond} THEN pending_inr ELSE 0 END) AS sup_pending,
+         SUM(CASE WHEN ${supCond} THEN (received_inr - cost_inr) ELSE 0 END) AS sup_profit,
+         SUM(CASE WHEN ${supCond} THEN 1 ELSE 0 END) AS sup_count
+       FROM fitness_transactions
+       WHERE YEAR(transaction_date) >= ? AND YEAR(transaction_date) <= ?
+       GROUP BY YEAR(transaction_date)
+       ORDER BY yr ASC`,
+      [startYear, endYear]
+    );
+
+    const byYear = new Map(yearRows.map((r) => [Number(r.yr), r]));
+    const years = [];
+    for (let yy = startYear; yy <= endYear; yy += 1) {
+      const r = byYear.get(yy);
+      years.push({
+        year: yy,
+        diet_course: {
+          received: Number(r?.diet_received || 0),
+          pending: Number(r?.diet_pending || 0),
+          profit: Number(r?.diet_profit || 0),
+          transactions: Number(r?.diet_count || 0),
+        },
+        supplements: {
+          received: Number(r?.sup_received || 0),
+          pending: Number(r?.sup_pending || 0),
+          profit: Number(r?.sup_profit || 0),
+          transactions: Number(r?.sup_count || 0),
+        },
+      });
+    }
+
+    const num = (v) => Number(v || 0);
+    res.json({
+      success: true,
+      data: {
+        window,
+        refDate: ref,
+        range: { from: fromStr, to: toStr },
+        periodLabel,
+        diet_course: {
+          sectionTitle: "Plans & diet programs",
+          received: num(periodAgg.diet_received),
+          pending: num(periodAgg.diet_pending),
+          cost: num(periodAgg.diet_cost),
+          profit: num(periodAgg.diet_profit),
+          transactions: num(periodAgg.diet_count),
+        },
+        supplements: {
+          sectionTitle: "Supplement sales",
+          received: num(periodAgg.sup_received),
+          pending: num(periodAgg.sup_pending),
+          cost: num(periodAgg.sup_cost),
+          profit: num(periodAgg.sup_profit),
+          transactions: num(periodAgg.sup_count),
+        },
+        years,
+        yearRange: { from: startYear, to: endYear },
+        classification: {
+          diet_course: "Transaction types Membership and Other (plans, coaching, diet programs, misc services).",
+          supplements: "Transaction type Supplement (product sales).",
+        },
+      },
+    });
+  } catch (error) {
+    console.error("getRevenueSplit", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────
 // REFERRALS
 // ─────────────────────────────────────────────────────────────────
@@ -1138,6 +1497,20 @@ async function getClientReferrals(req, res) {
       FROM fitness_referrals fr
       JOIN fitness_clients fc ON fr.referred_client_id = fc.client_id
       WHERE fr.referrer_client_id = ?
+    `, [clientId]);
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+async function getReferralsReceived(req, res) {
+  try {
+    const { clientId } = req.params;
+    const [rows] = await mainPool.execute(`
+      SELECT client_id, full_name, tier, status, plan_start_date
+      FROM fitness_clients
+      WHERE referred_by_client_id = ?
     `, [clientId]);
     res.json({ success: true, data: rows });
   } catch (error) {
@@ -1181,6 +1554,7 @@ async function createReferral(req, res) {
       JOIN fitness_clients nc ON fr.referred_client_id = nc.client_id
       WHERE fr.id = ?
     `, [result.insertId]);
+    emitFitnessChanged();
     res.status(201).json({ success: true, data: rows[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1196,6 +1570,7 @@ async function deleteReferral(req, res) {
     if (result.affectedRows === 0) {
       return res.status(404).json({ success: false, message: "Referral not found" });
     }
+    emitFitnessChanged();
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1252,6 +1627,7 @@ async function createClientTask(req, res) {
     const [rows] = await mainPool.execute(
       "SELECT * FROM fitness_client_tasks WHERE id = ?", [result.insertId]
     );
+    emitFitnessChanged();
     res.status(201).json({ success: true, data: rows[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1297,6 +1673,7 @@ async function updateClientTask(req, res) {
     if (!rows.length) {
       return res.status(404).json({ success: false, message: "Task not found" });
     }
+    emitFitnessChanged();
     res.json({ success: true, data: rows[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1332,6 +1709,7 @@ async function patchClientTaskStatus(req, res) {
     if (!rows.length) {
       return res.status(404).json({ success: false, message: "Task not found" });
     }
+    emitFitnessChanged();
     res.json({ success: true, data: rows[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1347,6 +1725,73 @@ async function deleteClientTask(req, res) {
     if (result.affectedRows === 0) {
       return res.status(404).json({ success: false, message: "Task not found" });
     }
+    emitFitnessChanged();
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// MEAL PLANS
+// ─────────────────────────────────────────────────────────────────
+async function getAllMealPlans(req, res) {
+  try {
+    const [rows] = await mainPool.execute(`
+      SELECT mp.*, fc.full_name
+      FROM fitness_meal_plans mp
+      JOIN fitness_clients fc ON mp.client_id = fc.client_id
+      ORDER BY mp.created_at DESC
+    `);
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+async function getMealPlans(req, res) {
+  try {
+    const { clientId } = req.params;
+    const [rows] = await mainPool.execute(
+      "SELECT * FROM fitness_meal_plans WHERE client_id = ? ORDER BY created_at DESC",
+      [clientId]
+    );
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+async function createMealPlan(req, res) {
+  try {
+    const { clientId } = req.params;
+    const { plan_name, start_date, end_date, calories, protein_g, carbs_g, fats_g, plan_pdf_url, notes } = req.body;
+
+    if (!clientId) return sendValidationError(res, 'Client ID required');
+    if (!plan_name) return sendValidationError(res, 'Plan name required');
+
+    const [result] = await mainPool.execute(
+      `INSERT INTO fitness_meal_plans (client_id, plan_name, start_date, end_date, calories, protein_g, carbs_g, fats_g, plan_pdf_url, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [clientId, plan_name, start_date, end_date, calories, protein_g, carbs_g, fats_g, plan_pdf_url, notes]
+    );
+
+    const [rows] = await mainPool.execute("SELECT * FROM fitness_meal_plans WHERE id = ?", [result.insertId]);
+    emitFitnessChanged();
+    res.status(201).json({ success: true, data: rows[0] });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+async function deleteMealPlan(req, res) {
+  try {
+    const { id } = req.params;
+    const [result] = await mainPool.execute("DELETE FROM fitness_meal_plans WHERE id = ?", [id]);
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: "Meal plan not found" });
+    }
+    emitFitnessChanged();
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1381,6 +1826,30 @@ async function getDashboardStats(req, res) {
       "SELECT COUNT(*) as fiveStar FROM fitness_clients WHERE tier = 5"
     );
 
+    const [[{ consultCount }]] = await mainPool.execute(
+      "SELECT COUNT(*) as count FROM fitness_consultations WHERE MONTH(consult_date) = MONTH(CURDATE()) AND YEAR(consult_date) = YEAR(CURDATE())"
+    );
+
+    const [[{ highRisk }]] = await mainPool.execute(`
+      SELECT COUNT(*) as highRisk 
+      FROM fitness_clients 
+      WHERE progress IN ('Poor', 'Very Poor') 
+      OR next_due_date < ? 
+      OR plan_expiry_date <= ?
+    `, [today, nextWeek]);
+
+    const [notifRows] = await mainPool.execute(
+      `SELECT MIN(id) AS id, title, body, MIN(created_at) AS created_at, entity_type
+       FROM notifications
+       WHERE user_id = ?
+         AND entity_type IN ('fitness_expiry', 'fitness_due')
+         AND is_read = 0
+       GROUP BY entity_type, entity_id, title, body
+       ORDER BY MIN(created_at) DESC
+       LIMIT 5`,
+      [req.user.id]
+    );
+
     res.json({
       success: true,
       data: {
@@ -1390,6 +1859,9 @@ async function getDashboardStats(req, res) {
         overdue_followups: overdueFollowups || 0,
         expiring_soon: expiringSoon || 0,
         five_star_clients: fiveStar || 0,
+        monthly_consultations: consultCount || 0,
+        high_risk_clients: highRisk || 0,
+        proactive_alerts: notifRows
       }
     });
   } catch (error) {
@@ -1489,6 +1961,150 @@ async function getAnalyticsFinancial(req, res) {
   }
 }
 
+/**
+ * Import Clients from Excel
+ */
+const importClientsExcel = async (req, res) => {
+  if (!req.file) {
+    console.log('[Import] No file uploaded');
+    return res.status(400).json({ success: false, message: 'No file uploaded' });
+  }
+
+  const tmpPath = req.file.path;
+  try {
+    console.log('[Import] Reading file:', tmpPath);
+    const workbook = XLSX.readFile(tmpPath, { cellDates: true });
+    
+    // Find MASTER sheet more flexibly
+    const masterSheetName = workbook.SheetNames.find(n => n.includes('MASTER'));
+    const masterSheet = masterSheetName ? workbook.Sheets[masterSheetName] : null;
+
+    if (!masterSheet) {
+      console.log('[Import] MASTER sheet not found. Available:', workbook.SheetNames);
+      return res.status(400).json({ success: false, message: 'Invalid file format: MASTER sheet not found' });
+    }
+
+    const masterData = XLSX.utils.sheet_to_json(masterSheet, { header: 1 });
+    const clientIds = [];
+    for (let i = 0; i < masterData.length; i++) {
+      const row = masterData[i];
+      if (row && row[0] && String(row[0]).startsWith('FV-')) {
+        clientIds.push(row[0]);
+      }
+    }
+
+    console.log(`[Import] Found ${clientIds.length} client IDs`);
+
+    const importedClients = [];
+    const errors = [];
+
+    for (const clientId of clientIds) {
+      const clientSheet = workbook.Sheets[clientId];
+      if (!clientSheet) {
+        errors.push(`Sheet for ${clientId} not found`);
+        continue;
+      }
+
+      const sheetData = XLSX.utils.sheet_to_json(clientSheet, { header: 1 });
+      const getVal = (row, col) => {
+        const v = sheetData[row] ? sheetData[row][col] : null;
+        return v === undefined ? null : v;
+      };
+
+      const client = {
+        client_id: clientId,
+        full_name: getVal(9, 2),
+        age: getVal(9, 5),
+        phone: String(getVal(10, 5) || ''),
+        email: getVal(11, 5),
+        city: getVal(11, 2),
+        address: getVal(12, 2),
+        occupation: getVal(12, 5),
+        health_goal: getVal(16, 2),
+        plan_type: getVal(16, 5),
+        plan_start_date: getVal(17, 2),
+        plan_expiry_date: getVal(18, 2),
+        height_cm: getVal(23, 2),
+        start_weight_kg: getVal(23, 5),
+        current_weight_kg: getVal(24, 2),
+        target_weight_kg: getVal(24, 5),
+        bmi: getVal(25, 2),
+        referred_by_name: getVal(13, 2),
+        status: getVal(5, 4) || 'Active',
+        progress: getVal(5, 3) || 'Good',
+        next_due_date: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+      };
+
+      try {
+        const [existing] = await mainPool.execute('SELECT id FROM fitness_clients WHERE client_id = ?', [clientId]);
+        
+        if (existing.length > 0) {
+          await mainPool.execute(
+            `UPDATE fitness_clients SET 
+              full_name = ?, age = ?, phone = ?, email = ?, city = ?, address = ?, occupation = ?,
+              health_goal = ?, plan_type = ?, plan_start_date = ?, plan_expiry_date = ?, 
+              height_cm = ?, start_weight_kg = ?, current_weight_kg = ?, target_weight_kg = ?, bmi = ?,
+              referred_by_name = ?, status = ?, progress = ?, next_due_date = ?
+            WHERE client_id = ?`,
+            [
+              client.full_name, client.age, client.phone, client.email, client.city, client.address, client.occupation,
+              client.health_goal, client.plan_type, client.plan_start_date, client.plan_expiry_date,
+              client.height_cm, client.start_weight_kg, client.current_weight_kg, client.target_weight_kg, client.bmi,
+              client.referred_by_name, client.status, client.progress, client.next_due_date, clientId
+            ]
+          );
+        } else {
+          await mainPool.execute(
+            `INSERT INTO fitness_clients (
+              client_id, full_name, age, phone, email, city, address, occupation,
+              health_goal, plan_type, plan_start_date, plan_expiry_date, 
+              height_cm, start_weight_kg, current_weight_kg, target_weight_kg, bmi,
+              referred_by_name, status, progress, next_due_date
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              clientId, client.full_name, client.age, client.phone, client.email, client.city, client.address, client.occupation,
+              client.health_goal, client.plan_type, client.plan_start_date, client.plan_expiry_date,
+              client.height_cm, client.start_weight_kg, client.current_weight_kg, client.target_weight_kg, client.bmi,
+              client.referred_by_name, client.status, client.progress, client.next_due_date
+            ]
+          );
+        }
+        importedClients.push(clientId);
+      } catch (dbError) {
+        console.error(`[Import] DB Error for ${clientId}:`, dbError.message);
+        errors.push(`Error importing ${clientId}: ${dbError.message}`);
+      }
+    }
+
+    emitFitnessChanged();
+    res.json({ success: true, data: { importedCount: importedClients.length, errors } });
+  } catch (err) {
+    console.error('[Import] Fatal Error:', err);
+    res.status(500).json({ success: false, message: 'Failed to import clients: ' + err.message });
+  } finally {
+    try {
+      if (tmpPath && fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch (_) {
+      /* ignore */
+    }
+  }
+};
+
+const exportClientsExcel = async (req, res) => {
+  try {
+    const [clients] = await mainPool.execute('SELECT * FROM fitness_clients ORDER BY created_at DESC');
+    const worksheet = XLSX.utils.json_to_sheet(clients);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Clients');
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Disposition', 'attachment; filename=fitness_clients.xlsx');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buffer);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to export clients' });
+  }
+};
+
 module.exports = {
   // Settings
   getFitnessSettings,
@@ -1502,6 +2118,7 @@ module.exports = {
   updateClient,
   deleteClient,
   // Consultations
+  getAllConsultations,
   getConsultations,
   createConsultation,
   updateConsultation,
@@ -1522,9 +2139,12 @@ module.exports = {
   updateTransaction,
   deleteTransaction,
   getTransactionSummary,
+  getFitnessTransactionCharts,
+  getRevenueSplit,
   // Referrals
   getAllReferrals,
   getClientReferrals,
+  getReferralsReceived,
   createReferral,
   deleteReferral,
   // Client Tasks
@@ -1539,4 +2159,11 @@ module.exports = {
   getAnalyticsTiers,
   getAnalyticsReferrers,
   getAnalyticsFinancial,
+  // Meal Plans
+  getAllMealPlans,
+  getMealPlans,
+  createMealPlan,
+  deleteMealPlan,
+  importClientsExcel,
+  exportClientsExcel,
 };

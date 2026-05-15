@@ -2,7 +2,7 @@ const { mainPool: pool } = require("./database");
 const { INTEGRATIONS } = require("./integrationsCatalog");
 
 let schemaEnsured = false;
-const CURRENT_SCHEMA_VERSION = 5;
+const CURRENT_SCHEMA_VERSION = 6;
 
 async function ensureSchema() {
   if (schemaEnsured) return;
@@ -897,6 +897,8 @@ async function ensureSchema() {
   );
   if (usersTbl.length) {
     const jwtAuthUserCols = [
+      { column: "first_name", definition: "VARCHAR(100) DEFAULT NULL" },
+      { column: "last_name", definition: "VARCHAR(100) DEFAULT NULL" },
       { column: "password_hash", definition: "VARCHAR(255) DEFAULT NULL" },
       { column: "email_verified", definition: "TINYINT(1) NOT NULL DEFAULT 0" },
       { column: "password_reset_token", definition: "VARCHAR(255) DEFAULT NULL" },
@@ -1126,6 +1128,7 @@ async function ensureSchema() {
       occupation VARCHAR(100),
       emergency_contact VARCHAR(255),
       referred_by_client_id VARCHAR(20),
+      referred_by_name VARCHAR(255),
       source ENUM('BNI','Instagram','Facebook','Referral - Existing Client','Friend / Family','Walk-in','Online / Website','Corporate / Company') DEFAULT 'Walk-in',
       tier TINYINT DEFAULT 3,
       health_goal VARCHAR(255),
@@ -1270,6 +1273,27 @@ async function ensureSchema() {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS fitness_meal_plans (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      client_id VARCHAR(20) NOT NULL,
+      plan_name VARCHAR(255) NOT NULL,
+      start_date DATE,
+      end_date DATE,
+      calories INT,
+      protein_g INT,
+      carbs_g INT,
+      fats_g INT,
+      plan_pdf_url TEXT,
+      notes TEXT,
+      is_active TINYINT(1) DEFAULT 1,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_fitness_meal_plans_client (client_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 

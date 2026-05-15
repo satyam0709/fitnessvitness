@@ -104,7 +104,7 @@ function restrictToOwn(req) {
 }
 
 function leadScopeSql(req, alias = "l") {
-  const parts = [`${alias}.is_deleted = 0`];
+  const parts = ["1=1"];
   const params = [];
   if (restrictToOwn(req)) {
     parts.push(`(${alias}.assigned_to = ? OR ${alias}.created_by = ?)`);
@@ -134,7 +134,7 @@ function ticketScopeSql(req, alias = "t") {
 }
 
 function taskScopeSql(req, alias = "t") {
-  const parts = [`${alias}.is_deleted = 0`];
+  const parts = ["1=1"];
   const params = [];
   if (restrictToOwn(req)) {
     parts.push(`(${alias}.assigned_to = ? OR ${alias}.created_by = ?)`);
@@ -144,7 +144,7 @@ function taskScopeSql(req, alias = "t") {
 }
 
 function reminderScopeSql(req, alias = "r") {
-  const parts = [`${alias}.is_deleted = 0`];
+  const parts = ["1=1"];
   const params = [];
   if (restrictToOwn(req)) {
     parts.push(`(${alias}.user_id = ? OR ${alias}.assigned_to_user_id = ?)`);
@@ -467,11 +467,17 @@ async function loadDashboardPanels(req) {
 }
 
 async function loadTodaySummary(req, todayYmd, yesterdayYmd) {
-  const tenantId = req.user.tenantId;
   const uid = Number(req.user.id);
   const own = restrictToOwn(req);
 
   const leadOwn = own ? " AND (assigned_to = ? OR created_by = ?)" : "";
+  const remOwn = own ? " AND (user_id = ? OR assigned_to_user_id = ?)" : "";
+  const taskOwn = own ? " AND (assigned_to = ? OR created_by = ?)" : "";
+  const todoVis = own
+    ? "(t.created_by = ? OR EXISTS (SELECT 1 FROM crm_todo_assignees a WHERE a.todo_id = t.id AND a.user_id = ?))"
+    : "1=1";
+  const todoDayClause = "(DATE(t.todo_date) = ? OR (t.todo_date IS NULL AND DATE(t.created_at) = ?) OR DATE(t.updated_at) = ?)";
+
   const lpToday = own ? [todayYmd, uid, uid] : [todayYmd];
   const lpYest = own ? [yesterdayYmd, uid, uid] : [yesterdayYmd];
 
@@ -498,33 +504,33 @@ async function loadTodaySummary(req, todayYmd, yesterdayYmd) {
   ] = await Promise.all([
     pool.execute(
       `SELECT COUNT(*) AS todayLeads FROM leads
-       WHERE is_deleted = 0 AND DATE(created_at) = ?${leadOwn}`,
+       WHERE DATE(created_at) = ?${leadOwn}`,
       lpToday
     ),
     pool.execute(
       `SELECT COUNT(*) AS yesterdayLeads FROM leads
-       WHERE is_deleted = 0 AND DATE(created_at) = ?${leadOwn}`,
+       WHERE DATE(created_at) = ?${leadOwn}`,
       lpYest
     ),
     pool.execute(
       `SELECT COUNT(*) AS completedLeads FROM leads
-       WHERE is_deleted = 0 AND DATE(created_at) = ?
+       WHERE DATE(created_at) = ?
          AND status IN ('close_by','confirm')${leadOwn}`,
       lpToday
     ),
     pool.execute(
       `SELECT COUNT(*) AS todayFollowups FROM reminders
-       WHERE is_deleted = 0 AND DATE(remind_at) = ?${remOwn}`,
+       WHERE DATE(remind_at) = ?${remOwn}`,
       remParams
     ),
     pool.execute(
       `SELECT COUNT(*) AS followupCompleted FROM reminders
-       WHERE is_deleted = 0 AND DATE(remind_at) = ? AND is_done = 1${remOwn}`,
+       WHERE DATE(remind_at) = ? AND is_done = 1${remOwn}`,
       remParams
     ),
     pool.execute(
       `SELECT COUNT(*) AS todayTasks FROM tasks
-       WHERE is_deleted = 0
+       WHERE 1=1
          ${taskOwn}
          AND (
            (due_date IS NOT NULL AND DATE(due_date) = ?)
@@ -534,7 +540,7 @@ async function loadTodaySummary(req, todayYmd, yesterdayYmd) {
     ),
     pool.execute(
       `SELECT COUNT(*) AS taskCompleted FROM tasks
-       WHERE is_deleted = 0
+       WHERE 1=1
          ${taskOwn}
          AND status IN ('done','completed')
          AND (
@@ -663,7 +669,16 @@ async function getDashboardOpr(req, res) {
 
 async function getDashboardStats(req, res) {
   try {
-    if (!req.user?.id) return res.status(401).json({ success: false, message: "Unauthorized" });
+    const uid = Number(req.user?.id);
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+
+    // Proactively check for Fitness CRM notifications (expiries, dues)
+    try {
+      const { checkAndGenerateFitnessNotifications } = require("../services/fitnessNotificationService");
+      await checkAndGenerateFitnessNotifications(uid);
+    } catch (e) {
+      console.warn("Failed to generate proactive fitness notifications:", e.message);
+    }
 
     let panels;
     try {

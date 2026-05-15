@@ -1,6 +1,6 @@
 import ConditionalLayout from "@/components/ConditionalLayout/conditionalLayout";
-import "@fortawesome/fontawesome-free/css/all.min.css";
 import "./globals.css";
+import "@fortawesome/fontawesome-free/css/all.min.css";
 import { Inter, Lora, Montserrat } from "next/font/google";
 
 const montserrat = Montserrat({

@@ -15,7 +15,7 @@ function normalizeType(t) {
   return REMINDER_TYPES.has(v) ? v : "general";
 }
 
-async function assertReminderAccess(reminderId, dbUserId, tenantId) {
+async function assertReminderAccess(reminderId, dbUserId) {
   const rid = Number(reminderId);
   const uid = Number(dbUserId);
   if (!Number.isFinite(rid) || !Number.isFinite(uid)) return null;
@@ -24,9 +24,8 @@ async function assertReminderAccess(reminderId, dbUserId, tenantId) {
       `SELECT id FROM reminders
        WHERE id = ?
          AND is_deleted = 0
-         AND (? IS NULL OR tenant_id = ?)
          AND (user_id = ? OR assigned_to_user_id = ?)`,
-      [rid, tenantId || null, tenantId || null, uid, uid]
+      [rid, uid, uid]
     );
     return rows[0];
   } catch {
@@ -37,7 +36,6 @@ async function assertReminderAccess(reminderId, dbUserId, tenantId) {
 async function getReminders(req, res) {
   try {
     const uid = Number(req.user?.id);
-    const tenantId = req.user?.tenantId || null;
     if (!Number.isFinite(uid) || uid <= 0) {
       return res.status(500).json({
         success: false,
@@ -59,8 +57,8 @@ async function getReminders(req, res) {
     const pag = Math.max(parseInt(pageRaw, 10) || 1, 1);
     const offset = (pag - 1) * lim;
 
-    let where = "r.is_deleted = 0 AND (r.user_id = ? OR r.assigned_to_user_id = ?) AND (? IS NULL OR r.tenant_id = ?)";
-    const params = [uid, uid, tenantId, tenantId];
+    let where = "r.is_deleted = 0 AND (r.user_id = ? OR r.assigned_to_user_id = ?)";
+    const params = [uid, uid];
 
     if (is_done !== undefined && is_done !== "") {
       where += " AND r.is_done = ?";
@@ -100,8 +98,8 @@ async function getReminders(req, res) {
 
     const [reminders] = await pool.query(
       `SELECT r.*, l.name as lead_name,
-        uc.first_name AS creator_first_name, uc.last_name AS creator_last_name, uc.email AS creator_email,
-        ua.first_name AS assignee_first_name, ua.last_name AS assignee_last_name, ua.email AS assignee_email
+        uc.full_name AS creator_name, uc.email AS creator_email,
+        ua.full_name AS assignee_name, ua.email AS assignee_email
        FROM reminders r
        LEFT JOIN leads l ON l.id = r.lead_id
        LEFT JOIN users uc ON uc.id = r.user_id
@@ -122,7 +120,6 @@ async function getReminders(req, res) {
 async function createReminder(req, res) {
   try {
     const uid = Number(req.user?.id);
-    const tenantId = req.user?.tenantId || null;
     if (!Number.isFinite(uid) || uid <= 0) {
       return res.status(500).json({
         success: false,
@@ -154,10 +151,9 @@ async function createReminder(req, res) {
     const typeVal = normalizeType(reminder_type);
 
     const [result] = await pool.query(
-      `INSERT INTO reminders (tenant_id, user_id, title, note, remind_at, lead_id, assigned_to_user_id, reminder_type)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO reminders (user_id, title, note, remind_at, lead_id, assigned_to_user_id, reminder_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
-        tenantId,
         uid,
         title.trim(),
         note || null,
@@ -190,20 +186,19 @@ async function createReminder(req, res) {
 async function updateReminder(req, res) {
   try {
     const uid = Number(req.user?.id);
-    const tenantId = req.user?.tenantId || null;
     if (!Number.isFinite(uid) || uid <= 0) {
       return res.status(500).json({
         success: false,
         message: "Could not resolve your account in the database.",
       });
     }
-    const row = await assertReminderAccess(req.params.id, uid, tenantId);
+    const row = await assertReminderAccess(req.params.id, uid);
     if (!row) {
       return res.status(404).json({ success: false, message: "Reminder not found" });
     }
     const [beforeRows] = await pool.query(
-      "SELECT assigned_to_user_id, title FROM reminders WHERE id = ? AND is_deleted = 0 AND (? IS NULL OR tenant_id = ?) LIMIT 1",
-      [Number(req.params.id), tenantId, tenantId]
+      "SELECT assigned_to_user_id, title FROM reminders WHERE id = ? AND is_deleted = 0 LIMIT 1",
+      [Number(req.params.id)]
     );
     const before = beforeRows[0] || null;
 
@@ -271,10 +266,10 @@ async function updateReminder(req, res) {
     }
 
     const rid = Number(req.params.id);
-    vals.push(rid, tenantId, tenantId, uid, uid);
+    vals.push(rid, uid, uid);
     await pool.query(
       `UPDATE reminders SET ${fields.join(", ")}
-       WHERE id = ? AND is_deleted = 0 AND (? IS NULL OR tenant_id = ?) AND (user_id = ? OR assigned_to_user_id = ?)`,
+       WHERE id = ? AND is_deleted = 0 AND (user_id = ? OR assigned_to_user_id = ?)`,
       vals
     );
     emitAdminChanged({ scope: "stats", reason: "reminders", action: "update" });
@@ -302,18 +297,17 @@ async function updateReminder(req, res) {
 async function markReminderDone(req, res) {
   try {
     const uid = Number(req.user?.id);
-    const tenantId = req.user?.tenantId || null;
     if (!Number.isFinite(uid) || uid <= 0) {
       return res.status(500).json({ success: false, message: "User not resolved" });
     }
-    const row = await assertReminderAccess(req.params.id, uid, tenantId);
+    const row = await assertReminderAccess(req.params.id, uid);
     if (!row) {
       return res.status(404).json({ success: false, message: "Reminder not found" });
     }
     const rid = Number(req.params.id);
     await pool.query(
-      "UPDATE reminders SET is_done=1 WHERE id=? AND is_deleted = 0 AND (? IS NULL OR tenant_id = ?) AND (user_id=? OR assigned_to_user_id=?)",
-      [rid, tenantId, tenantId, uid, uid]
+      "UPDATE reminders SET is_done=1 WHERE id=? AND is_deleted = 0 AND (user_id=? OR assigned_to_user_id=?)",
+      [rid, uid, uid]
     );
     emitCalendarChanged({ reason: "reminders" });
     res.json({ success: true });
@@ -326,14 +320,13 @@ async function markReminderDone(req, res) {
 async function deleteReminder(req, res) {
   try {
     const uid = Number(req.user?.id);
-    const tenantId = req.user?.tenantId || null;
     if (!Number.isFinite(uid) || uid <= 0) {
       return res.status(500).json({ success: false, message: "User not resolved" });
     }
     const rid = Number(req.params.id);
     const [result] = await pool.query(
-      "UPDATE reminders SET is_deleted = 1, deleted_at = NOW() WHERE id=? AND is_deleted = 0 AND (? IS NULL OR tenant_id = ?) AND (user_id=? OR assigned_to_user_id=?)",
-      [rid, tenantId, tenantId, uid, uid]
+      "UPDATE reminders SET is_deleted = 1, deleted_at = NOW() WHERE id=? AND is_deleted = 0 AND (user_id=? OR assigned_to_user_id=?)",
+      [rid, uid, uid]
     );
     if (result.affectedRows === 0) {
       return res.status(404).json({ success: false, message: "Reminder not found" });
@@ -350,7 +343,6 @@ async function deleteReminder(req, res) {
 async function bulkDeleteReminders(req, res) {
   try {
     const uid = Number(req.user?.id);
-    const tenantId = req.user?.tenantId || null;
     if (!Number.isFinite(uid) || uid <= 0) {
       return res.status(500).json({ success: false, message: "User not resolved" });
     }
@@ -372,9 +364,8 @@ async function bulkDeleteReminders(req, res) {
        SET is_deleted = 1, deleted_at = NOW()
        WHERE is_deleted = 0
          AND id IN (${ph})
-         AND (? IS NULL OR tenant_id = ?)
          AND (user_id = ? OR assigned_to_user_id = ?)`,
-      [...nums, tenantId, tenantId, uid, uid]
+      [...nums, uid, uid]
     );
     if (result.affectedRows) {
       emitAdminChanged({ scope: "stats", reason: "reminders", action: "bulk_delete" });
@@ -386,9 +377,6 @@ async function bulkDeleteReminders(req, res) {
     res.status(500).json({ success: false, message: err.message });
   }
 }
-
-
-// as is it data here
 
 module.exports = {
   getReminders,

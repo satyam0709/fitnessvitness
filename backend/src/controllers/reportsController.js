@@ -1,28 +1,9 @@
 const { pool } = require("../config/database");
 
-function tenantIdFromReq(req) {
-  return req.user?.tenant_id || req.user?.tenantId || null;
-}
-
 function monthKey(dateLike) {
   const d = new Date(dateLike);
   if (Number.isNaN(d.getTime())) return null;
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
-
-function monthSeries(count) {
-  const out = [];
-  const now = new Date();
-  for (let i = count - 1; i >= 0; i -= 1) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    out.push({
-      key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
-      label: d.toLocaleString("en-IN", { month: "short", year: "numeric" }),
-      year: d.getFullYear(),
-      month: d.getMonth() + 1,
-    });
-  }
-  return out;
 }
 
 function queryDate(raw) {
@@ -56,12 +37,9 @@ function rowsToCsv(rows, headers) {
 
 async function getPipelineReport(req, res) {
   try {
-    const tenantId = tenantIdFromReq(req);
-    if (!tenantId) return res.status(400).json({ success: false, message: "tenant_id is required" });
-
     const { from, to } = rangeFromReq(req);
-    const where = ["tenant_id = ?", "is_deleted = 0"];
-    const params = [tenantId];
+    const where = ["1=1"];
+    const params = [];
     if (from) {
       where.push("created_at >= ?");
       params.push(from);
@@ -88,9 +66,6 @@ async function getPipelineReport(req, res) {
 
 async function getConversionReport(req, res) {
   try {
-    const tenantId = tenantIdFromReq(req);
-    if (!tenantId) return res.status(400).json({ success: false, message: "tenant_id is required" });
-
     const range = rangeFromReq(req);
     const sixMonthsAgo = new Date();
     sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 5);
@@ -104,13 +79,12 @@ async function getConversionReport(req, res) {
               COUNT(*) AS total_leads,
               SUM(CASE WHEN status IN ('confirm') THEN 1 ELSE 0 END) AS won_leads
        FROM leads
-       WHERE tenant_id = ?
-         AND is_deleted = 0
+       WHERE 1=1
          AND created_at >= ?
          AND created_at <= ?
        GROUP BY DATE_FORMAT(created_at, '%Y-%m')
        ORDER BY ym ASC`,
-      [tenantId, fromDate, toDate]
+      [fromDate, toDate]
     );
     const byMonth = new Map(rows.map((r) => [String(r.ym), r]));
     const data = [];
@@ -140,9 +114,6 @@ async function getConversionReport(req, res) {
 
 async function getActivityReport(req, res) {
   try {
-    const tenantId = tenantIdFromReq(req);
-    if (!tenantId) return res.status(400).json({ success: false, message: "tenant_id is required" });
-
     const { from, to } = rangeFromReq(req);
     const dateClause = from && to
       ? "BETWEEN ? AND ?"
@@ -156,7 +127,7 @@ async function getActivityReport(req, res) {
     const [rows] = await pool.query(
       `SELECT
          u.id AS user_id,
-         TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))) AS user_name,
+         u.full_name AS user_name,
          u.email,
          COALESCE(t.tasks_completed, 0) AS tasks_completed,
          COALESCE(n.notes_added, 0) AS notes_added,
@@ -166,8 +137,7 @@ async function getActivityReport(req, res) {
        LEFT JOIN (
          SELECT created_by AS user_id, COUNT(*) AS tasks_completed
          FROM tasks
-         WHERE tenant_id = ?
-           AND is_deleted = 0
+         WHERE 1=1
            AND status IN ('completed', 'done')
            AND updated_at ${dateClause}
          GROUP BY created_by
@@ -175,8 +145,7 @@ async function getActivityReport(req, res) {
        LEFT JOIN (
          SELECT created_by AS user_id, COUNT(*) AS notes_added
          FROM notes
-         WHERE tenant_id = ?
-           AND is_deleted = 0
+         WHERE 1=1
            AND created_at ${dateClause}
          GROUP BY created_by
        ) n ON n.user_id = u.id
@@ -184,14 +153,13 @@ async function getActivityReport(req, res) {
          SELECT lf.created_by AS user_id, COUNT(*) AS calls_logged
          FROM lead_followups lf
          INNER JOIN leads l ON l.id = lf.lead_id
-         WHERE l.tenant_id = ?
-           AND l.is_deleted = 0
+         WHERE 1=1
            AND lf.created_at ${dateClause}
          GROUP BY lf.created_by
        ) f ON f.user_id = u.id
-       WHERE u.tenant_id = ? AND u.is_active = 1
+       WHERE u.is_active = 1
        ORDER BY total_activity DESC, user_name ASC`,
-      [tenantId, ...dateParams, tenantId, ...dateParams, tenantId, ...dateParams, tenantId]
+      [...dateParams, ...dateParams, ...dateParams]
     );
 
     res.json({ success: true, data: rows });
@@ -203,9 +171,6 @@ async function getActivityReport(req, res) {
 
 async function getRevenueReport(req, res) {
   try {
-    const tenantId = tenantIdFromReq(req);
-    if (!tenantId) return res.status(400).json({ success: false, message: "tenant_id is required" });
-
     const range = rangeFromReq(req);
     const twelveMonthsAgo = new Date();
     twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 11);
@@ -218,13 +183,12 @@ async function getRevenueReport(req, res) {
       `SELECT DATE_FORMAT(created_at, '%Y-%m') AS ym,
               COALESCE(SUM(total), 0) AS revenue_total
        FROM invoices
-       WHERE tenant_id = ?
-         AND is_deleted = 0
+       WHERE 1=1
          AND created_at >= ?
          AND created_at <= ?
        GROUP BY DATE_FORMAT(created_at, '%Y-%m')
        ORDER BY ym ASC`,
-      [tenantId, fromDate, toDate]
+      [fromDate, toDate]
     );
     const byMonth = new Map(rows.map((r) => [String(r.ym), Number(r.revenue_total || 0)]));
     const data = [];
@@ -247,52 +211,113 @@ async function getRevenueReport(req, res) {
   }
 }
 
+/** Invoice aggregates for pie charts: by status and by type (same date range as revenue report). */
+async function getInvoiceMixReport(req, res) {
+  try {
+    const range = rangeFromReq(req);
+    const twelveMonthsAgo = new Date();
+    twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 11);
+    twelveMonthsAgo.setDate(1);
+    twelveMonthsAgo.setHours(0, 0, 0, 0);
+    const fromDate = range.from || twelveMonthsAgo;
+    const toDate = range.to || new Date();
+
+    const [byStatus] = await pool.query(
+      `SELECT COALESCE(status, 'unknown') AS key_label,
+              COALESCE(SUM(total), 0) AS amount,
+              COUNT(*) AS cnt
+       FROM invoices
+       WHERE created_at >= ? AND created_at <= ?
+       GROUP BY COALESCE(status, 'unknown')
+       ORDER BY amount DESC`,
+      [fromDate, toDate]
+    );
+    const [byType] = await pool.query(
+      `SELECT COALESCE(type, 'unknown') AS key_label,
+              COALESCE(SUM(total), 0) AS amount,
+              COUNT(*) AS cnt
+       FROM invoices
+       WHERE created_at >= ? AND created_at <= ?
+       GROUP BY COALESCE(type, 'unknown')
+       ORDER BY amount DESC`,
+      [fromDate, toDate]
+    );
+    const [totRows] = await pool.query(
+      `SELECT COALESCE(SUM(total), 0) AS amount, COUNT(*) AS cnt
+       FROM invoices
+       WHERE created_at >= ? AND created_at <= ?`,
+      [fromDate, toDate]
+    );
+    const totRow = totRows[0] || { amount: 0, cnt: 0 };
+
+    const num = (v) => Number(v) || 0;
+    res.json({
+      success: true,
+      data: {
+        byStatus: byStatus.map((r) => ({
+          key_label: r.key_label,
+          amount: num(r.amount),
+          cnt: num(r.cnt),
+        })),
+        byType: byType.map((r) => ({
+          key_label: r.key_label,
+          amount: num(r.amount),
+          cnt: num(r.cnt),
+        })),
+        totals: {
+          amount: num(totRow.amount),
+          count: num(totRow.cnt),
+        },
+      },
+    });
+  } catch (err) {
+    console.error("getInvoiceMixReport", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+}
+
 async function exportReportCsv(req, res) {
   try {
-    const tenantId = tenantIdFromReq(req);
-    if (!tenantId) return res.status(400).json({ success: false, message: "tenant_id is required" });
-
     const type = String(req.params.type || "").toLowerCase();
     const { from, to } = rangeFromReq(req);
     const exports = {
       leads: {
         sql: `SELECT id, name, company_name, phone, email, source, status, created_at
               FROM leads
-              WHERE tenant_id = ? AND is_deleted = 0
+              WHERE 1=1
                 AND (? IS NULL OR created_at >= ?)
                 AND (? IS NULL OR created_at <= ?)
               ORDER BY created_at DESC`,
-        params: [tenantId, from, from, to, to],
+        params: [from, from, to, to],
         headers: ["id", "name", "company_name", "phone", "email", "source", "status", "created_at"],
       },
       contacts: {
         sql: `SELECT id, company_name, contact_name, designation, department, email, phone, city, state, created_at
               FROM contacts
-              WHERE tenant_id = ?
-                AND (? IS NULL OR created_at >= ?)
+              WHERE (? IS NULL OR created_at >= ?)
                 AND (? IS NULL OR created_at <= ?)
               ORDER BY created_at DESC`,
-        params: [tenantId, from, from, to, to],
+        params: [from, from, to, to],
         headers: ["id", "company_name", "contact_name", "designation", "department", "email", "phone", "city", "state", "created_at"],
       },
       tasks: {
         sql: `SELECT id, title, description, priority, status, due_date, created_at
               FROM tasks
-              WHERE tenant_id = ? AND is_deleted = 0
+              WHERE 1=1
                 AND (? IS NULL OR created_at >= ?)
                 AND (? IS NULL OR created_at <= ?)
               ORDER BY created_at DESC`,
-        params: [tenantId, from, from, to, to],
+        params: [from, from, to, to],
         headers: ["id", "title", "description", "priority", "status", "due_date", "created_at"],
       },
       invoices: {
         sql: `SELECT id, invoice_number, type, customer_name, invoice_date, due_date, total, status, created_at
               FROM invoices
-              WHERE tenant_id = ? AND is_deleted = 0
+              WHERE 1=1
                 AND (? IS NULL OR created_at >= ?)
                 AND (? IS NULL OR created_at <= ?)
               ORDER BY created_at DESC`,
-        params: [tenantId, from, from, to, to],
+        params: [from, from, to, to],
         headers: ["id", "invoice_number", "type", "customer_name", "invoice_date", "due_date", "total", "status", "created_at"],
       },
     };
@@ -317,5 +342,6 @@ module.exports = {
   getConversionReport,
   getActivityReport,
   getRevenueReport,
+  getInvoiceMixReport,
   exportReportCsv,
 };

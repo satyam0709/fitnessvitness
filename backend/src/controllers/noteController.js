@@ -15,7 +15,6 @@ async function getNotes(req, res) {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
     const userIntId = req.user.id;
-    const tenantId = req.user?.tenantId || null;
 
     const rawLimit = req.query.limit;
     const paginated =
@@ -27,7 +26,7 @@ async function getNotes(req, res) {
 
     const baseFrom = `FROM notes n
        LEFT JOIN leads l ON l.id = n.lead_id
-       WHERE n.is_deleted = 0 AND n.created_by = ? AND (? IS NULL OR n.tenant_id = ?)`;
+       WHERE n.is_deleted = 0 AND n.created_by = ?`;
     const searchSql = searchPat
       ? ` AND (n.content LIKE ? OR n.title LIKE ? OR l.name LIKE ?)`
       : "";
@@ -39,7 +38,7 @@ async function getNotes(req, res) {
          ${baseFrom}
          ${searchSql}
          ORDER BY n.created_at DESC`,
-        [userIntId, tenantId, tenantId, ...searchParams]
+        [userIntId, ...searchParams]
       );
       return res.json({
         success: true,
@@ -53,13 +52,12 @@ async function getNotes(req, res) {
     const limit = Math.min(100, Math.max(1, parseInt(String(rawLimit), 10) || 10));
     const page = Math.max(1, parseInt(String(req.query.page), 10) || 1);
     const offset = (page - 1) * limit;
-    /* LIMIT/OFFSET as ? placeholders breaks on many MySQL/MariaDB + mysql2 setups. */
     const lim = Number.isFinite(limit) ? Math.floor(limit) : 10;
     const off = Number.isFinite(offset) ? Math.floor(offset) : 0;
 
     const [[{ total: totalRaw }]] = await pool.execute(
       `SELECT COUNT(*) as total ${baseFrom} ${searchSql}`,
-      [userIntId, tenantId, tenantId, ...searchParams]
+      [userIntId, ...searchParams]
     );
     const total = Number(totalRaw) || 0;
 
@@ -69,7 +67,7 @@ async function getNotes(req, res) {
        ${searchSql}
        ORDER BY n.created_at DESC
        LIMIT ${lim} OFFSET ${off}`,
-      [userIntId, tenantId, tenantId, ...searchParams]
+      [userIntId, ...searchParams]
     );
 
     res.json({
@@ -90,7 +88,6 @@ async function createNote(req, res) {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
     const userIntId = req.user.id;
-    const tenantId = req.user?.tenantId || null;
 
     const { title, content, lead_id } = req.body;
 
@@ -99,15 +96,15 @@ async function createNote(req, res) {
     }
 
     const [result] = await pool.execute(
-      "INSERT INTO notes (tenant_id, created_by, title, content, lead_id) VALUES (?, ?, ?, ?, ?)",
-      [tenantId, userIntId, title || null, content, lead_id || null]
+      "INSERT INTO notes (created_by, title, content, lead_id) VALUES (?, ?, ?, ?)",
+      [userIntId, title || null, content, lead_id || null]
     );
     const [[created]] = await pool.execute(
       `SELECT n.*, l.name as lead_name
        FROM notes n
        LEFT JOIN leads l ON l.id = n.lead_id
-       WHERE n.id = ? AND n.is_deleted = 0 AND (? IS NULL OR n.tenant_id = ?)`,
-      [result.insertId, tenantId, tenantId]
+       WHERE n.id = ? AND n.is_deleted = 0`,
+      [result.insertId]
     );
     emitNotesChanged({ scope: "notes", action: "create", id: result.insertId });
     emitAdminChanged({ scope: "stats", reason: "notes", action: "create" });
@@ -123,12 +120,11 @@ async function updateNote(req, res) {
     if (!noteId) return res.status(400).json({ success: false, message: "Invalid note id" });
 
     const userIntId = req.user?.id;
-    const tenantId = req.user?.tenantId || null;
     if (!userIntId) return res.status(401).json({ success: false, message: "Unauthorized" });
 
     const [[existing]] = await pool.execute(
-      "SELECT id, created_by, title, content FROM notes WHERE id = ? AND is_deleted = 0 AND (? IS NULL OR tenant_id = ?)",
-      [noteId, tenantId, tenantId]
+      "SELECT id, created_by, title, content FROM notes WHERE id = ? AND is_deleted = 0",
+      [noteId]
     );
     if (!existing) return res.status(404).json({ success: false, message: "Note not found" });
     if (existing.created_by !== userIntId) {
@@ -156,8 +152,8 @@ async function updateNote(req, res) {
       `SELECT n.*, l.name as lead_name
        FROM notes n
        LEFT JOIN leads l ON l.id = n.lead_id
-       WHERE n.id = ? AND n.is_deleted = 0 AND (? IS NULL OR n.tenant_id = ?)`,
-      [noteId, tenantId, tenantId]
+       WHERE n.id = ? AND n.is_deleted = 0`,
+      [noteId]
     );
     emitNotesChanged({ scope: "notes", action: "update", id: noteId });
     emitAdminChanged({ scope: "stats", reason: "notes", action: "update" });
@@ -173,12 +169,11 @@ async function deleteNote(req, res) {
     if (!noteId) return res.status(400).json({ success: false, message: "Invalid note id" });
 
     const userIntId = req.user?.id;
-    const tenantId = req.user?.tenantId || null;
     if (!userIntId) return res.status(401).json({ success: false, message: "Unauthorized" });
 
     const [[row]] = await pool.execute(
-      "SELECT id, created_by FROM notes WHERE id = ? AND is_deleted = 0 AND (? IS NULL OR tenant_id = ?)",
-      [noteId, tenantId, tenantId]
+      "SELECT id, created_by FROM notes WHERE id = ? AND is_deleted = 0",
+      [noteId]
     );
     if (!row) return res.status(404).json({ success: false, message: "Note not found" });
     if (row.created_by !== userIntId) {
@@ -186,8 +181,8 @@ async function deleteNote(req, res) {
     }
 
     await pool.execute(
-      "UPDATE notes SET is_deleted = 1, deleted_at = NOW(), updated_at = NOW() WHERE id = ? AND is_deleted = 0 AND (? IS NULL OR tenant_id = ?)",
-      [noteId, tenantId, tenantId]
+      "UPDATE notes SET is_deleted = 1, deleted_at = NOW(), updated_at = NOW() WHERE id = ? AND is_deleted = 0",
+      [noteId]
     );
     emitNotesChanged({ scope: "notes", action: "delete", id: noteId });
     emitAdminChanged({ scope: "stats", reason: "notes", action: "delete" });

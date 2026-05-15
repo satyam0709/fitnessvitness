@@ -49,12 +49,15 @@ async function markAllNotificationsRead(req, res) {
     const uid = Number(req.user?.id);
     if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
 
-    const [result] = await pool.query(`DELETE FROM notifications WHERE user_id = ?`, [uid]);
+    const [result] = await pool.query(
+      `UPDATE notifications SET is_read = 1, read_at = NOW() WHERE user_id = ? AND is_read = 0`,
+      [uid]
+    );
 
     emitNotificationReadState(uid, { unread: 0, readAll: true, cleared: true });
     res.json({
       success: true,
-      deleted: Number(result?.affectedRows) || 0,
+      updated: Number(result?.affectedRows) || 0,
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

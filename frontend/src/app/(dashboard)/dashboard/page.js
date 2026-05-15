@@ -5,8 +5,9 @@ import { useUser, useAuth } from "@/contexts/AuthContext";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { apiFetch, connectGlobalSocket } from "@/lib/api";
-import { getDashboardStats, getAllClients } from "@/lib/fitnessApi";
+import { getDashboardStats, getAllClients, importClientsExcel, exportClientsExcel, getTransactionSummaryYearly, getFitnessTransactionCharts } from "@/lib/fitnessApi";
 import { LeadStatusDonut, LeadSourceArea, ChartCardMenu } from "@/components/Dashboard/DashboardCharts";
+import { FitnessTransactionPies } from "@/components/FitnessTransactionPies/FitnessTransactionPies";
 import {
   useConfirmDialog,
   buildDeleteMessage,
@@ -137,7 +138,10 @@ export default function DashboardPage() {
     Number(user?.is_platform_admin) === 1 || Number(user?.isPlatformAdmin) === 1;
   const [stats, setStats] = useState(null);
   const [fitnessStats, setFitnessStats] = useState(null);
+  const [fitnessTxCharts, setFitnessTxCharts] = useState(null);
   const [fitnessLoading, setFitnessLoading] = useState(true);
+  const [importing, setImporting] = useState(false);
+  const fileInputRef = useRef(null);
   const [leads, setLeads] = useState([]);
   const [reminders, setReminders] = useState([]);
   const [meetings, setMeetings] = useState([]);
@@ -148,8 +152,10 @@ export default function DashboardPage() {
   const [statsError, setStatsError] = useState(null);
   const [dashboardError, setDashboardError] = useState(null);
   const [actionError, setActionError] = useState(null);
-  const [statsLoading, setStatsLoading] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [schedule, setSchedule] = useState([]);
+  const [scheduleLoading, setScheduleLoading] = useState(true);
   const [activeLeadTab, setActiveLeadTab] = useState("new");
   const [activeSchedTab, setActiveSchedTab] = useState("reminder");
   const [taskTab, setTaskTab] = useState("today");
@@ -305,8 +311,27 @@ export default function DashboardPage() {
     if (initDoneRef.current) return;
     initDoneRef.current = true;
     if (isSignedIn) {
-      fetchDashboard();
-      fetchStats();
+      const fetchSchedule = async () => {
+        try {
+          setScheduleLoading(true);
+          const today = new Date();
+          const from = today.toISOString().slice(0, 10);
+          const to = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+          const res = await apiFetch(`/calendar/feed?from=${from}&to=${to}`);
+          const json = await res.json().catch(() => ({}));
+          if (res.ok && json.success) {
+            setSchedule(Array.isArray(json.items) ? json.items : []);
+          }
+        } catch {
+          /* ignore */
+        } finally {
+          setScheduleLoading(false);
+        }
+      };
+      
+      void fetchDashboard();
+      void fetchStats();
+      void fetchSchedule();
       loadFitnessStats();
     }
   }, [isLoaded, isSignedIn, featuresLoading, isPlatformAdmin, fetchDashboard, fetchStats]);
@@ -315,14 +340,67 @@ export default function DashboardPage() {
   const loadFitnessStats = useCallback(async () => {
     setFitnessLoading(true);
     try {
-      const [stats, clients] = await Promise.all([getDashboardStats(), getAllClients()]);
-      // Get today's follow-ups: clients with next_due_date <= today
-      const today = new Date().toISOString().split("T")[0];
-      const todaysFollowups = clients.filter(c => c.next_due_date && c.next_due_date <= today && c.status === "Active");
-      setFitnessStats({ ...stats, todaysFollowups });
-    } catch { setFitnessStats(null); }
-    finally { setFitnessLoading(false); }
+      const y = new Date().getFullYear();
+      const mo = new Date().getMonth() + 1;
+      const da = new Date().getDate();
+      const pad = (n) => String(n).padStart(2, "0");
+      const date_from = `${y}-${pad(mo)}-01`;
+      const date_to = `${y}-${pad(mo)}-${pad(da)}`;
+
+      const [stats, financial, charts] = await Promise.all([
+        getDashboardStats(),
+        getTransactionSummaryYearly(),
+        getFitnessTransactionCharts({ date_from, date_to }).catch(() => null),
+      ]);
+      setFitnessStats({
+        ...stats,
+        monthly_revenue: financial.totals.received,
+        monthly_profit: financial.totals.profit,
+        total_pending: financial.totals.pending
+      });
+      setFitnessTxCharts(charts);
+    } catch (e) {
+      console.error("Fitness stats error:", e);
+      setFitnessStats(null);
+      setFitnessTxCharts(null);
+    } finally {
+      setFitnessLoading(false);
+    }
   }, []);
+
+  const handleImport = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    setImporting(true);
+    try {
+      const res = await importClientsExcel(formData);
+      let msg = `Import complete: ${res.importedCount} clients imported.`;
+      if (res.errors && res.errors.length > 0) {
+        msg += `\n\nErrors encountered:\n` + res.errors.join('\n');
+      }
+      alert(msg);
+      loadFitnessStats();
+    } catch (err) {
+      console.error("Import error:", err);
+      alert(err.message || "Failed to import clients");
+    } finally {
+      setImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const handleExport = async () => {
+    try {
+      await exportClientsExcel();
+    } catch (err) {
+      console.error("Export error:", err);
+      alert("Failed to export clients");
+    }
+  };
 
   useEffect(() => {
     if (isSignedIn && !isPlatformAdmin) loadFitnessStats();
@@ -375,12 +453,14 @@ export default function DashboardPage() {
       const onCalendar = () => { if (!cancelled) queueQuietDashboardRefresh(); };
       const onAccess = () => { if (!cancelled) queueQuietDashboardRefresh(); };
       const onOpps = () => { if (!cancelled) queueQuietDashboardRefresh(); };
+      const onFitness = () => { if (!cancelled) loadFitnessStats(); };
 
       s.on("todos:changed", onTodos);
       s.on("meetings:changed", onMeetings);
       s.on("calendar:changed", onCalendar);
       s.on("workspace:access", onAccess);
       s.on("opportunities:changed", onOpps);
+      s.on("fitness:changed", onFitness);
 
       return () => {
         s.off("todos:changed", onTodos);
@@ -388,6 +468,7 @@ export default function DashboardPage() {
         s.off("calendar:changed", onCalendar);
         s.off("workspace:access", onAccess);
         s.off("opportunities:changed", onOpps);
+        s.off("fitness:changed", onFitness);
       };
     }
 
@@ -452,12 +533,31 @@ export default function DashboardPage() {
       icon: "fa-share",
     },
     {
-      label: "Today's Tasks",
-      value: ts?.tasks_today ?? stats?.todayTasks ?? 0,
-      sub: `${ts?.tasks_completed ?? stats?.taskCompleted ?? 0} Completed`,
-      subNote: stats?.taskTotal != null ? `of ${stats.taskTotal} due today` : "",
-      progress: Number(stats?.taskProgress ?? 0),
-      progressLabel: "Completed Task",
+      label: "Active Clients",
+      value: fitnessStats?.active_clients ?? 0,
+      sub: `${fitnessStats?.expiring_soon ?? 0} Expiring Soon`,
+      subNote: fitnessStats?.need_attention ? `${fitnessStats.need_attention} Need Attention` : "",
+      progress: fitnessStats?.active_clients > 0 ? ((fitnessStats.active_clients - fitnessStats.need_attention) / fitnessStats.active_clients) * 100 : 100,
+      progressLabel: "Client Health",
+      color: "#10b981",
+      icon: "fa-users",
+    },
+    {
+      label: "Consultations",
+      value: fitnessStats?.monthly_consultations ?? 0,
+      sub: "This Month",
+      subNote: "Goal: 20",
+      progress: Math.min(100, ((fitnessStats?.monthly_consultations ?? 0) / 20) * 100),
+      progressLabel: "Monthly Goal",
+      color: "#8b5cf6",
+      icon: "fa-stethoscope",
+    },
+    {
+      label: "Today's Activities",
+      value: stats?.open?.activities ?? 0,
+      sub: `${stats?.open?.calls ?? 0} Pending Calls`,
+      progress: Number(stats?.result?.tasks?.completion_rate ?? 0),
+      progressLabel: "Activity Progress",
       color: "#f97316",
       icon: "fa-list-check",
     },
@@ -669,171 +769,117 @@ export default function DashboardPage() {
         </div>
       ) : null}
 
-      <div className={styles.oprGrid}>
-        <div className={styles.oprCard}>
-          <div className={styles.oprCardHeader}>
-            <h2 className={styles.oprTitle}>Open</h2>
+      <div className={styles.fitnessCRMCard}>
+        <div className={styles.fitnessHeader}>
+          <div className={styles.fitnessTitleGroup}>
+            <i className={`fas fa-dumbbell ${styles.fitnessIcon}`} />
+            <h2 className={styles.fitnessTitle}>Fitness CRM Dashboard</h2>
           </div>
-          <div className={`${styles.oprBody} ${styles.oprBodyGrid} ${styles.oprBodyGridTwoCol}`}>
-            {openCards.reduce((pairs, _, idx, arr) => {
-              if (idx % 2 === 0) pairs.push([arr[idx], arr[idx + 1]].filter(Boolean));
-              return pairs;
-            }, []).map((pair) => (
-              <DashboardOprPairBlock
-                key={`${pair[0]?.label}-${pair[1]?.label || "single"}`}
-                left={pair[0]}
-                right={pair[1]}
-                loading={statsLoading}
-              />
-            ))}
+          <div className={styles.fitnessActions}>
+            <button 
+              onClick={() => fileInputRef.current?.click()} 
+              className={styles.fitnessBtn}
+              disabled={importing}
+            >
+              <i className={importing ? "fas fa-spinner fa-spin" : "fas fa-file-import"} />
+              {importing ? "Importing..." : "Import Excel"}
+            </button>
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              style={{ display: "none" }} 
+              accept=".xlsx,.xls" 
+              onChange={handleImport}
+            />
+            <button onClick={handleExport} className={styles.fitnessBtn}>
+              <i className="fas fa-file-export" /> Export
+            </button>
+            <Link href="/clients" className={styles.fitnessBtn}>
+              <i className="fas fa-users" /> View Clients
+            </Link>
+            <Link href="/business-tracker" className={styles.fitnessBtn}>
+              <i className="fas fa-chart-line" /> Business Tracker
+            </Link>
           </div>
+        </div>
+        <div className={styles.fitnessStatsGrid}>
+          <Link href="/clients?status=Active" className={styles.fitnessStatItem}>
+            <div className={styles.fitnessStatValue}>
+              {fitnessLoading ? <span className={styles.skeleton} style={{ width: 40, height: 40 }} /> : (fitnessStats?.active_clients || 0)}
+            </div>
+            <div className={styles.fitnessStatLabel}>Active Clients</div>
+          </Link>
+          <Link href="/clients?filter=overdue" className={styles.fitnessStatItem}>
+            <div className={styles.fitnessStatValue} style={{ color: "#ef4444" }}>
+              {fitnessLoading ? <span className={styles.skeleton} style={{ width: 40, height: 40 }} /> : (fitnessStats?.overdue_followups || 0)}
+            </div>
+            <div className={styles.fitnessStatLabel}>Overdue Follow Ups</div>
+          </Link>
+          <Link href="/clients?filter=expiring" className={styles.fitnessStatItem}>
+            <div className={styles.fitnessStatValue} style={{ color: "#f59e0b" }}>
+              {fitnessLoading ? <span className={styles.skeleton} style={{ width: 40, height: 40 }} /> : (fitnessStats?.expiring_soon || 0)}
+            </div>
+            <div className={styles.fitnessStatLabel}>Plans Expiring Soon</div>
+          </Link>
+          <Link href="/clients?filter=attention" className={styles.fitnessStatItem}>
+            <div className={styles.fitnessStatValue} style={{ color: "#8b5cf6" }}>
+              {fitnessLoading ? <span className={styles.skeleton} style={{ width: 40, height: 40 }} /> : (fitnessStats?.need_attention || 0)}
+            </div>
+            <div className={styles.fitnessStatLabel}>Need Attention</div>
+          </Link>
+          <Link href="/clients?filter=High Risk" className={styles.fitnessStatItem}>
+            <div className={styles.fitnessStatValue} style={{ color: "#ef4444" }}>
+              {fitnessLoading ? <span className={styles.skeleton} style={{ width: 40, height: 40 }} /> : (fitnessStats?.high_risk_clients || 0)}
+            </div>
+            <div className={styles.fitnessStatLabel}>High Risk Clients</div>
+          </Link>
+          <Link href="/clients?status=Hold" className={styles.fitnessStatItem}>
+            <div className={styles.fitnessStatValue} style={{ color: "#64748b" }}>
+              {fitnessLoading ? <span className={styles.skeleton} style={{ width: 40, height: 40 }} /> : (fitnessStats?.on_hold || 0)}
+            </div>
+            <div className={styles.fitnessStatLabel}>On Hold</div>
+          </Link>
         </div>
 
-        <div className={styles.oprCard}>
-          <div className={styles.oprCardHeader}>
-            <h2 className={styles.oprTitle}>Periodic</h2>
-            <span className={styles.oprDate}>
-              Today ({stats?.periodic?.date || new Date().toLocaleDateString("en-GB")})
-            </span>
+        {/* Financial Quick Summary */}
+        <div className={styles.financialStrip}>
+          <div className={styles.finItem}>
+            <span className={styles.finLabel}>Monthly Revenue</span>
+            <span className={styles.finValue}>{fmtInrPill(fitnessStats?.monthly_revenue || 0)}</span>
           </div>
-          <div className={`${styles.oprBody} ${styles.oprBodyGrid} ${styles.oprBodyGridTwoCol}`}>
-            {periodicCards.reduce((pairs, _, idx, arr) => {
-              if (idx % 2 === 0) pairs.push([arr[idx], arr[idx + 1]].filter(Boolean));
-              return pairs;
-            }, []).map((pair) => (
-              <DashboardOprPairBlock
-                key={`${pair[0]?.label}-${pair[1]?.label || "single"}`}
-                left={pair[0]}
-                right={pair[1]}
-                loading={statsLoading}
-              />
-            ))}
+          <div className={styles.finItem}>
+            <span className={styles.finLabel}>Monthly Profit</span>
+            <span className={styles.finValue} style={{color: "#10b981"}}>{fmtInrPill(fitnessStats?.monthly_profit || 0)}</span>
           </div>
+          <div className={styles.finItem}>
+            <span className={styles.finLabel}>Total Pending</span>
+            <span className={styles.finValue} style={{color: "#ef4444"}}>{fmtInrPill(fitnessStats?.total_pending || 0)}</span>
+          </div>
+          <Link href="/business-tracker" className={styles.finLink}>Full Report <i className="fas fa-chevron-right" /></Link>
         </div>
 
-        <div className={styles.oprCard}>
-          <div className={styles.oprCardHeader}>
-            <h2 className={styles.oprTitle}>Result</h2>
-            <span className={styles.oprDate}>
-              Today ({stats?.result?.date || new Date().toLocaleDateString("en-GB")})
-            </span>
-          </div>
-          <div className={`${styles.oprBody} ${styles.oprBodyGrid}`}>
-            <DashboardOprMiniCard
-              href="/tickets?status=closed"
-              label="Closed Tickets"
-              value={stats?.result?.closed_tickets ?? 0}
-              loading={statsLoading}
-              valueClassName={
-                !statsLoading && (stats?.result?.closed_tickets ?? 0) > 0 ? styles.oprStrongDanger : undefined
-              }
-            />
-            <div className={styles.oprResultOppBlock}>
-              <div className={styles.oprResultOppHead}>
-                <span className={styles.oprResultOppHeadTitle}>
-                  Opportunities ({statsLoading ? "—" : opportunityResultPanel.totalClosed})
-                </span>
-                {statsLoading ? (
-                  <span className={styles.skeleton} style={{ width: 56, height: 22 }} />
-                ) : (
-                  <span className={styles.oprResultOppHeadPill}>
-                    {fmtInrPill(opportunityResultPanel.totalInr)}
-                  </span>
-                )}
-              </div>
-              <div className={styles.oprResultOppCols}>
-                <Link href="/opportunities?stage=closed_won" className={styles.oprResultOppCol}>
-                  <span
-                    className={`${styles.oprResultOppMoney} ${styles.oprResultOppMoneyWon}`}
-                  >
-                    {statsLoading ? (
-                      <span className={styles.skeleton} style={{ display: "inline-block", width: 52, height: 16 }} />
-                    ) : (
-                      fmtInrPill(opportunityResultPanel.wonVal)
-                    )}
-                  </span>
-                  <span className={styles.oprResultOppColLabel}>Closed Won</span>
-                  <div className={styles.oprResultOppColValue}>
-                    {statsLoading ? (
-                      <span className={styles.skeleton} style={{ display: "inline-block", width: 36, height: 24 }} />
-                    ) : (
-                      opportunityResultPanel.won
-                    )}
-                  </div>
-                </Link>
-                <Link href="/opportunities?stage=closed_lost" className={styles.oprResultOppCol}>
-                  <span
-                    className={`${styles.oprResultOppMoney} ${styles.oprResultOppMoneyLost}`}
-                  >
-                    {statsLoading ? (
-                      <span className={styles.skeleton} style={{ display: "inline-block", width: 52, height: 16 }} />
-                    ) : (
-                      fmtInrPill(opportunityResultPanel.lostVal)
-                    )}
-                  </span>
-                  <span className={styles.oprResultOppColLabel}>Closed Lost</span>
-                  <div className={styles.oprResultOppColValue}>
-                    {statsLoading ? (
-                      <span className={styles.skeleton} style={{ display: "inline-block", width: 36, height: 24 }} />
-                    ) : (
-                      opportunityResultPanel.lost
-                    )}
-                  </div>
-                </Link>
-              </div>
+        {/* Proactive Alerts Section */}
+        {fitnessStats?.proactive_alerts?.length > 0 && (
+          <div className={styles.fitnessAlertsSection}>
+            <div className={styles.fitnessAlertsHeader}>
+              <i className="fas fa-bell-on" style={{ color: '#ef4444' }} />
+              <span>Critical Action Required</span>
             </div>
-            <div className={styles.oprGroup}>
-              <div className={styles.oprGroupTitle}>
-                Leads ({statsLoading ? "—" : leadResultTotal})
-              </div>
-              <div className={styles.oprSplit}>
-                <Link href="/leads?status=confirm" className={styles.oprLinkLabel}>
-                  <span className={`${styles.oprStatusBadge} ${styles.oprBadgeConverted}`}>Converted</span>
-                </Link>
-                <strong>
-                  {statsLoading ? (
-                    <span className={styles.skeleton} style={{ display: "inline-block", width: 36, height: 18 }} />
-                  ) : (
-                    stats?.result?.leads?.converted ?? 0
-                  )}
-                </strong>
-              </div>
-              <div className={styles.oprSplit}>
-                <Link href="/leads?status=processing" className={styles.oprLinkLabel}>Recycled</Link>
-                <strong>
-                  {statsLoading ? (
-                    <span className={styles.skeleton} style={{ display: "inline-block", width: 36, height: 18 }} />
-                  ) : (
-                    stats?.result?.leads?.recycled ?? 0
-                  )}
-                </strong>
-              </div>
-              <div className={styles.oprSplit}>
-                <Link href="/leads?status=cancel" className={styles.oprLinkLabel}>
-                  <span className={`${styles.oprStatusBadge} ${styles.oprBadgeDead}`}>Dead</span>
-                </Link>
-                <strong>
-                  {statsLoading ? (
-                    <span className={styles.skeleton} style={{ display: "inline-block", width: 36, height: 18 }} />
-                  ) : (
-                    stats?.result?.leads?.dead ?? 0
-                  )}
-                </strong>
-              </div>
+            <div className={styles.fitnessAlertsGrid}>
+              {fitnessStats.proactive_alerts.map(alert => (
+                <div key={alert.id} className={styles.fitnessAlertItem}>
+                  <div className={styles.fitnessAlertIcon}>
+                    <i className={alert.entity_type === 'fitness_expiry' ? "fas fa-clock" : "fas fa-calendar-exclamation"} />
+                  </div>
+                  <div className={styles.fitnessAlertContent}>
+                    <div className={styles.fitnessAlertTitle}>{alert.title}</div>
+                    <div className={styles.fitnessAlertBody}>{alert.body}</div>
+                  </div>
+                </div>
+              ))}
             </div>
-            <DashboardOprMiniCard
-              href="/tasks?status=completed"
-              label="Completed Activities"
-              value={stats?.result?.completed_activities ?? 0}
-              loading={statsLoading}
-              valueClassName={
-                !statsLoading && (stats?.result?.completed_activities ?? 0) > 0
-                  ? styles.oprStrongDanger
-                  : undefined
-              }
-            />
           </div>
-        </div>
+        )}
       </div>
 
       <div className={styles.statsGrid}>
@@ -889,58 +935,48 @@ export default function DashboardPage() {
         ))}
       </div>
 
-      {/* Fitness CRM Widget */}
-      <div className={styles.panel}>
+
+      {/* Schedule */}
+      <div className={`${styles.panel} ${styles.tasksPanel}`}>
         <div className={styles.panelHeader}>
           <h2 className={styles.panelTitle}>
-            <i className="fas fa-heart-pulse" /> Fitness CRM
+            <i className="fas fa-calendar-alt" /> Upcoming Schedule
           </h2>
-          <div className={styles.tabGroup}>
-            <Link href="/clients" className={styles.tabLink}>View Clients</Link>
-            <Link href="/business-tracker" className={styles.tabLink}>Business Tracker</Link>
-          </div>
+          <Link href="/calendar" className={styles.viewAllBtn}>View Calendar</Link>
         </div>
-        <div className={styles.fitnessWidget}>
-          <div className={styles.fitnessStatsRow}>
-            <div className={styles.fitnessStat}>
-              <span className={styles.fitnessStatValue}>{fitnessLoading ? "—" : fitnessStats?.active_clients ?? 0}</span>
-              <span className={styles.fitnessStatLabel}>Active Clients</span>
+        <div className={styles.panelBody}>
+          {scheduleLoading ? (
+            <div className={styles.emptyState}>
+              <div className={styles.spinnerRing} />
+              <span>Loading schedule…</span>
             </div>
-            <div className={`${styles.fitnessStat} ${(fitnessStats?.overdue_followups ?? 0) > 0 ? styles.fitnessStatDanger : ""}`}>
-              <span className={styles.fitnessStatValue}>{fitnessLoading ? "—" : fitnessStats?.overdue_followups ?? 0}</span>
-              <span className={styles.fitnessStatLabel}>Overdue Follow-ups</span>
+          ) : schedule.length === 0 ? (
+            <div className={styles.emptyState}>
+              <i className="fas fa-calendar-day" style={{ fontSize: 40, opacity: 0.15 }} />
+              <span>No events scheduled for this week</span>
             </div>
-            <div className={`${styles.fitnessStat} ${(fitnessStats?.expiring_soon ?? 0) > 0 ? styles.fitnessStatWarning : ""}`}>
-              <span className={styles.fitnessStatValue}>{fitnessLoading ? "—" : fitnessStats?.expiring_soon ?? 0}</span>
-              <span className={styles.fitnessStatLabel}>Plans Expiring Soon</span>
-            </div>
-            <div className={`${styles.fitnessStat} ${(fitnessStats?.need_attention ?? 0) > 0 ? styles.fitnessStatWarning : ""}`}>
-              <span className={styles.fitnessStatValue}>{fitnessLoading ? "—" : fitnessStats?.need_attention ?? 0}</span>
-              <span className={styles.fitnessStatLabel}>Need Attention</span>
-            </div>
-            <div className={styles.fitnessStat}>
-              <span className={styles.fitnessStatValue}>{fitnessLoading ? "—" : fitnessStats?.on_hold ?? 0}</span>
-              <span className={styles.fitnessStatLabel}>On Hold</span>
-            </div>
-          </div>
-          {fitnessStats?.todaysFollowups?.length > 0 && (
-            <div className={styles.fitnessFollowups}>
-              <h3 className={styles.fitnessFollowupsTitle}>Today's Follow-ups</h3>
-              <div className={styles.fitnessFollowupsList}>
-                {fitnessStats.todaysFollowups.slice(0, 8).map(c => (
-                  <Link key={c.client_id} href={`/clients/${c.client_id}`} className={styles.fitnessFollowupItem}>
-                    <span className={styles.fitnessFollowupName}>{c.full_name}</span>
-                    <span className={styles.fitnessFollowupDue}>{c.next_due_date}</span>
-                    <span className={`${styles.fitnessFollowupStatus} ${c.progress === "Very Poor" || c.progress === "Poor" ? styles.fitnessFollowupDanger : ""}`}>{c.progress}</span>
-                  </Link>
-                ))}
-              </div>
+          ) : (
+            <div className={styles.taskList}>
+              {schedule.slice(0, 8).map((it) => {
+                const isToday = it.start.slice(0, 10) === new Date().toISOString().slice(0, 10);
+                const timeStr = new Date(it.start).toLocaleTimeString("en-IN", { hour: '2-digit', minute: '2-digit' });
+                return (
+                  <div key={it.id} className={styles.taskRow}>
+                    <div className={styles.scheduleDot} style={{ background: it.type === 'meeting' ? '#ef4444' : it.type === 'fitness' ? '#10b981' : '#f97316' }} />
+                    <div className={styles.taskMain}>
+                      <span className={styles.taskTitle}>{it.title}</span>
+                      <div className={styles.taskMeta}>
+                        {isToday ? "Today" : new Date(it.start).toLocaleDateString("en-IN")} at {timeStr}
+                        {it.description ? ` · ${it.description}` : ""}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
       </div>
-
-      {/* Tasks */}
       <div className={`${styles.panel} ${styles.tasksPanel}`}>
         <div className={styles.panelHeader}>
           <h2 className={styles.panelTitle}>
@@ -1164,64 +1200,40 @@ export default function DashboardPage() {
         <div className={styles.panel}>
           <div className={styles.panelHeader}>
             <h2 className={styles.panelTitle}>
-              <i className="fas fa-filter" /> Leads
+              <i className="fas fa-stethoscope" /> Recent Consultations
             </h2>
-            <div className={styles.tabGroup}>
-              {["new", "processing", "close_by"].map((t) => (
-                <button
-                  key={t}
-                  type="button"
-                  className={`${styles.tabBtn} ${activeLeadTab === t ? styles.tabBtnActive : ""}`}
-                  onClick={() => setActiveLeadTab(t)}
-                >
-                  {t === "new" ? "New" : t === "processing" ? "Processing" : "Close-by"}{" "}
-                  ({leads.filter((l) => normLeadStatus(l) === t).length})
-                </button>
-              ))}
-            </div>
+            <Link href="/consultations" className={styles.viewAllBtn}>View All</Link>
           </div>
 
           <div className={styles.panelBody}>
             {loading ? (
               <div className={styles.emptyState}>
                 <div className={styles.spinnerRing} />
-                <span>Loading leads…</span>
-              </div>
-            ) : filteredLeads.length === 0 ? (
-              <div className={styles.emptyState}>
-                <i className="fas fa-filter" style={{ fontSize: 40, opacity: 0.15 }} />
-                <span>There Are No Leads to Display</span>
+                <span>Loading consultations…</span>
               </div>
             ) : (
               <table className={styles.table}>
                 <thead>
                   <tr>
-                    <th>Name</th>
-                    <th>Phone</th>
-                    <th>Source</th>
-                    <th>Assigned</th>
                     <th>Date</th>
+                    <th>Client</th>
+                    <th>Type</th>
+                    <th>Weight</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredLeads.slice(0, 8).map((lead) => (
-                    <tr key={lead.id}>
-                      <td>
-                        <Link href={`/leads/${lead.id}`} className={styles.leadName}>
-                          {lead.name}
-                        </Link>
-                        {lead.company_name && (
-                          <span className={styles.leadCompany}>{lead.company_name}</span>
-                        )}
-                      </td>
-                      <td>{lead.phone}</td>
-                      <td>
-                        <span className={styles.sourceBadge}>{lead.source}</span>
-                      </td>
-                      <td>{lead.assigned_name || "—"}</td>
-                      <td>{new Date(lead.created_at).toLocaleDateString("en-IN")}</td>
+                  {/* We would fetch these specifically, but for now we'll use the schedule feed if it has consultations */}
+                  {schedule.filter(s => s.description?.includes('Consultation')).slice(0, 8).map((s) => (
+                    <tr key={s.id}>
+                      <td>{new Date(s.start).toLocaleDateString("en-IN")}</td>
+                      <td>{s.title.replace('Consultation: ', '')}</td>
+                      <td><span className={styles.sourceBadge}>Review</span></td>
+                      <td>-</td>
                     </tr>
                   ))}
+                  {schedule.filter(s => s.description?.includes('Consultation')).length === 0 && (
+                    <tr><td colSpan="4" className={styles.emptyRow}>No recent consultations</td></tr>
+                  )}
                 </tbody>
               </table>
             )}
@@ -1231,30 +1243,10 @@ export default function DashboardPage() {
         <div className={styles.panel}>
           <div className={styles.panelHeader}>
             <h2 className={styles.panelTitle}>
-              <i className="fas fa-bell" /> Schedules
+              <i className="fas fa-flag-checkered" /> Fitness Milestones
             </h2>
             <div className={styles.tabGroup}>
-              <button
-                type="button"
-                className={`${styles.tabBtn} ${activeSchedTab === "reminder" ? styles.tabBtnActive : ""}`}
-                onClick={() => setActiveSchedTab("reminder")}
-              >
-                Reminder ({reminders.length})
-              </button>
-              <button
-                type="button"
-                className={`${styles.tabBtn} ${activeSchedTab === "meeting" ? styles.tabBtnActive : ""}`}
-                onClick={() => setActiveSchedTab("meeting")}
-              >
-                Meeting ({todayMeetings.length})
-              </button>
-              <button
-                type="button"
-                className={`${styles.tabBtn} ${activeSchedTab === "events" ? styles.tabBtnActive : ""}`}
-                onClick={() => setActiveSchedTab("events")}
-              >
-                Events ({eventMeetings.length})
-              </button>
+              <button className={styles.tabBtnActive}>Upcoming</button>
             </div>
           </div>
 
@@ -1262,110 +1254,38 @@ export default function DashboardPage() {
             {loading ? (
               <div className={styles.emptyState}>
                 <div className={styles.spinnerRing} />
-                <span>Loading schedules…</span>
-              </div>
-            ) : activeSchedTab === "reminder" ? (
-              reminders.length === 0 ? (
-                <div className={styles.emptyState}>
-                  <i className="fas fa-bell" style={{ fontSize: 40, opacity: 0.15 }} />
-                  <span>There Are No Schedules to Display</span>
-                </div>
-              ) : (
-                <div className={styles.schedList}>
-                  {reminders.slice(0, 8).map((r) => (
-                    <div
-                      key={r.id}
-                      className={`${styles.schedItem} ${r.is_done ? styles.schedDone : ""}`}
-                    >
-                      <div
-                        className={styles.schedIcon}
-                        style={{ background: "#f9731620", color: "#f97316" }}
-                      >
-                        <i className="fas fa-bell" />
-                      </div>
-                      <div className={styles.schedInfo}>
-                        <span className={styles.schedTitle}>{r.title}</span>
-                        <span className={styles.schedTime}>
-                          {new Date(r.remind_at).toLocaleString("en-IN", {
-                            day: "2-digit",
-                            month: "short",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                        </span>
-                      </div>
-                      {r.is_done && <span className={styles.donePill}>Done</span>}
-                    </div>
-                  ))}
-                </div>
-              )
-            ) : activeSchedTab === "meeting" ? (
-              todayMeetings.length === 0 ? (
-                <div className={styles.emptyState}>
-                  <i className="fas fa-video" style={{ fontSize: 40, opacity: 0.15 }} />
-                  <span>There Are No Meetings to Display</span>
-                </div>
-              ) : (
-                <div className={styles.schedList}>
-                  {todayMeetings.slice(0, 8).map((m) => (
-                    <div key={m.id} className={styles.schedItem}>
-                      <div
-                        className={styles.schedIcon}
-                        style={{ background: "#06b6d420", color: "#06b6d4" }}
-                      >
-                        <i className="fas fa-video" />
-                      </div>
-                      <div className={styles.schedInfo}>
-                        <span className={styles.schedTitle}>{m.title}</span>
-                        <span className={styles.schedTime}>
-                          {new Date(m.start_time).toLocaleString("en-IN", {
-                            day: "2-digit",
-                            month: "short",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })}
-                          {m.location && ` · ${m.location}`}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )
-            ) : eventMeetings.length === 0 ? (
-              <div className={styles.emptyState}>
-                <i className="fas fa-calendar" style={{ fontSize: 40, opacity: 0.15 }} />
-                <span>There Are No Events to Display</span>
+                <span>Loading milestones…</span>
               </div>
             ) : (
               <div className={styles.schedList}>
-                {eventMeetings.slice(0, 8).map((m) => (
+                {schedule.filter(s => s.type === 'fitness').slice(0, 8).map((m) => (
                   <div key={m.id} className={styles.schedItem}>
                     <div
                       className={styles.schedIcon}
-                      style={{ background: "rgba(245, 196, 0, 0.15)", color: "#d4a900" }}
+                      style={{ background: "#10b98120", color: "#10b981" }}
                     >
-                      <i className="fas fa-calendar-check" />
+                      <i className="fas fa-star" />
                     </div>
                     <div className={styles.schedInfo}>
                       <span className={styles.schedTitle}>{m.title}</span>
                       <span className={styles.schedTime}>
-                        {new Date(m.start_time).toLocaleString("en-IN", {
-                          weekday: "short",
-                          day: "2-digit",
-                          month: "short",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                        {m.location && ` · ${m.location}`}
+                        {new Date(m.start).toLocaleDateString("en-IN")} · {m.description}
                       </span>
                     </div>
                   </div>
                 ))}
+                {schedule.filter(s => s.type === 'fitness').length === 0 && (
+                  <div className={styles.emptyState}>No milestones this week</div>
+                )}
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {!isPlatformAdmin ? (
+        <FitnessTransactionPies data={fitnessTxCharts} loading={fitnessLoading} />
+      ) : null}
 
       {noteModal && (
         <div
