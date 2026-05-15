@@ -340,7 +340,7 @@ async function loadDashboardPanels(req) {
     ),
     pool.execute(
       `SELECT COALESCE(SUM(
-          CASE WHEN UPPER(COALESCE(o.currency,'INR')) = 'INR' THEN o.amount ELSE 0 END
+          CASE WHEN UPPER(COALESCE(o.currency,'INR')) = 'INR' THEN COALESCE(o.final_amount, o.amount) ELSE 0 END
         ), 0) AS s
        FROM opportunities o
        WHERE ${os.where}

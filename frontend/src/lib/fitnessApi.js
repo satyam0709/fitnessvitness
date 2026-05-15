@@ -248,6 +248,26 @@ export async function getAllTransactions(filters = {}) {
   return handleResponse(res);
 }
 
+/** @param {{ date_from?: string, date_to?: string }} params — YYYY-MM-DD optional */
+export async function getExternalStats(params = {}) {
+  const res = await apiFetch(`/fitness/external/stats${getParams(params)}`);
+  return handleResponse(res);
+}
+
+/** @param {{ limit?: number, offset?: number }} params */
+export async function getExternalBuyers(params = {}) {
+  const res = await apiFetch(`/fitness/external/buyers${getParams(params)}`);
+  return handleResponse(res);
+}
+
+export async function searchExternalBuyers(q) {
+  if (!q || String(q).trim().length < 2) return [];
+  const res = await apiFetch(
+    `/fitness/external/buyers/search?q=${encodeURIComponent(String(q).trim())}`
+  );
+  return handleResponse(res);
+}
+
 export async function getClientTransactions(clientId) {
   const res = await apiFetch(`/fitness/clients/${encodeURIComponent(clientId)}/transactions`);
   return handleResponse(res);

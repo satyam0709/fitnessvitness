@@ -19,6 +19,7 @@ export const PROTECTED_PREFIXES = [
   "/profile",
   "/clients",
   "/business-tracker",
+  "/external-sales",
   "/analytics",
   "/consultations",
   "/meal-plans",

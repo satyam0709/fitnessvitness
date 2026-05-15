@@ -2,7 +2,7 @@ const { mainPool: pool } = require("./database");
 const { INTEGRATIONS } = require("./integrationsCatalog");
 
 let schemaEnsured = false;
-const CURRENT_SCHEMA_VERSION = 6;
+const CURRENT_SCHEMA_VERSION = 9;
 
 async function ensureSchema() {
   if (schemaEnsured) return;
@@ -247,7 +247,7 @@ async function ensureSchema() {
       owner_user_id       INT UNSIGNED DEFAULT NULL,
       created_by          INT UNSIGNED DEFAULT NULL,
       notes               TEXT DEFAULT NULL,
-      product_category    ENUM('Hardware','Software','Services') DEFAULT NULL,
+      product_category    VARCHAR(80) DEFAULT NULL,
       quantity            INT UNSIGNED NOT NULL DEFAULT 0,
       external_quotation_url VARCHAR(500) DEFAULT NULL,
       followup_at         DATETIME DEFAULT NULL,
@@ -268,7 +268,7 @@ async function ensureSchema() {
   `);
 
   const opportunityExtraColumns = [
-    { column: "product_category", definition: "ENUM('Hardware','Software','Services') DEFAULT NULL" },
+    { column: "product_category", definition: "VARCHAR(80) DEFAULT NULL" },
     { column: "quantity", definition: "INT UNSIGNED NOT NULL DEFAULT 0" },
     { column: "external_quotation_url", definition: "VARCHAR(500) DEFAULT NULL" },
     { column: "followup_at", definition: "DATETIME DEFAULT NULL" },
@@ -277,6 +277,12 @@ async function ensureSchema() {
     { column: "lead_source", definition: "VARCHAR(80) DEFAULT NULL" },
     { column: "team", definition: "VARCHAR(160) DEFAULT NULL" },
     { column: "comments_history", definition: "TEXT DEFAULT NULL" },
+    { column: "consultation_at", definition: "DATETIME DEFAULT NULL" },
+    { column: "consultation_notes", definition: "TEXT DEFAULT NULL" },
+    { column: "closed_won_at", definition: "DATETIME DEFAULT NULL" },
+    { column: "final_amount", definition: "DECIMAL(12,2) DEFAULT NULL" },
+    { column: "closed_lost_at", definition: "DATETIME DEFAULT NULL" },
+    { column: "loss_reason", definition: "VARCHAR(255) DEFAULT NULL" },
   ];
   for (const { column, definition } of opportunityExtraColumns) {
     const [cols] = await pool.execute(
@@ -293,13 +299,56 @@ async function ensureSchema() {
     await pool.execute(
       `ALTER TABLE opportunities MODIFY COLUMN stage ENUM(
         'open','proposal','negotiation',
-        'qualification_done','quotation_given','negotiation_review','on_hold',
+        'qualification_done','consultation_done','quotation_given','negotiation_review','on_hold',
         'closed_won','closed_lost'
       ) NOT NULL DEFAULT 'qualification_done'`
     );
   } catch (e) {
     console.warn("Migration: could not extend opportunities.stage enum:", e.message);
   }
+
+  // Intake / service detail (column still named product_category for API compatibility)
+  try {
+    const [pcRows] = await pool.execute(
+      `SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'opportunities' AND COLUMN_NAME = 'product_category'`
+    );
+    const pc = pcRows[0];
+    if (pc && String(pc.DATA_TYPE).toLowerCase() === "enum") {
+      await pool.execute(
+        `ALTER TABLE opportunities MODIFY COLUMN product_category VARCHAR(80) DEFAULT NULL`
+      );
+      await pool.execute(`
+        UPDATE opportunities SET product_category = CASE LOWER(TRIM(product_category))
+          WHEN 'hardware' THEN 'general_inquiry'
+          WHEN 'software' THEN 'general_inquiry'
+          WHEN 'services' THEN 'membership_or_program'
+          ELSE LOWER(REPLACE(TRIM(product_category), ' ', '_'))
+        END
+        WHERE product_category IS NOT NULL AND TRIM(product_category) <> ''
+      `);
+      console.log("Migration: opportunities.product_category ENUM -> VARCHAR (intake types)");
+    }
+  } catch (e) {
+    console.warn("Migration: opportunities.product_category type change:", e.message);
+  }
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS opportunity_activities (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      opportunity_id INT UNSIGNED NOT NULL,
+      tenant_id INT UNSIGNED DEFAULT NULL,
+      activity_type ENUM('consultation','stage_change','close_won','close_lost','note') NOT NULL,
+      notes TEXT DEFAULT NULL,
+      metadata JSON DEFAULT NULL,
+      created_by INT UNSIGNED DEFAULT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_opp_act_opp (opportunity_id, created_at),
+      KEY idx_opp_act_tenant (tenant_id, created_at),
+      CONSTRAINT fk_opp_act_opportunity FOREIGN KEY (opportunity_id) REFERENCES opportunities(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
 
   // ── support tickets table ──────────────────────────────────────────────────
   await pool.execute(`
@@ -1209,9 +1258,26 @@ async function ensureSchema() {
   `);
 
   await pool.execute(`
+    CREATE TABLE IF NOT EXISTS fitness_external_buyers (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      full_name VARCHAR(255) NOT NULL,
+      phone VARCHAR(20) DEFAULT NULL,
+      referred_by_client_id VARCHAR(20) DEFAULT NULL,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uk_fitness_external_buyers_phone (phone),
+      KEY idx_feb_referred (referred_by_client_id),
+      CONSTRAINT fk_feb_referred_client FOREIGN KEY (referred_by_client_id) REFERENCES fitness_clients(client_id) ON DELETE SET NULL ON UPDATE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await pool.execute(`
     CREATE TABLE IF NOT EXISTS fitness_transactions (
       id INT UNSIGNED NOT NULL AUTO_INCREMENT,
-      client_id VARCHAR(20) NOT NULL,
+      client_id VARCHAR(20) NULL,
+      external_buyer_id INT UNSIGNED NULL,
       transaction_date DATE NOT NULL,
       product_plan VARCHAR(255) NOT NULL,
       type ENUM('Membership','Supplement','Other') NOT NULL,
@@ -1226,10 +1292,56 @@ async function ensureSchema() {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (id),
       KEY idx_fitness_transactions_client (client_id),
+      KEY idx_fitness_transactions_external (external_buyer_id),
       KEY idx_fitness_transactions_date (transaction_date),
-      KEY idx_fitness_transactions_type (type)
+      KEY idx_fitness_transactions_type (type),
+      CONSTRAINT fk_fitness_transactions_external FOREIGN KEY (external_buyer_id) REFERENCES fitness_external_buyers(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+      CONSTRAINT chk_ft_client_xor_external CHECK (
+        (client_id IS NOT NULL AND external_buyer_id IS NULL)
+        OR (client_id IS NULL AND external_buyer_id IS NOT NULL)
+      )
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+
+  // Migrate existing DBs created before external walk-in support (CREATE IF NOT EXISTS leaves old fitness_transactions shape)
+  const [txExtCol] = await pool.execute(
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fitness_transactions' AND COLUMN_NAME = 'external_buyer_id'`
+  );
+  if (txExtCol.length === 0) {
+    try {
+      await pool.execute(
+        `ALTER TABLE fitness_transactions MODIFY COLUMN client_id VARCHAR(20) NULL`
+      );
+      console.log("Migration: fitness_transactions.client_id nullable");
+    } catch (e) {
+      console.warn("ensureSchema: nullable client_id:", e.message);
+    }
+    await pool.execute(
+      `ALTER TABLE fitness_transactions ADD COLUMN external_buyer_id INT UNSIGNED NULL AFTER client_id`
+    );
+    console.log("Migration: added fitness_transactions.external_buyer_id");
+    await pool.execute(
+      `ALTER TABLE fitness_transactions ADD KEY idx_fitness_transactions_external (external_buyer_id)`
+    );
+    try {
+      await pool.execute(
+        `ALTER TABLE fitness_transactions ADD CONSTRAINT fk_fitness_transactions_external FOREIGN KEY (external_buyer_id) REFERENCES fitness_external_buyers(id) ON DELETE RESTRICT ON UPDATE CASCADE`
+      );
+    } catch (e) {
+      console.warn("ensureSchema: fk_fitness_transactions_external:", e.message);
+    }
+    try {
+      await pool.execute(`
+        ALTER TABLE fitness_transactions ADD CONSTRAINT chk_ft_client_xor_external CHECK (
+          (client_id IS NOT NULL AND external_buyer_id IS NULL)
+          OR (client_id IS NULL AND external_buyer_id IS NOT NULL)
+        )
+      `);
+    } catch (e) {
+      console.warn("ensureSchema: chk_ft_client_xor_external (needs MySQL 8.0.16+):", e.message);
+    }
+  }
 
   await pool.execute(`
     CREATE TABLE IF NOT EXISTS fitness_referrals (

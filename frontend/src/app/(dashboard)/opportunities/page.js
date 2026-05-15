@@ -14,13 +14,32 @@ import styles from "./opportunitiesPage.module.css";
 
 const STAGES = [
   { value: "qualification_done", label: "Qualification Done", color: "#94a3b8" },
+  { value: "consultation_done", label: "Consultation Done", color: "#0ea5e9" },
   { value: "quotation_given", label: "Quotation Given", color: "#f59e0b" },
   { value: "negotiation_review", label: "Negotiation/Review", color: "#06b6d4" },
   { value: "on_hold", label: "On Hold", color: "#64748b" },
   { value: "closed_won", label: "Closed Won", color: "#16a34a" },
   { value: "closed_lost", label: "Closed Lost", color: "#9333ea" },
 ];
-const PRODUCT_CATEGORIES = ["Hardware", "Software", "Services"];
+const TABLE_STAGE_OPTIONS = STAGES.filter((s) => s.value !== "closed_won" && s.value !== "closed_lost");
+/** Intake / service detail for this CRM (stored in `product_category` for API compatibility). */
+const INTAKE_SERVICE_TYPES = [
+  { value: "initial_consultation", label: "Initial consultation" },
+  { value: "follow_up", label: "Follow-up visit" },
+  { value: "membership_or_program", label: "Membership / program" },
+  { value: "personal_training", label: "Personal training" },
+  { value: "nutrition_or_supplements", label: "Nutrition / supplements" },
+  { value: "general_inquiry", label: "General inquiry" },
+  { value: "other", label: "Other" },
+];
+const INTAKE_TYPE_VALUES = new Set(INTAKE_SERVICE_TYPES.map((t) => t.value));
+
+function normalizeIntakeTypeKey(v) {
+  return String(v || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+}
 const FOLLOWUP_TYPES = [
   { value: "call", label: "Call" },
   { value: "email", label: "Email" },
@@ -70,7 +89,7 @@ function prettifyToken(value) {
 const EMPTY_FORM = {
   title: "",
   company_name: "",
-  product_category: "Hardware",
+  product_category: "initial_consultation",
   quantity: "",
   amount: "",
   stage: "qualification_done",
@@ -109,6 +128,12 @@ export default function OpportunitiesPage() {
   const { showToast } = useToast();
   const { confirm } = useConfirmDialog();
   const searchParams = useSearchParams();
+  const [listView, setListView] = useState("pipeline");
+  const [consultModal, setConsultModal] = useState({ open: false, opp: null, notes: "", at: "" });
+  const [winModal, setWinModal] = useState({ open: false, opp: null, final_amount: "", notes: "" });
+  const [lossModal, setLossModal] = useState({ open: false, opp: null, reason: "" });
+  const [actionSaving, setActionSaving] = useState(false);
+
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [liveConnected, setLiveConnected] = useState(false);
@@ -139,6 +164,7 @@ export default function OpportunitiesPage() {
     try {
       const p = new URLSearchParams();
       p.set("include_breakdown", "1");
+      p.set("view", listView);
       if (stageFilter) p.set("stage", stageFilter);
       if (q.trim()) p.set("q", q.trim());
       if (fromDate) p.set("expected_close_from", fromDate);
@@ -163,7 +189,7 @@ export default function OpportunitiesPage() {
     } finally {
       setLoading(false);
     }
-  }, [fromDate, q, showToast, stageFilter, starredOnly, toDate]);
+  }, [fromDate, q, showToast, stageFilter, starredOnly, toDate, listView]);
 
   useEffect(() => {
     fetchItems();
@@ -230,13 +256,21 @@ export default function OpportunitiesPage() {
     return out;
   }, [items]);
 
-  const totalAmount = useMemo(() => items.reduce((acc, it) => acc + (Number(it.amount) || 0), 0), [items]);
+  const totalAmount = useMemo(() => {
+    return items.reduce((acc, it) => {
+      if (listView === "won") {
+        const v = it.final_amount != null ? Number(it.final_amount) : Number(it.amount) || 0;
+        return acc + v;
+      }
+      return acc + (Number(it.amount) || 0);
+    }, 0);
+  }, [items, listView]);
   const filteredRows = useMemo(() => {
     return items.filter((it) => {
       if (colFilters.title && !String(it.title || "").toLowerCase().includes(colFilters.title.toLowerCase())) return false;
       if (colFilters.company && !String(it.company_name || "").toLowerCase().includes(colFilters.company.toLowerCase()))
         return false;
-      if (colFilters.category && String(it.product_category || "").toLowerCase() !== colFilters.category.toLowerCase())
+      if (colFilters.category && normalizeIntakeTypeKey(it.product_category) !== normalizeIntakeTypeKey(colFilters.category))
         return false;
       if (
         colFilters.followupType &&
@@ -266,8 +300,8 @@ export default function OpportunitiesPage() {
   const followupTypeLabels = useMemo(() => buildLabelMap(FOLLOWUP_TYPES), []);
   const opportunityTypeLabels = useMemo(() => buildLabelMap(OPPORTUNITY_TYPES), []);
   const leadSourceLabels = useMemo(() => buildLabelMap(LEAD_SOURCES), []);
-  const productCategoryLabels = useMemo(
-    () => Object.fromEntries(PRODUCT_CATEGORIES.map((c) => [c.toLowerCase(), c])),
+  const intakeTypeLabels = useMemo(
+    () => Object.fromEntries(INTAKE_SERVICE_TYPES.map((t) => [t.value, t.label])),
     []
   );
 
@@ -282,7 +316,9 @@ export default function OpportunitiesPage() {
     setForm({
       title: item.title || "",
       company_name: item.company_name || "",
-      product_category: item.product_category || "Hardware",
+      product_category: INTAKE_TYPE_VALUES.has(normalizeIntakeTypeKey(item.product_category))
+        ? normalizeIntakeTypeKey(item.product_category)
+        : "initial_consultation",
       quantity: item.quantity != null ? String(item.quantity) : "",
       amount: item.amount != null ? String(item.amount) : "",
       stage: normalizeStageForUi(item.stage) || "qualification_done",
@@ -338,6 +374,23 @@ export default function OpportunitiesPage() {
   }
 
   async function updateStage(id, nextStage) {
+    if (nextStage === "closed_won") {
+      const opp = items.find((x) => x.id === id);
+      if (opp) {
+        setWinModal({
+          open: true,
+          opp,
+          final_amount: String(opp.amount != null ? opp.amount : ""),
+          notes: "",
+        });
+      }
+      return;
+    }
+    if (nextStage === "closed_lost") {
+      const opp = items.find((x) => x.id === id);
+      if (opp) setLossModal({ open: true, opp, reason: "" });
+      return;
+    }
     try {
       const res = await opportunitiesRequest( `/${id}/stage`, {
         method: "PUT",
@@ -407,6 +460,111 @@ export default function OpportunitiesPage() {
     }
   }
 
+  async function submitConsultation(e) {
+    e.preventDefault();
+    if (!consultModal.opp || !consultModal.notes.trim()) {
+      showToast("Consultation notes are required", "error");
+      return;
+    }
+    setActionSaving(true);
+    try {
+      const res = await opportunitiesRequest(`/${consultModal.opp.id}/consultation`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          notes: consultModal.notes.trim(),
+          consultation_at: consultModal.at || undefined,
+        }),
+      });
+      if (!res) {
+        showToast("Opportunity service is temporarily unavailable", "error");
+        return;
+      }
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) {
+        showToast(json.message || "Could not save consultation", "error");
+        return;
+      }
+      showToast("Consultation saved");
+      setConsultModal({ open: false, opp: null, notes: "", at: "" });
+      fetchItems();
+    } catch {
+      showToast("Could not save consultation", "error");
+    } finally {
+      setActionSaving(false);
+    }
+  }
+
+  async function submitCloseWon(e) {
+    e.preventDefault();
+    if (!winModal.opp) return;
+    const amt = Number(winModal.final_amount);
+    if (!Number.isFinite(amt) || amt < 0) {
+      showToast("Enter a valid booked amount", "error");
+      return;
+    }
+    setActionSaving(true);
+    try {
+      const res = await opportunitiesRequest(`/${winModal.opp.id}/close-won`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          final_amount: amt,
+          notes: winModal.notes?.trim() || undefined,
+        }),
+      });
+      if (!res) {
+        showToast("Opportunity service is temporarily unavailable", "error");
+        return;
+      }
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) {
+        showToast(json.message || "Could not close as won", "error");
+        return;
+      }
+      showToast("Marked won — appears under Revenue (won)");
+      setWinModal({ open: false, opp: null, final_amount: "", notes: "" });
+      fetchItems();
+    } catch {
+      showToast("Could not close as won", "error");
+    } finally {
+      setActionSaving(false);
+    }
+  }
+
+  async function submitCloseLost(e) {
+    e.preventDefault();
+    if (!lossModal.opp) return;
+    setActionSaving(true);
+    try {
+      const res = await opportunitiesRequest(`/${lossModal.opp.id}/close-lost`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          loss_reason: lossModal.reason?.trim() || undefined,
+        }),
+      });
+      if (!res) {
+        showToast("Opportunity service is temporarily unavailable", "error");
+        return;
+      }
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) {
+        showToast(json.message || "Could not close as lost", "error");
+        return;
+      }
+      showToast("Marked lost");
+      setLossModal({ open: false, opp: null, reason: "" });
+      fetchItems();
+    } catch {
+      showToast("Could not close as lost", "error");
+    } finally {
+      setActionSaving(false);
+    }
+  }
+
+  const showWonCols = listView === "won";
+
   return (
     <div className={styles.page}>
       <div className={styles.headerRow}>
@@ -419,10 +577,42 @@ export default function OpportunitiesPage() {
             <span className={`${styles.liveDot} ${liveConnected ? "" : styles.liveDotOff}`} />
             {liveConnected ? "Live" : "Offline"}
           </span>
-          <div className={styles.totalValue}>Expected Amount: INR {totalAmount.toLocaleString("en-IN")}</div>
+          <div className={styles.totalValue}>
+            {listView === "won"
+              ? "Booked revenue"
+              : listView === "lost"
+                ? "Forecast on lost deals"
+                : "Expected Amount"}
+            : INR {totalAmount.toLocaleString("en-IN")}
+          </div>
         </div>
       </div>
 
+      <div className={styles.listViewTabs} role="tablist" aria-label="Opportunity list">
+        {[
+          { id: "pipeline", label: "Pipeline" },
+          { id: "won", label: "Revenue (won)" },
+          { id: "lost", label: "Closed lost" },
+          { id: "all", label: "All" },
+        ].map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={listView === t.id}
+            className={`${styles.listViewTab} ${listView === t.id ? styles.listViewTabActive : ""}`}
+            onClick={() => setListView(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <p className={styles.helpHint}>
+        Log a <strong>consultation</strong> before quoting. <strong>Mark won</strong> records booked revenue and moves the deal to{" "}
+        <strong>Revenue (won)</strong>. Start a <strong>new opportunity</strong> for each new sales cycle.
+      </p>
+
+      {(listView === "pipeline" || listView === "all") && (
       <div className={styles.stageStrip}>
         <button
           type="button"
@@ -445,6 +635,7 @@ export default function OpportunitiesPage() {
           </button>
         ))}
       </div>
+      )}
 
       <div className={styles.toolbar}>
         <input
@@ -467,6 +658,7 @@ export default function OpportunitiesPage() {
             setToDate("");
             setStageFilter("");
             setStarredOnly(false);
+            setListView("pipeline");
           }}
         >
           Clear
@@ -492,8 +684,14 @@ export default function OpportunitiesPage() {
                 <th />
                 <th>Opportunity Name</th>
                 <th>Account Name</th>
-                <th>Category</th>
-                <th>Expected Amount</th>
+                <th>Intake / service</th>
+                <th>{showWonCols ? "Forecast (INR)" : "Expected Amount (INR)"}</th>
+                {showWonCols ? (
+                  <>
+                    <th>Booked (INR)</th>
+                    <th>Won date</th>
+                  </>
+                ) : null}
                 <th>Qty</th>
                 <th>Expected Close Date</th>
                 <th>Sales Stage</th>
@@ -528,9 +726,9 @@ export default function OpportunitiesPage() {
                     onChange={(e) => setColFilters((p) => ({ ...p, category: e.target.value }))}
                   >
                     <option value="">All</option>
-                    {PRODUCT_CATEGORIES.map((cat) => (
-                      <option key={cat} value={cat}>
-                        {cat}
+                    {INTAKE_SERVICE_TYPES.map((t) => (
+                      <option key={t.value} value={t.value}>
+                        {t.label}
                       </option>
                     ))}
                   </select>
@@ -551,6 +749,13 @@ export default function OpportunitiesPage() {
                     />
                   </div>
                 </th>
+                {showWonCols ? (
+                  <>
+                    <th />
+                    <th />
+                  </>
+                ) : null}
+                <th />
                 <th>
                   <input
                     type="date"
@@ -617,18 +822,40 @@ export default function OpportunitiesPage() {
                   </td>
                   <td>{it.title}</td>
                   <td>{it.company_name || "-"}</td>
-                  <td>{productCategoryLabels[String(it.product_category || "").toLowerCase()] || prettifyToken(it.product_category) || "-"}</td>
+                  <td>{intakeTypeLabels[normalizeIntakeTypeKey(it.product_category)] || prettifyToken(it.product_category) || "-"}</td>
                   <td>INR {Number(it.amount || 0).toLocaleString("en-IN")}</td>
+                  {showWonCols ? (
+                    <>
+                      <td>
+                        {it.final_amount != null && it.final_amount !== ""
+                          ? `INR ${Number(it.final_amount).toLocaleString("en-IN")}`
+                          : "—"}
+                      </td>
+                      <td>
+                        {it.closed_won_at ? String(it.closed_won_at).slice(0, 10) : "—"}
+                      </td>
+                    </>
+                  ) : null}
                   <td>{Number(it.quantity || 0)}</td>
                   <td>{it.expected_close_date ? String(it.expected_close_date).slice(0, 10) : "-"}</td>
                   <td>
-                    <select className={styles.stageSelect} value={normalizeStageForUi(it.stage)} onChange={(e) => updateStage(it.id, e.target.value)}>
-                      {STAGES.map((s) => (
-                        <option key={s.value} value={s.value}>
-                          {s.label}
-                        </option>
-                      ))}
-                    </select>
+                    {it.stage === "closed_won" || it.stage === "closed_lost" ? (
+                      <span className={styles.stagePill}>
+                        {selectedStageMeta[normalizeStageForUi(it.stage)] || prettifyToken(it.stage)}
+                      </span>
+                    ) : (
+                      <select
+                        className={styles.stageSelect}
+                        value={normalizeStageForUi(it.stage)}
+                        onChange={(e) => updateStage(it.id, e.target.value)}
+                      >
+                        {TABLE_STAGE_OPTIONS.map((s) => (
+                          <option key={s.value} value={s.value}>
+                            {s.label}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                   </td>
                   <td>{followupTypeLabels[String(it.followup_type || "").toLowerCase()] || prettifyToken(it.followup_type) || "-"}</td>
                   <td>{opportunityTypeLabels[String(it.opportunity_type || "").toLowerCase()] || prettifyToken(it.opportunity_type) || "-"}</td>
@@ -639,9 +866,46 @@ export default function OpportunitiesPage() {
                       <button type="button" className={styles.iconBtn} onClick={() => openEditModal(it)} title="Edit">
                         <i className="fas fa-pen" />
                       </button>
-                      <button type="button" className={styles.iconBtn} onClick={() => updateStage(it.id, "open")} title="Move Open">
-                        <i className="fas fa-rotate-left" />
-                      </button>
+                      {it.stage !== "closed_won" && it.stage !== "closed_lost" ? (
+                        <>
+                          <button
+                            type="button"
+                            className={styles.iconBtn}
+                            onClick={() =>
+                              setConsultModal({ open: true, opp: it, notes: "", at: "" })
+                            }
+                            title="Log consultation"
+                          >
+                            <i className="fas fa-stethoscope" />
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.iconBtn}
+                            onClick={() =>
+                              setWinModal({
+                                open: true,
+                                opp: it,
+                                final_amount: String(it.amount != null ? it.amount : ""),
+                                notes: "",
+                              })
+                            }
+                            title="Mark won"
+                          >
+                            <i className="fas fa-trophy" />
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.iconBtn}
+                            onClick={() => setLossModal({ open: true, opp: it, reason: "" })}
+                            title="Mark lost"
+                          >
+                            <i className="fas fa-thumbs-down" />
+                          </button>
+                          <button type="button" className={styles.iconBtn} onClick={() => updateStage(it.id, "open")} title="Move to open">
+                            <i className="fas fa-rotate-left" />
+                          </button>
+                        </>
+                      ) : null}
                       <button type="button" className={styles.iconBtn} onClick={() => remove(it)} title="Delete">
                         <i className="fas fa-trash" />
                       </button>
@@ -684,15 +948,15 @@ export default function OpportunitiesPage() {
                 />
               </label>
               <label className={styles.field}>
-                Product Category
+                Intake / service type
                 <select
                   className={styles.input}
                   value={form.product_category}
                   onChange={(e) => setForm((f) => ({ ...f, product_category: e.target.value }))}
                 >
-                  {PRODUCT_CATEGORIES.map((cat) => (
-                    <option key={cat} value={cat}>
-                      {cat}
+                  {INTAKE_SERVICE_TYPES.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
                     </option>
                   ))}
                 </select>
@@ -823,6 +1087,148 @@ export default function OpportunitiesPage() {
                     </button>
                     <button disabled={saving} type="submit" className={styles.btnPrimary}>
                       {saving ? "Saving..." : editingId ? "Update Opportunity" : "Save Opportunity"}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+
+      {consultModal.open && consultModal.opp && typeof document !== "undefined"
+        ? createPortal(
+            <div className={styles.modalBackdrop} onClick={() => setConsultModal({ open: false, opp: null, notes: "", at: "" })}>
+              <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+                <div className={styles.modalHead}>
+                  <h2>Log consultation — {consultModal.opp.title}</h2>
+                  <button
+                    type="button"
+                    className={styles.modalCloseBtn}
+                    onClick={() => setConsultModal({ open: false, opp: null, notes: "", at: "" })}
+                  >
+                    <i className="fas fa-times" />
+                  </button>
+                </div>
+                <form className={styles.modalForm} onSubmit={submitConsultation}>
+                  <label className={styles.field}>
+                    Consultation date/time (optional)
+                    <input
+                      className={styles.input}
+                      type="datetime-local"
+                      value={consultModal.at}
+                      onChange={(e) => setConsultModal((m) => ({ ...m, at: e.target.value }))}
+                    />
+                  </label>
+                  <label className={`${styles.field} ${styles.fullWidth}`}>
+                    Notes *
+                    <textarea
+                      className={styles.textArea}
+                      rows={4}
+                      required
+                      value={consultModal.notes}
+                      onChange={(e) => setConsultModal((m) => ({ ...m, notes: e.target.value }))}
+                    />
+                  </label>
+                  <div className={styles.modalActions}>
+                    <button type="button" className={styles.btnGhost} onClick={() => setConsultModal({ open: false, opp: null, notes: "", at: "" })}>
+                      Cancel
+                    </button>
+                    <button type="submit" className={styles.btnPrimary} disabled={actionSaving}>
+                      {actionSaving ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+
+      {winModal.open && winModal.opp && typeof document !== "undefined"
+        ? createPortal(
+            <div className={styles.modalBackdrop} onClick={() => setWinModal({ open: false, opp: null, final_amount: "", notes: "" })}>
+              <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+                <div className={styles.modalHead}>
+                  <h2>Mark won — {winModal.opp.title}</h2>
+                  <button
+                    type="button"
+                    className={styles.modalCloseBtn}
+                    onClick={() => setWinModal({ open: false, opp: null, final_amount: "", notes: "" })}
+                  >
+                    <i className="fas fa-times" />
+                  </button>
+                </div>
+                <form className={styles.modalForm} onSubmit={submitCloseWon}>
+                  <p className={styles.helpHint} style={{ marginTop: 0 }}>
+                    Forecast on file: INR {Number(winModal.opp.amount || 0).toLocaleString("en-IN")}. Enter the <strong>booked</strong> amount you
+                    actually closed for revenue.
+                  </p>
+                  <label className={styles.field}>
+                    Booked amount (INR) *
+                    <input
+                      className={styles.input}
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      required
+                      value={winModal.final_amount}
+                      onChange={(e) => setWinModal((m) => ({ ...m, final_amount: e.target.value }))}
+                    />
+                  </label>
+                  <label className={`${styles.field} ${styles.fullWidth}`}>
+                    Notes (optional)
+                    <textarea
+                      className={styles.textArea}
+                      rows={3}
+                      value={winModal.notes}
+                      onChange={(e) => setWinModal((m) => ({ ...m, notes: e.target.value }))}
+                    />
+                  </label>
+                  <div className={styles.modalActions}>
+                    <button type="button" className={styles.btnGhost} onClick={() => setWinModal({ open: false, opp: null, final_amount: "", notes: "" })}>
+                      Cancel
+                    </button>
+                    <button type="submit" className={styles.btnPrimary} disabled={actionSaving}>
+                      {actionSaving ? "Saving…" : "Close as won"}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+
+      {lossModal.open && lossModal.opp && typeof document !== "undefined"
+        ? createPortal(
+            <div className={styles.modalBackdrop} onClick={() => setLossModal({ open: false, opp: null, reason: "" })}>
+              <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+                <div className={styles.modalHead}>
+                  <h2>Mark lost — {lossModal.opp.title}</h2>
+                  <button
+                    type="button"
+                    className={styles.modalCloseBtn}
+                    onClick={() => setLossModal({ open: false, opp: null, reason: "" })}
+                  >
+                    <i className="fas fa-times" />
+                  </button>
+                </div>
+                <form className={styles.modalForm} onSubmit={submitCloseLost}>
+                  <label className={`${styles.field} ${styles.fullWidth}`}>
+                    Reason (optional)
+                    <input
+                      className={styles.input}
+                      value={lossModal.reason}
+                      onChange={(e) => setLossModal((m) => ({ ...m, reason: e.target.value }))}
+                    />
+                  </label>
+                  <div className={styles.modalActions}>
+                    <button type="button" className={styles.btnGhost} onClick={() => setLossModal({ open: false, opp: null, reason: "" })}>
+                      Cancel
+                    </button>
+                    <button type="submit" className={styles.btnPrimary} disabled={actionSaving}>
+                      {actionSaving ? "Saving…" : "Close as lost"}
                     </button>
                   </div>
                 </form>

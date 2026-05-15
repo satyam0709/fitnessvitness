@@ -64,6 +64,13 @@ function validatePositiveInt(value, fieldName) {
   return null;
 }
 
+/** Digits-only phone for dedup and storage. */
+function normalizePhoneDigits(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const s = String(value).replace(/\D/g, "");
+  return s.length ? s : null;
+}
+
 function sendValidationError(res, message) {
   return res.status(400).json({ success: false, message });
 }
@@ -87,15 +94,6 @@ const createClientValidation = [
   body("phone").trim().notEmpty().withMessage("Phone is required"),
   body("plan_type").trim().notEmpty().withMessage("Plan type is required"),
   body("plan_start_date").notEmpty().withMessage("Plan start date is required").isISO8601().withMessage("Plan start date must be a valid date"),
-];
-
-const createTransactionValidation = [
-  body("client_id").trim().notEmpty().withMessage("Client ID is required"),
-  body("transaction_date").notEmpty().withMessage("Transaction date is required").isISO8601().withMessage("Transaction date must be a valid date"),
-  body("product_plan").trim().notEmpty().withMessage("Product/Plan is required"),
-  body("type").trim().notEmpty().withMessage("Type is required"),
-  body("rate_inr").notEmpty().withMessage("Rate is required").isNumeric().withMessage("Rate must be a number"),
-  body("received_inr").notEmpty().withMessage("Received amount is required").isNumeric().withMessage("Received amount must be a number"),
 ];
 
 const createConsultationValidation = [
@@ -996,9 +994,20 @@ async function deleteSupplement(req, res) {
 // ─────────────────────────────────────────────────────────────────
 async function getAllTransactions(req, res) {
   try {
-    const { client_id, month, type } = req.query;
-    let query = "SELECT ft.*, fc.full_name as client_name FROM fitness_transactions ft LEFT JOIN fitness_clients fc ON ft.client_id = fc.client_id WHERE 1=1";
+    const { client_id, month, type, scope } = req.query;
+    const scopeNorm = String(scope || "client").toLowerCase();
+    if (!["client", "external", "all"].includes(scopeNorm)) {
+      return res.status(400).json({ success: false, message: "scope must be client, external, or all" });
+    }
+
+    let query = `${sqlFitnessTransactionsJoined()} WHERE 1=1`;
     const params = [];
+
+    if (scopeNorm === "client") {
+      query += " AND ft.client_id IS NOT NULL";
+    } else if (scopeNorm === "external") {
+      query += " AND ft.external_buyer_id IS NOT NULL";
+    }
 
     if (client_id) {
       query += " AND ft.client_id = ?";
@@ -1036,60 +1045,193 @@ async function getClientTransactions(req, res) {
 
 async function createTransaction(req, res) {
   try {
-    const { client_id, transaction_date, product_plan, type, mrp_inr, rate_inr, received_inr, pending_inr, cost_inr, pay_mode, notes } = req.body;
+    const body = req.body || {};
+    const {
+      client_id,
+      external_buyer_id: extIdBody,
+      external_buyer,
+      transaction_date,
+      product_plan,
+      type,
+      mrp_inr,
+      rate_inr,
+      received_inr,
+      pending_inr,
+      cost_inr,
+      pay_mode,
+      notes,
+    } = body;
 
-    // Express-validator validation
     const fieldErrors = extractValidationErrors(req);
     if (fieldErrors) {
       return res.status(400).json({ success: false, errors: fieldErrors });
     }
 
-    // Existing validation
-    const reqError = validateRequired({ client_id, transaction_date, product_plan, type }, ['client_id', 'transaction_date', 'product_plan', 'type']);
+    const reqError = validateRequired(
+      { transaction_date, product_plan, type },
+      ["transaction_date", "product_plan", "type"]
+    );
     if (reqError) return sendValidationError(res, reqError);
 
-    if (!client_id || client_id.length > 20) {
-      return sendValidationError(res, 'Invalid client_id');
-    }
-    const dateErr = validateDate(transaction_date, 'transaction_date');
+    const dateErr = validateDate(transaction_date, "transaction_date");
     if (dateErr) return sendValidationError(res, dateErr);
 
-    const typeErr = validateEnum(type, VALID_ENUMS.transaction_type, 'type');
+    const typeErr = validateEnum(type, VALID_ENUMS.transaction_type, "type");
     if (typeErr) return sendValidationError(res, typeErr);
 
     if (pay_mode) {
-      const modeErr = validateEnum(pay_mode, VALID_ENUMS.pay_mode, 'pay_mode');
+      const modeErr = validateEnum(pay_mode, VALID_ENUMS.pay_mode, "pay_mode");
       if (modeErr) return sendValidationError(res, modeErr);
     }
     if (mrp_inr !== undefined) {
-      const err = validateNumber(mrp_inr, 'mrp_inr', 0);
+      const err = validateNumber(mrp_inr, "mrp_inr", 0);
       if (err) return sendValidationError(res, err);
     }
     if (rate_inr !== undefined) {
-      const err = validateNumber(rate_inr, 'rate_inr', 0);
+      const err = validateNumber(rate_inr, "rate_inr", 0);
       if (err) return sendValidationError(res, err);
     }
     if (received_inr !== undefined) {
-      const err = validateNumber(received_inr, 'received_inr', 0);
+      const err = validateNumber(received_inr, "received_inr", 0);
       if (err) return sendValidationError(res, err);
     }
     if (cost_inr !== undefined) {
-      const err = validateNumber(cost_inr, 'cost_inr', 0);
+      const err = validateNumber(cost_inr, "cost_inr", 0);
       if (err) return sendValidationError(res, err);
     }
 
-    const [result] = await mainPool.execute(
-      `INSERT INTO fitness_transactions (client_id, transaction_date, product_plan, type, mrp_inr, rate_inr, received_inr, pending_inr, cost_inr, pay_mode, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [client_id, transaction_date, product_plan, type, mrp_inr, rate_inr, received_inr || 0, pending_inr || 0, cost_inr || 0, pay_mode || 'GPay', notes]
-    );
+    const cid = client_id && String(client_id).trim() ? String(client_id).trim() : null;
+    const extIdRaw = extIdBody;
+    const extIdParsed =
+      extIdRaw !== undefined && extIdRaw !== null && extIdRaw !== ""
+        ? parseInt(extIdRaw, 10)
+        : null;
+    const hasExplicitExtId = extIdParsed !== null && !Number.isNaN(extIdParsed);
+    const hasExtObj =
+      external_buyer &&
+      typeof external_buyer === "object" &&
+      !Array.isArray(external_buyer);
 
-    const [rows] = await mainPool.execute(
-      "SELECT ft.*, fc.full_name as client_name FROM fitness_transactions ft LEFT JOIN fitness_clients fc ON ft.client_id = fc.client_id WHERE ft.id = ?",
-      [result.insertId]
-    );
-    emitFitnessChanged();
-    res.status(201).json({ success: true, data: rows[0] });
+    const pathCount = (cid ? 1 : 0) + (hasExplicitExtId ? 1 : 0) + (hasExtObj ? 1 : 0);
+    if (pathCount !== 1) {
+      return sendValidationError(
+        res,
+        "Provide exactly one of: client_id, external_buyer_id, or external_buyer"
+      );
+    }
+
+    let finalClientId = null;
+    let finalExtBuyerId = null;
+
+    if (cid) {
+      if (cid.length > 20) {
+        return sendValidationError(res, "Invalid client_id");
+      }
+      finalClientId = cid;
+    } else if (hasExplicitExtId) {
+      const [buyers] = await mainPool.execute(
+        "SELECT id FROM fitness_external_buyers WHERE id = ?",
+        [extIdParsed]
+      );
+      if (!buyers.length) {
+        return res.status(400).json({ success: false, message: "external_buyer_id not found" });
+      }
+      finalExtBuyerId = extIdParsed;
+    } else if (hasExtObj) {
+      const eb = external_buyer;
+      const name = eb.full_name != null ? String(eb.full_name).trim() : "";
+      if (!name) {
+        return sendValidationError(res, "external_buyer.full_name is required");
+      }
+      const phoneNorm = normalizePhoneDigits(eb.phone);
+      const refId =
+        eb.referred_by_client_id && String(eb.referred_by_client_id).trim()
+          ? String(eb.referred_by_client_id).trim()
+          : null;
+      if (refId) {
+        const [cref] = await mainPool.execute(
+          "SELECT client_id FROM fitness_clients WHERE client_id = ?",
+          [refId]
+        );
+        if (!cref.length) {
+          return sendValidationError(res, "external_buyer.referred_by_client_id not found");
+        }
+      }
+      let buyerId;
+      if (phoneNorm) {
+        const [found] = await mainPool.execute(
+          "SELECT id FROM fitness_external_buyers WHERE phone = ? LIMIT 1",
+          [phoneNorm]
+        );
+        if (found.length) {
+          buyerId = found[0].id;
+        }
+      }
+      if (!buyerId) {
+        const noteVal = eb.notes != null ? String(eb.notes) : null;
+        try {
+          const [ins] = await mainPool.execute(
+            `INSERT INTO fitness_external_buyers (full_name, phone, referred_by_client_id, notes)
+             VALUES (?, ?, ?, ?)`,
+            [name, phoneNorm, refId, noteVal]
+          );
+          buyerId = ins.insertId;
+        } catch (insErr) {
+          if (insErr.code === "ER_DUP_ENTRY" && phoneNorm) {
+            const [found2] = await mainPool.execute(
+              "SELECT id FROM fitness_external_buyers WHERE phone = ? LIMIT 1",
+              [phoneNorm]
+            );
+            if (!found2.length) {
+              return res.status(500).json({ success: false, message: insErr.message });
+            }
+            buyerId = found2[0].id;
+          } else {
+            return res.status(500).json({ success: false, message: insErr.message });
+          }
+        }
+      }
+      finalExtBuyerId = buyerId;
+    }
+
+    const conn = await mainPool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [result] = await conn.execute(
+        `INSERT INTO fitness_transactions (client_id, external_buyer_id, transaction_date, product_plan, type, mrp_inr, rate_inr, received_inr, pending_inr, cost_inr, pay_mode, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          finalClientId,
+          finalExtBuyerId,
+          transaction_date,
+          product_plan,
+          type,
+          mrp_inr,
+          rate_inr,
+          received_inr || 0,
+          pending_inr || 0,
+          cost_inr || 0,
+          pay_mode || "GPay",
+          notes,
+        ]
+      );
+      const insertId = result.insertId;
+      const [rows] = await conn.execute(`${sqlFitnessTransactionsJoined()} WHERE ft.id = ?`, [
+        insertId,
+      ]);
+      await conn.commit();
+      emitFitnessChanged();
+      res.status(201).json({ success: true, data: rows[0] });
+    } catch (err) {
+      try {
+        await conn.rollback();
+      } catch {
+        /* ignore */
+      }
+      throw err;
+    } finally {
+      conn.release();
+    }
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1140,10 +1282,7 @@ async function updateTransaction(req, res) {
       [transaction_date, product_plan, type, mrp_inr, rate_inr, received_inr, pending_inr, cost_inr, pay_mode, notes, id]
     );
 
-    const [rows] = await mainPool.execute(
-      "SELECT ft.*, fc.full_name as client_name FROM fitness_transactions ft LEFT JOIN fitness_clients fc ON ft.client_id = fc.client_id WHERE ft.id = ?",
-      [id]
-    );
+    const [rows] = await mainPool.execute(`${sqlFitnessTransactionsJoined()} WHERE ft.id = ?`, [id]);
     if (!rows.length) {
       return res.status(404).json({ success: false, message: "Transaction not found" });
     }
@@ -1165,6 +1304,119 @@ async function deleteTransaction(req, res) {
     }
     emitFitnessChanged();
     res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+function sqlFitnessTransactionsJoined() {
+  return `SELECT ft.*,
+    fc.full_name AS client_name,
+    feb.full_name AS external_buyer_name,
+    feb.phone AS external_buyer_phone,
+    fr.full_name AS referred_by_client_name,
+    (CASE WHEN ft.external_buyer_id IS NULL THEN NULL ELSE (
+      SELECT COUNT(*) FROM fitness_transactions tx2
+      WHERE tx2.external_buyer_id = ft.external_buyer_id
+      AND (tx2.transaction_date < ft.transaction_date OR (tx2.transaction_date = ft.transaction_date AND tx2.id <= ft.id))
+    ) END) AS visit_index
+    FROM fitness_transactions ft
+    LEFT JOIN fitness_clients fc ON ft.client_id = fc.client_id
+    LEFT JOIN fitness_external_buyers feb ON ft.external_buyer_id = feb.id
+    LEFT JOIN fitness_clients fr ON feb.referred_by_client_id = fr.client_id`;
+}
+
+async function getExternalBuyers(req, res) {
+  try {
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const [rows] = await mainPool.execute(
+      `SELECT feb.id, feb.full_name, feb.phone, feb.referred_by_client_id, feb.notes, feb.created_at, feb.updated_at,
+        COALESCE(SUM(ft.received_inr), 0) AS lifetime_received,
+        COUNT(ft.id) AS visit_count,
+        MAX(ft.transaction_date) AS last_visit,
+        MAX(fc.full_name) AS referred_by_client_name
+       FROM fitness_external_buyers feb
+       LEFT JOIN fitness_transactions ft ON ft.external_buyer_id = feb.id
+       LEFT JOIN fitness_clients fc ON feb.referred_by_client_id = fc.client_id
+       GROUP BY feb.id
+       ORDER BY last_visit IS NULL, last_visit DESC, feb.id DESC
+       LIMIT ? OFFSET ?`,
+      [limit, offset]
+    );
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+async function getExternalStats(req, res) {
+  try {
+    const fromStr = parseYmdQuery(req.query.date_from);
+    const toStr = parseYmdQuery(req.query.date_to);
+    let dateCond = "";
+    const params = [];
+    if (fromStr && toStr) {
+      dateCond = " AND ft.transaction_date >= ? AND ft.transaction_date <= ?";
+      params.push(fromStr, toStr);
+    } else if (fromStr) {
+      dateCond = " AND ft.transaction_date >= ?";
+      params.push(fromStr);
+    } else if (toStr) {
+      dateCond = " AND ft.transaction_date <= ?";
+      params.push(toStr);
+    }
+    const [[agg]] = await mainPool.execute(
+      `SELECT COUNT(*) AS transaction_count,
+        COALESCE(SUM(ft.received_inr), 0) AS total_received,
+        COALESCE(SUM(ft.received_inr - ft.cost_inr), 0) AS total_profit,
+        COUNT(DISTINCT ft.external_buyer_id) AS distinct_buyers
+       FROM fitness_transactions ft
+       WHERE ft.external_buyer_id IS NOT NULL ${dateCond}`,
+      params
+    );
+    const [[repeatRow]] = await mainPool.execute(
+      `SELECT COUNT(*) AS repeat_buyers FROM (
+         SELECT ft.external_buyer_id FROM fitness_transactions ft
+         WHERE ft.external_buyer_id IS NOT NULL ${dateCond}
+         GROUP BY ft.external_buyer_id HAVING COUNT(*) > 1
+       ) t`,
+      params
+    );
+    res.json({
+      success: true,
+      data: {
+        transaction_count: Number(agg.transaction_count || 0),
+        total_received: Number(agg.total_received || 0),
+        total_profit: Number(agg.total_profit || 0),
+        distinct_buyers: Number(agg.distinct_buyers || 0),
+        repeat_buyers: Number(repeatRow.repeat_buyers || 0),
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+}
+
+async function searchExternalBuyers(req, res) {
+  try {
+    const q = String(req.query.q || "").trim();
+    if (q.length < 2) {
+      return res.json({ success: true, data: [] });
+    }
+    const namePat = `%${q}%`;
+    const qDigits = normalizePhoneDigits(q);
+    const params = [namePat];
+    let sql = `SELECT id, full_name, phone, referred_by_client_id, notes, created_at, updated_at
+      FROM fitness_external_buyers
+      WHERE full_name LIKE ?`;
+    if (qDigits && qDigits.length >= 2) {
+      sql += " OR (phone IS NOT NULL AND phone LIKE ?)";
+      params.push(`%${qDigits}%`);
+    }
+    sql += " ORDER BY id DESC LIMIT 30";
+    const [rows] = await mainPool.execute(sql, params);
+    res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -2141,6 +2393,9 @@ module.exports = {
   getTransactionSummary,
   getFitnessTransactionCharts,
   getRevenueSplit,
+  getExternalBuyers,
+  getExternalStats,
+  searchExternalBuyers,
   // Referrals
   getAllReferrals,
   getClientReferrals,

@@ -12,6 +12,7 @@ const STAGE_ALIAS = {
   proposal: "quotation_given",
   negotiation: "negotiation_review",
   qualification_done: "qualification_done",
+  consultation_done: "consultation_done",
   quotation_given: "quotation_given",
   negotiation_review: "negotiation_review",
   on_hold: "on_hold",
@@ -31,7 +32,16 @@ const LEAD_SOURCES = new Set([
   "partner",
   "other",
 ]);
-const PRODUCT_CATEGORIES = new Set(["hardware", "software", "services"]);
+/** Allowed `product_category` values — intake / service detail (column name kept for API compatibility). */
+const PRODUCT_CATEGORIES = new Set([
+  "initial_consultation",
+  "follow_up",
+  "membership_or_program",
+  "personal_training",
+  "nutrition_or_supplements",
+  "general_inquiry",
+  "other",
+]);
 
 function normalizeStage(raw, fallback = "qualification_done") {
   const key = String(raw || "").trim().toLowerCase();
@@ -60,12 +70,39 @@ function applyScope(req, alias = "o") {
   return { where: clauses.join(" AND "), params };
 }
 
+async function insertOpportunityActivity(executor, { opportunityId, tenantId, activityType, notes, metadata, userId }) {
+  const metaJson = metadata != null ? JSON.stringify(metadata) : null;
+  await executor.execute(
+    `INSERT INTO opportunity_activities (opportunity_id, tenant_id, activity_type, notes, metadata, created_by)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [opportunityId, tenantId ?? null, activityType, notes ?? null, metaJson, userId ?? null]
+  );
+}
+
+/** Stages that should advance to consultation_done when a consultation is logged. */
+function shouldAdvanceToConsultationDone(stage) {
+  const s = normalizeStage(stage);
+  return ["qualification_done", "open", "proposal", "negotiation"].includes(s);
+}
+
 router.get("/", async (req, res) => {
   try {
-    const { stage, q, owner_user_id, expected_close_from, expected_close_to, include_breakdown, starred } = req.query;
+    const { stage, q, owner_user_id, expected_close_from, expected_close_to, include_breakdown, starred, view } =
+      req.query;
     const scope = applyScope(req, "o");
     const where = [scope.where];
     const params = [...scope.params];
+
+    const viewNorm = String(view || "").trim().toLowerCase();
+    if (viewNorm === "pipeline") {
+      where.push("o.stage NOT IN ('closed_won','closed_lost')");
+    } else if (viewNorm === "won") {
+      where.push("o.stage = 'closed_won'");
+    } else if (viewNorm === "lost") {
+      where.push("o.stage = 'closed_lost'");
+    } else if (viewNorm && viewNorm !== "all") {
+      return res.status(400).json({ success: false, message: "view must be pipeline, won, lost, or all" });
+    }
 
     if (stage) {
       if (!VALID_STAGE.has(String(stage).trim().toLowerCase())) {
@@ -96,12 +133,19 @@ router.get("/", async (req, res) => {
       where.push("o.is_starred = 1");
     }
 
+    let orderSql = "ORDER BY o.created_at DESC";
+    if (viewNorm === "won") {
+      orderSql = "ORDER BY o.closed_won_at IS NULL, o.closed_won_at DESC, o.id DESC";
+    } else if (viewNorm === "lost") {
+      orderSql = "ORDER BY o.closed_lost_at IS NULL, o.closed_lost_at DESC, o.id DESC";
+    }
+
     const [rows] = await pool.execute(
       `SELECT o.*, u.email AS owner_email
        FROM opportunities o
        LEFT JOIN users u ON u.id = o.owner_user_id
        WHERE ${where.join(" AND ")}
-       ORDER BY o.created_at DESC`,
+       ${orderSql}`,
       params
     );
 
@@ -120,6 +164,183 @@ router.get("/", async (req, res) => {
     res.json({ success: true, total: rows.length, data: rows, stageBreakdown });
   } catch (err) {
     console.error("GET /api/opportunities", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.post("/:id/consultation", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
+    const notes = String(req.body?.notes || "").trim();
+    if (!notes) return res.status(400).json({ success: false, message: "notes is required" });
+    const atParam = normalizeDatetime(req.body?.consultation_at);
+
+    const scope = applyScope(req, "o");
+    const [[existing]] = await pool.execute(
+      `SELECT o.* FROM opportunities o WHERE o.id = ? AND ${scope.where}`,
+      [id, ...scope.params]
+    );
+    if (!existing) return res.status(404).json({ success: false, message: "Opportunity not found" });
+    if (existing.stage === "closed_won" || existing.stage === "closed_lost") {
+      return res.status(400).json({ success: false, message: "Cannot log consultation on a closed opportunity" });
+    }
+
+    let nextStage = existing.stage;
+    if (shouldAdvanceToConsultationDone(existing.stage)) {
+      nextStage = "consultation_done";
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.execute(
+        `UPDATE opportunities SET consultation_at = COALESCE(?, NOW()), consultation_notes = ?, stage = ?, updated_at = NOW() WHERE id = ?`,
+        [atParam, notes, nextStage, id]
+      );
+      await insertOpportunityActivity(conn, {
+        opportunityId: id,
+        tenantId: req.user?.tenantId ?? null,
+        activityType: "consultation",
+        notes,
+        metadata: { consultation_at: atParam || null, stage_after: nextStage },
+        userId: req.user.id,
+      });
+      await conn.commit();
+    } catch (e) {
+      try {
+        await conn.rollback();
+      } catch {
+        /* ignore */
+      }
+      throw e;
+    } finally {
+      conn.release();
+    }
+
+    const [[row]] = await pool.execute("SELECT o.*, u.email AS owner_email FROM opportunities o LEFT JOIN users u ON u.id = o.owner_user_id WHERE o.id = ?", [id]);
+    emitAdminChanged({ scope: "opportunities", action: "consultation", tenantId: req.user?.tenantId || null });
+    emitCalendarChanged({ reason: "opportunities", tenantId: req.user?.tenantId || null });
+    emitOpportunitiesChanged({ action: "consultation", id, tenantId: req.user?.tenantId || null });
+    res.json({ success: true, data: row });
+  } catch (err) {
+    console.error("POST /api/opportunities/:id/consultation", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.post("/:id/close-won", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
+    const finalAmount = Number(req.body?.final_amount);
+    if (!Number.isFinite(finalAmount) || finalAmount < 0) {
+      return res.status(400).json({ success: false, message: "final_amount is required and must be a non-negative number" });
+    }
+    const closeNotes = req.body?.notes != null ? String(req.body.notes) : null;
+
+    const scope = applyScope(req, "o");
+    const [[existing]] = await pool.execute(
+      `SELECT o.* FROM opportunities o WHERE o.id = ? AND ${scope.where}`,
+      [id, ...scope.params]
+    );
+    if (!existing) return res.status(404).json({ success: false, message: "Opportunity not found" });
+    if (existing.stage === "closed_won" || existing.stage === "closed_lost") {
+      return res.status(400).json({ success: false, message: "Opportunity is already closed" });
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.execute(
+        `UPDATE opportunities SET stage = 'closed_won', closed_won_at = NOW(), final_amount = ?, updated_at = NOW() WHERE id = ?`,
+        [finalAmount, id]
+      );
+      await insertOpportunityActivity(conn, {
+        opportunityId: id,
+        tenantId: req.user?.tenantId ?? null,
+        activityType: "close_won",
+        notes: closeNotes,
+        metadata: {
+          from_stage: existing.stage,
+          final_amount: finalAmount,
+          forecast_amount: Number(existing.amount) || 0,
+        },
+        userId: req.user.id,
+      });
+      await conn.commit();
+    } catch (e) {
+      try {
+        await conn.rollback();
+      } catch {
+        /* ignore */
+      }
+      throw e;
+    } finally {
+      conn.release();
+    }
+
+    const [[row]] = await pool.execute("SELECT o.*, u.email AS owner_email FROM opportunities o LEFT JOIN users u ON u.id = o.owner_user_id WHERE o.id = ?", [id]);
+    emitAdminChanged({ scope: "opportunities", action: "close_won", tenantId: req.user?.tenantId || null });
+    emitCalendarChanged({ reason: "opportunities", tenantId: req.user?.tenantId || null });
+    emitOpportunitiesChanged({ action: "close_won", id, tenantId: req.user?.tenantId || null });
+    res.json({ success: true, data: row });
+  } catch (err) {
+    console.error("POST /api/opportunities/:id/close-won", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.post("/:id/close-lost", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
+    const lossReason = req.body?.loss_reason != null ? String(req.body.loss_reason).slice(0, 255) : null;
+
+    const scope = applyScope(req, "o");
+    const [[existing]] = await pool.execute(
+      `SELECT o.* FROM opportunities o WHERE o.id = ? AND ${scope.where}`,
+      [id, ...scope.params]
+    );
+    if (!existing) return res.status(404).json({ success: false, message: "Opportunity not found" });
+    if (existing.stage === "closed_won" || existing.stage === "closed_lost") {
+      return res.status(400).json({ success: false, message: "Opportunity is already closed" });
+    }
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.execute(
+        `UPDATE opportunities SET stage = 'closed_lost', closed_lost_at = NOW(), loss_reason = ?, updated_at = NOW() WHERE id = ?`,
+        [lossReason, id]
+      );
+      await insertOpportunityActivity(conn, {
+        opportunityId: id,
+        tenantId: req.user?.tenantId ?? null,
+        activityType: "close_lost",
+        notes: lossReason,
+        metadata: { from_stage: existing.stage },
+        userId: req.user.id,
+      });
+      await conn.commit();
+    } catch (e) {
+      try {
+        await conn.rollback();
+      } catch {
+        /* ignore */
+      }
+      throw e;
+    } finally {
+      conn.release();
+    }
+
+    const [[row]] = await pool.execute("SELECT o.*, u.email AS owner_email FROM opportunities o LEFT JOIN users u ON u.id = o.owner_user_id WHERE o.id = ?", [id]);
+    emitAdminChanged({ scope: "opportunities", action: "close_lost", tenantId: req.user?.tenantId || null });
+    emitCalendarChanged({ reason: "opportunities", tenantId: req.user?.tenantId || null });
+    emitOpportunitiesChanged({ action: "close_lost", id, tenantId: req.user?.tenantId || null });
+    res.json({ success: true, data: row });
+  } catch (err) {
+    console.error("POST /api/opportunities/:id/close-lost", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -277,11 +498,26 @@ router.patch("/:id/stage", async (req, res) => {
     if (!VALID_STAGE.has(stage)) return res.status(400).json({ success: false, message: "Invalid stage" });
     const normalizedStage = normalizeStage(stage);
     const scope = applyScope(req, "o");
+    const [[existing]] = await pool.execute(
+      `SELECT o.stage FROM opportunities o WHERE o.id = ? AND ${scope.where}`,
+      [id, ...scope.params]
+    );
+    if (!existing) return res.status(404).json({ success: false, message: "Opportunity not found" });
     const [r] = await pool.execute(
       `UPDATE opportunities o SET o.stage = ?, o.updated_at = NOW() WHERE o.id = ? AND ${scope.where}`,
       [normalizedStage, id, ...scope.params]
     );
     if (!r.affectedRows) return res.status(404).json({ success: false, message: "Opportunity not found" });
+    if (existing.stage !== normalizedStage) {
+      await insertOpportunityActivity(pool, {
+        opportunityId: id,
+        tenantId: req.user?.tenantId ?? null,
+        activityType: "stage_change",
+        notes: null,
+        metadata: { from: existing.stage, to: normalizedStage },
+        userId: req.user.id,
+      });
+    }
     emitAdminChanged({ scope: "opportunities", action: "stage", tenantId: req.user?.tenantId || null });
     emitCalendarChanged({ reason: "opportunities", tenantId: req.user?.tenantId || null });
     emitOpportunitiesChanged({ action: "stage", id, stage: normalizedStage, tenantId: req.user?.tenantId || null });
@@ -300,11 +536,26 @@ router.put("/:id/stage", async (req, res) => {
     if (!VALID_STAGE.has(stage)) return res.status(400).json({ success: false, message: "Invalid stage" });
     const normalizedStage = normalizeStage(stage);
     const scope = applyScope(req, "o");
+    const [[existing]] = await pool.execute(
+      `SELECT o.stage FROM opportunities o WHERE o.id = ? AND ${scope.where}`,
+      [id, ...scope.params]
+    );
+    if (!existing) return res.status(404).json({ success: false, message: "Opportunity not found" });
     const [r] = await pool.execute(
       `UPDATE opportunities o SET o.stage = ?, o.updated_at = NOW() WHERE o.id = ? AND ${scope.where}`,
       [normalizedStage, id, ...scope.params]
     );
     if (!r.affectedRows) return res.status(404).json({ success: false, message: "Opportunity not found" });
+    if (existing.stage !== normalizedStage) {
+      await insertOpportunityActivity(pool, {
+        opportunityId: id,
+        tenantId: req.user?.tenantId ?? null,
+        activityType: "stage_change",
+        notes: null,
+        metadata: { from: existing.stage, to: normalizedStage },
+        userId: req.user.id,
+      });
+    }
     emitAdminChanged({ scope: "opportunities", action: "stage", tenantId: req.user?.tenantId || null });
     emitCalendarChanged({ reason: "opportunities", tenantId: req.user?.tenantId || null });
     emitOpportunitiesChanged({ action: "stage", id, stage: normalizedStage, tenantId: req.user?.tenantId || null });
