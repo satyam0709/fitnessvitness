@@ -1,13 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
+import { subscribeCrmLive } from "@/lib/chatRealtime";
 import { useQuickCreate } from "@/components/Dashboard/QuickCreateContext";
 import {
   useConfirmDialog,
   buildDeleteMessage,
 } from "@/components/ConfirmDialog/ConfirmDialogContext";
+import { useListHighlight, itemHighlightClass } from "@/lib/useListHighlight";
 import styles from "./remindersPage.module.css";
 
 const TYPE_LABELS = {
@@ -68,10 +71,12 @@ function useDebounced(value, ms) {
   return v;
 }
 
-export default function RemindersPage() {
+function RemindersPageContent() {
   const { confirm } = useConfirmDialog();
   const { isLoaded } = useAuth();
   const { open: openQuickCreate } = useQuickCreate();
+  const searchParams = useSearchParams();
+  const highlightId = searchParams.get("highlight");
   const [items, setItems] = useState([]);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -86,6 +91,8 @@ export default function RemindersPage() {
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
   const [editRow, setEditRow] = useState(null);
   const [calMonth, setCalMonth] = useState(() => new Date());
+
+  const { highlightedId } = useListHighlight(highlightId, !loading, styles.highlighted);
 
   const load = useCallback(async () => {
     if (!isLoaded) return;
@@ -130,6 +137,14 @@ export default function RemindersPage() {
     window.addEventListener("crm-reminders-changed", onChanged);
     return () => window.removeEventListener("crm-reminders-changed", onChanged);
   }, [load]);
+
+  useEffect(() => {
+    if (!isLoaded) return undefined;
+    const unsub = subscribeCrmLive(["reminders:changed", "calendar:changed"], () => {
+      load();
+    });
+    return unsub;
+  }, [isLoaded, load]);
 
   useEffect(() => {
     if (!isLoaded) return;
@@ -484,7 +499,11 @@ export default function RemindersPage() {
             </thead>
             <tbody>
               {items.map((r) => (
-                <tr key={r.id}>
+                <tr
+                  key={r.id}
+                  id={`item-${r.id}`}
+                  className={itemHighlightClass(r.id, highlightedId, styles.highlighted)}
+                >
                   <td>
                     <input
                       type="checkbox"
@@ -741,6 +760,14 @@ export default function RemindersPage() {
         />
       ) : null}
     </div>
+  );
+}
+
+export default function RemindersPage() {
+  return (
+    <Suspense fallback={null}>
+      <RemindersPageContent />
+    </Suspense>
   );
 }
 

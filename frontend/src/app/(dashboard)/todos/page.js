@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch, getApiOrigin, publicFileUrl } from "@/lib/api";
 import { useQuickCreate } from "@/components/Dashboard/QuickCreateContext";
@@ -10,6 +11,7 @@ import {
   buildDeleteMessage,
 } from "@/components/ConfirmDialog/ConfirmDialogContext";
 import { useToast } from "@/components/Toast/ToastContext";
+import { useListHighlight, itemHighlightClass } from "@/lib/useListHighlight";
 import styles from "./todos.module.css";
 
 const TABS = [
@@ -56,12 +58,14 @@ function assigneeLine(t) {
     .join(", ");
 }
 
-export default function TodosPage() {
+function TodosPageContent() {
   const { confirm } = useConfirmDialog();
   const { showToast } = useToast();
   const { open: openQuick } = useQuickCreate();
   const { isLoaded } = useAuth();
   const { me } = useUserRole();
+  const searchParams = useSearchParams();
+  const highlightId = searchParams.get("highlight");
 
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -76,6 +80,7 @@ export default function TodosPage() {
   const [users, setUsers] = useState([]);
   const [live, setLive] = useState(false);
   const loadRef = useRef(() => {});
+  const highlightTabSwitched = useRef(false);
 
   const tabMeta = useMemo(() => TABS.find((t) => t.id === tab) || TABS[0], [tab]);
 
@@ -194,6 +199,46 @@ export default function TodosPage() {
     return { high: hi, medium: med, low: lo };
   }, [items]);
 
+  const highlightPriority = useMemo(() => {
+    if (!highlightId) return null;
+    const id = String(highlightId);
+    const t = items.find((x) => String(x.id) === id);
+    if (!t) return null;
+    const p = String(t.priority || "").toLowerCase();
+    if (p === "high") return "high";
+    if (p === "low") return "low";
+    return "medium";
+  }, [highlightId, items]);
+
+  const { highlightedId, scrollToHighlight } = useListHighlight(
+    highlightId,
+    !loading,
+    styles.highlighted,
+    {
+      beforeScroll: () => {
+        if (!highlightPriority) return;
+        document.getElementById(`col-${highlightPriority}`)?.scrollIntoView({
+          behavior: "smooth",
+          inline: "center",
+          block: "nearest",
+        });
+      },
+    }
+  );
+
+  useEffect(() => {
+    if (!highlightId || loading || highlightTabSwitched.current) return;
+    const found = items.some((x) => String(x.id) === String(highlightId));
+    if (!found && tab !== "all") {
+      highlightTabSwitched.current = true;
+      setTab("all");
+    }
+  }, [highlightId, loading, items, tab]);
+
+  function jumpToHighlighted() {
+    scrollToHighlight();
+  }
+
   async function toggleDone(todo) {
     const done = todo.status === "completed";
     const next = done ? "pending" : "completed";
@@ -228,9 +273,9 @@ export default function TodosPage() {
     }
   }
 
-  function renderColumn(key, label, className, list) {
+  function renderColumn(key, label, className, list, activeHighlightId) {
     return (
-      <div className={styles.col} key={key}>
+      <div className={styles.col} key={key} id={`col-${key}`}>
         <div className={`${styles.colHead} ${className}`}>
           <i className={`fas ${key === "high" ? "fa-arrow-up" : key === "low" ? "fa-arrow-down" : "fa-square"}`} />
           {label} ({list.length})
@@ -245,7 +290,11 @@ export default function TodosPage() {
             </div>
           ) : (
             list.map((t) => (
-              <div key={t.id} className={styles.card}>
+              <div
+                key={t.id}
+                id={`item-${t.id}`}
+                className={`${styles.card} ${itemHighlightClass(t.id, activeHighlightId, styles.highlighted)}`}
+              >
                 <button
                   type="button"
                   className={`${styles.check} ${t.status === "completed" ? styles.checkDone : ""}`}
@@ -336,6 +385,12 @@ export default function TodosPage() {
         </select>
       </div>
 
+      {highlightId ? (
+        <button type="button" className={styles.jumpHighlight} onClick={jumpToHighlighted}>
+          📌 Jump to highlighted task
+        </button>
+      ) : null}
+
       <div className={styles.tabs}>
         {TABS.map((t) => (
           <button
@@ -358,10 +413,18 @@ export default function TodosPage() {
             </button>
           </div>
         ) : null}
-        {renderColumn("high", "High Priority", styles.colHigh, byPriority.high)}
-        {renderColumn("medium", "Medium Priority", styles.colMed, byPriority.medium)}
-        {renderColumn("low", "Low Priority", styles.colLow, byPriority.low)}
+        {renderColumn("high", "High Priority", styles.colHigh, byPriority.high, highlightedId)}
+        {renderColumn("medium", "Medium Priority", styles.colMed, byPriority.medium, highlightedId)}
+        {renderColumn("low", "Low Priority", styles.colLow, byPriority.low, highlightedId)}
       </div>
     </div>
+  );
+}
+
+export default function TodosPage() {
+  return (
+    <Suspense fallback={null}>
+      <TodosPageContent />
+    </Suspense>
   );
 }

@@ -75,6 +75,20 @@ function sendValidationError(res, message) {
   return res.status(400).json({ success: false, message });
 }
 
+/** Coerce empty form strings to null for optional DB columns. */
+function emptyToNull(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string" && value.trim() === "") return null;
+  return value;
+}
+
+function optionalNumber(value) {
+  const v = emptyToNull(value);
+  if (v === null) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 // Helper to extract field-level errors from express-validator
 function extractValidationErrors(req) {
   const errors = validationResult(req);
@@ -295,13 +309,33 @@ async function getClientById(req, res) {
 
 async function createClient(req, res) {
   try {
-    const {
-      full_name, phone, email, age, city, address, occupation, emergency_contact,
-      referred_by_client_id, source, tier, health_goal, plan_type, plan_start_date,
-      follow_up_freq_days, medical_conditions, allergies, activity_level,
-      current_medications, height_cm, start_weight_kg, current_weight_kg, target_weight_kg,
-      status, progress,
-    } = req.body;
+    const raw = req.body || {};
+    const full_name = String(raw.full_name || "").trim();
+    const phone = emptyToNull(raw.phone);
+    const email = emptyToNull(raw.email);
+    const age = optionalNumber(raw.age);
+    const city = emptyToNull(raw.city);
+    const address = emptyToNull(raw.address);
+    const occupation = emptyToNull(raw.occupation);
+    const emergency_contact = emptyToNull(raw.emergency_contact);
+    const referred_by_client_id = emptyToNull(raw.referred_by_client_id);
+    const referred_by_name = emptyToNull(raw.referred_by_name);
+    const source = emptyToNull(raw.source);
+    const tier = optionalNumber(raw.tier) ?? 3;
+    const health_goal = emptyToNull(raw.health_goal);
+    const plan_type = emptyToNull(raw.plan_type);
+    const plan_start_date = emptyToNull(raw.plan_start_date);
+    const follow_up_freq_days = optionalNumber(raw.follow_up_freq_days) ?? 14;
+    const medical_conditions = emptyToNull(raw.medical_conditions);
+    const allergies = emptyToNull(raw.allergies);
+    const activity_level = emptyToNull(raw.activity_level);
+    const current_medications = emptyToNull(raw.current_medications);
+    const height_cm = optionalNumber(raw.height_cm);
+    const start_weight_kg = optionalNumber(raw.start_weight_kg);
+    const current_weight_kg = optionalNumber(raw.current_weight_kg ?? raw.start_weight_kg);
+    const target_weight_kg = optionalNumber(raw.target_weight_kg);
+    const status = emptyToNull(raw.status);
+    const progress = emptyToNull(raw.progress);
 
     // Express-validator validation
     const fieldErrors = extractValidationErrors(req);
@@ -310,8 +344,7 @@ async function createClient(req, res) {
     }
 
     // Existing validation
-    const reqError = validateRequired(req.body, ['full_name']);
-    if (reqError) return sendValidationError(res, reqError);
+    if (!full_name) return sendValidationError(res, "Full name is required");
 
     const nameError = validateStringLength(full_name, 'full_name', 255);
     if (nameError) return sendValidationError(res, nameError);
@@ -332,31 +365,31 @@ async function createClient(req, res) {
       const planError = validateEnum(plan_type, VALID_ENUMS.plan_type, 'plan_type');
       if (planError) return sendValidationError(res, planError);
     }
-    if (tier !== undefined) {
+    if (tier != null) {
       const tierError = validateNumber(tier, 'tier', 1, 5);
       if (tierError) return sendValidationError(res, tierError);
     }
-    if (age !== undefined) {
+    if (age != null) {
       const ageError = validateNumber(age, 'age', 1, 150);
       if (ageError) return sendValidationError(res, ageError);
     }
-    if (height_cm !== undefined) {
+    if (height_cm != null) {
       const heightError = validateNumber(height_cm, 'height_cm', 50, 300);
       if (heightError) return sendValidationError(res, heightError);
     }
-    if (start_weight_kg !== undefined) {
+    if (start_weight_kg != null) {
       const weightError = validateNumber(start_weight_kg, 'start_weight_kg', 1, 500);
       if (weightError) return sendValidationError(res, weightError);
     }
-    if (current_weight_kg !== undefined) {
+    if (current_weight_kg != null) {
       const weightError = validateNumber(current_weight_kg, 'current_weight_kg', 1, 500);
       if (weightError) return sendValidationError(res, weightError);
     }
-    if (target_weight_kg !== undefined) {
+    if (target_weight_kg != null) {
       const weightError = validateNumber(target_weight_kg, 'target_weight_kg', 1, 500);
       if (weightError) return sendValidationError(res, weightError);
     }
-    if (follow_up_freq_days !== undefined) {
+    if (follow_up_freq_days != null) {
       const freqError = validatePositiveInt(follow_up_freq_days, 'follow_up_freq_days');
       if (freqError) return sendValidationError(res, freqError);
     }
@@ -390,16 +423,18 @@ async function createClient(req, res) {
     const [result] = await mainPool.execute(
       `INSERT INTO fitness_clients (
         client_id, full_name, phone, email, age, city, address, occupation, emergency_contact,
-        referred_by_client_id, source, tier, health_goal, plan_type, plan_start_date,
+        referred_by_client_id, referred_by_name, source, tier, health_goal, plan_type, plan_start_date,
         plan_expiry_date, follow_up_freq_days, medical_conditions, allergies, activity_level,
-        current_medications, height_cm, start_weight_kg, current_weight_kg, target_weight_kg, bmi
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        current_medications, height_cm, start_weight_kg, current_weight_kg, target_weight_kg, bmi,
+        status, progress
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         clientId, full_name, phone, email, age, city, address, occupation, emergency_contact,
-        referred_by_client_id, source || 'Walk-in', tier || 3, health_goal, plan_type,
-        plan_start_date, plan_expiry_date, follow_up_freq_days || 14,
+        referred_by_client_id || null, referred_by_name || null, source || "Walk-in", tier || 3,
+        health_goal, plan_type, plan_start_date, plan_expiry_date, follow_up_freq_days || 14,
         medical_conditions, allergies, activity_level, current_medications,
-        height_cm, start_weight_kg, current_weight_kg, target_weight_kg, bmi
+        height_cm, start_weight_kg, current_weight_kg, target_weight_kg, bmi,
+        status || "Active", progress || "Neutral",
       ]
     );
 
@@ -410,6 +445,7 @@ async function createClient(req, res) {
     emitFitnessChanged();
     res.status(201).json({ success: true, data: computeClientFields(rows[0]) });
   } catch (error) {
+    console.error("POST /api/fitness/clients createClient:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 }

@@ -206,10 +206,59 @@ function emitFitnessChanged() {
   ioRef.emit("fitness:changed");
 }
 
+function emitCollectionsChanged(payload) {
+  if (!ioRef) return;
+  ioRef.emit("collections:changed", payload || {});
+}
+
 /** Broadcast CRM opportunity list changes to connected clients (same pattern as fitness). */
 function emitOpportunitiesChanged(payload) {
   if (!ioRef) return;
   ioRef.emit("opportunities:changed", payload || {});
+}
+
+function emitRemindersChanged(payload) {
+  if (!ioRef) return;
+  ioRef.emit("reminders:changed", payload || {});
+}
+
+function emitLeadsChanged(payload) {
+  if (!ioRef) return;
+  ioRef.emit("leads:changed", payload || {});
+}
+
+function emitTasksChanged(payload) {
+  if (!ioRef) return;
+  const p = payload || {};
+  ioRef.emit("tasks:changed", p);
+  ioRef.emit("crm-tasks-changed", p);
+}
+
+function emitTicketsChanged(payload) {
+  if (!ioRef) return;
+  ioRef.emit("tickets:changed", payload || {});
+}
+
+function emitContactsChanged(payload) {
+  if (!ioRef) return;
+  ioRef.emit("contacts:changed", payload || {});
+}
+
+function emitNotesChanged(payload) {
+  if (!ioRef) return;
+  ioRef.emit("notes:changed", payload || {});
+}
+
+function emitUserEvent(userId, payload) {
+  if (!ioRef || userId == null) return;
+  const uid = Number(userId);
+  if (!Number.isFinite(uid) || uid <= 0) return;
+  ioRef.to(`user:${uid}`).emit("user:event", payload || {});
+}
+
+function emitWorkspaceAccessChanged(payload) {
+  if (!ioRef) return;
+  ioRef.emit("workspace:access", payload || {});
 }
 
 function getIO() {
@@ -226,6 +275,15 @@ module.exports = {
   emitNotificationCreated,
   emitNotificationReadState,
   emitFitnessChanged,
+  emitCollectionsChanged,
   emitOpportunitiesChanged,
+  emitRemindersChanged,
+  emitLeadsChanged,
+  emitTasksChanged,
+  emitTicketsChanged,
+  emitContactsChanged,
+  emitNotesChanged,
+  emitUserEvent,
+  emitWorkspaceAccessChanged,
   getIO,
 };

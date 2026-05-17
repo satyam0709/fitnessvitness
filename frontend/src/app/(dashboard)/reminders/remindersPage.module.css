@@ -542,3 +542,10 @@
     width: 100%;
   }
 }
+
+.highlighted {
+  outline: 2px solid #f59e0b;
+  outline-offset: 2px;
+  background-color: rgba(245, 158, 11, 0.08);
+  transition: all 0.3s ease;
+}

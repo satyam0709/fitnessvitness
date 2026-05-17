@@ -429,6 +429,12 @@
   flex-shrink: 0;
 }
 
+.todayBadge {
+  background: rgba(220, 38, 38, 0.15);
+  border-color: rgba(220, 38, 38, 0.45);
+  color: #dc2626;
+}
+
 .sidebar.collapsed .label {
   opacity: 0;
   max-width: 0;

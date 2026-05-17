@@ -33,17 +33,62 @@ export default function NewClientPage() {
     } catch (err) { console.error(err); }
   }
 
+  function buildPayload() {
+    const str = (v) => {
+      const s = String(v ?? "").trim();
+      return s === "" ? null : s;
+    };
+    const num = (v) => {
+      if (v === "" || v == null) return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    return {
+      full_name: form.full_name.trim(),
+      phone: str(form.phone),
+      email: str(form.email),
+      age: num(form.age),
+      city: str(form.city),
+      address: str(form.address),
+      occupation: str(form.occupation),
+      emergency_contact: str(form.emergency_contact),
+      referred_by_client_id: str(form.referred_by_client_id),
+      referred_by_name: str(form.referred_by_name),
+      source: form.source || "Walk-in",
+      tier: num(form.tier) ?? 3,
+      health_goal: str(form.health_goal),
+      plan_type: str(form.plan_type),
+      plan_start_date: str(form.plan_start_date),
+      follow_up_freq_days: num(form.follow_up_freq_days) ?? 14,
+      medical_conditions: str(form.medical_conditions),
+      allergies: str(form.allergies),
+      activity_level: str(form.activity_level),
+      current_medications: str(form.current_medications),
+      height_cm: num(form.height_cm),
+      start_weight_kg: num(form.start_weight_kg),
+      current_weight_kg: num(form.start_weight_kg),
+      target_weight_kg: num(form.target_weight_kg),
+    };
+  }
+
   async function handleSubmit(e) {
     e.preventDefault();
+    if (!form.full_name.trim()) {
+      alert("Full name is required.");
+      return;
+    }
     setLoading(true);
     try {
       const res = await apiFetch("/fitness/clients", {
         method: "POST",
-        body: JSON.stringify(form),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildPayload()),
       });
       const json = await res.json();
       if (json.success) {
         router.push(`/clients/${json.data.client_id}`);
+      } else if (json.errors && typeof json.errors === "object") {
+        alert(Object.entries(json.errors).map(([k, v]) => `${k}: ${v}`).join("\n"));
       } else {
         alert(json.message || "Failed to create client");
       }

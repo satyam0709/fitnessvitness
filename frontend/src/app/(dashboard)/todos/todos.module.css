@@ -237,3 +237,29 @@
   color: #16a34a;
   font-weight: 600;
 }
+
+.highlighted {
+  outline: 2px solid #f59e0b;
+  outline-offset: 2px;
+  background-color: rgba(245, 158, 11, 0.08);
+  transition: all 0.3s ease;
+}
+
+.jumpHighlight {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #92400e;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.jumpHighlight:hover {
+  background: rgba(245, 158, 11, 0.2);
+}

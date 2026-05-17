@@ -21,6 +21,8 @@ const companiesRouter    = require("./companies");
 const crmRouter          = require("./crm");
 const authRouter         = require("./auth");
 const fitnessRouter      = require("./fitness");
+const collectionsRouter  = require("./collections");
+const todayRouter        = require("./today");
 
 const router = express.Router();
 const protectedRoute = [verifyToken];
@@ -118,6 +120,7 @@ router.use("/meetings", ...protectedRoute, meetingsRouter);
 router.use("/todos", ...protectedRoute, todosRouter);
 router.use("/notifications", ...protectedRoute, notificationsRouter);
 router.use("/dashboard", ...protectedRoute, dashboardRouter);
+router.use("/today", ...protectedRoute, todayRouter);
 router.use("/calendar", ...protectedRoute, calendarRouter);
 router.use("/contacts", ...protectedRoute, contactsRouter);
 router.use("/companies", ...protectedRoute, companiesRouter);
@@ -130,5 +133,6 @@ router.patch("/contact/:id/read", verifyToken, markAsRead);
 router.use("/crm", crmRouter);
 router.use("/v2",      v2Router);
 router.use("/fitness", ...protectedRoute, fitnessRouter);
+router.use("/collections", ...protectedRoute, collectionsRouter);
 
 module.exports = router;

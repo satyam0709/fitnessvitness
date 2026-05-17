@@ -1,8 +1,51 @@
 const express = require("express");
 const { verifyToken } = require("../middleware/verifyToken");
 const { pool } = require("../config/database");
-const { emitAdminChanged, emitCalendarChanged, emitOpportunitiesChanged } = require("../realtime/meetingsRealtime");
+const {
+  emitAdminChanged,
+  emitCalendarChanged,
+  emitOpportunitiesChanged,
+  emitRemindersChanged,
+  emitFitnessChanged,
+} = require("../realtime/meetingsRealtime");
 const { canSeeAllTeamRecords } = require("../utils/crmTeamAccess");
+const {
+  createClientFromOpportunity,
+  linkExistingClient,
+} = require("../services/opportunityClientService");
+
+const columnCache = new Map();
+let hasTenantIdColumn = null;
+
+async function hasColumn(table, column) {
+  const key = `${table}.${column}`;
+  if (columnCache.has(key)) return columnCache.get(key);
+  const [rows] = await pool.execute(
+    `SELECT 1 FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ? LIMIT 1`,
+    [table, column]
+  );
+  const exists = rows.length > 0;
+  columnCache.set(key, exists);
+  return exists;
+}
+
+async function opportunitiesHasTenantId() {
+  if (hasTenantIdColumn !== null) return hasTenantIdColumn;
+  hasTenantIdColumn = await hasColumn("opportunities", "tenant_id");
+  return hasTenantIdColumn;
+}
+
+function tenantId(req) {
+  return req.user?.tenantId ?? req.tenantId ?? null;
+}
+
+function emitOppChanges(req, action, extra = {}) {
+  const tid = tenantId(req);
+  emitAdminChanged(tid);
+  emitCalendarChanged({ reason: "opportunities", tenantId: tid || undefined });
+  emitOpportunitiesChanged({ action, tenantId: tid || undefined, ...extra });
+}
 
 const router = express.Router();
 router.use(verifyToken);
@@ -59,15 +102,81 @@ function normalizeEnum(v) {
   return String(v || "").trim().toLowerCase().replace(/\s+/g, "_");
 }
 
-function applyScope(req, alias = "o") {
+async function applyScope(req, alias = "o") {
   const params = [];
-  const clauses = [`${alias}.is_deleted = 0`, `${alias}.tenant_id = ?`];
-  params.push(req.user?.tenantId || null);
+  const clauses = [`${alias}.is_deleted = 0`];
+  if (await opportunitiesHasTenantId()) {
+    clauses.push(`${alias}.tenant_id <=> ?`);
+    params.push(tenantId(req));
+  }
   if (!canSeeAllTeamRecords(req)) {
     clauses.push(`(${alias}.created_by = ? OR ${alias}.owner_user_id = ?)`);
     params.push(req.user.id, req.user.id);
   }
   return { where: clauses.join(" AND "), params };
+}
+
+async function loadOpportunityScoped(req, id) {
+  const scope = await applyScope(req, "o");
+  const [[row]] = await pool.execute(
+    `SELECT o.*, u.email AS owner_email
+     FROM opportunities o
+     LEFT JOIN users u ON u.id = o.owner_user_id
+     WHERE o.id = ? AND ${scope.where}`,
+    [id, ...scope.params]
+  );
+  return row || null;
+}
+
+async function syncFollowupReminder(executor, opportunity, userId) {
+  const db = executor || pool;
+  const followAt = opportunity.followup_at;
+  const hasLinkedCol = await hasColumn("opportunities", "linked_reminder_id");
+  if (!hasLinkedCol) return null;
+
+  if (!followAt) {
+    if (opportunity.linked_reminder_id) {
+      await db.execute("UPDATE reminders SET is_done = 1 WHERE id = ?", [
+        opportunity.linked_reminder_id,
+      ]);
+    }
+    return null;
+  }
+
+  const title = `Follow-up: ${String(opportunity.title || "Prospect").slice(0, 180)}`;
+  const note = opportunity.visit_purpose || opportunity.notes || null;
+  const ownerId = Number(opportunity.owner_user_id) || userId;
+  const remindType = FOLLOWUP_TYPES.has(String(opportunity.followup_type || "").toLowerCase())
+    ? String(opportunity.followup_type).toLowerCase()
+    : "call";
+
+  if (opportunity.linked_reminder_id) {
+    await db.execute(
+      `UPDATE reminders SET title = ?, note = ?, remind_at = ?, assigned_to_user_id = ?, reminder_type = ?, is_done = 0
+       WHERE id = ? AND is_deleted = 0`,
+      [title, note, followAt, ownerId, remindType, opportunity.linked_reminder_id]
+    );
+    return opportunity.linked_reminder_id;
+  }
+
+  const [r] = await db.execute(
+    `INSERT INTO reminders (user_id, title, note, remind_at, lead_id, assigned_to_user_id, reminder_type)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      userId,
+      title,
+      note,
+      followAt,
+      opportunity.lead_id || null,
+      ownerId,
+      remindType,
+    ]
+  );
+  await db.execute("UPDATE opportunities SET linked_reminder_id = ? WHERE id = ?", [
+    r.insertId,
+    opportunity.id,
+  ]);
+  return r.insertId;
 }
 
 async function insertOpportunityActivity(executor, { opportunityId, tenantId, activityType, notes, metadata, userId }) {
@@ -89,7 +198,7 @@ router.get("/", async (req, res) => {
   try {
     const { stage, q, owner_user_id, expected_close_from, expected_close_to, include_breakdown, starred, view } =
       req.query;
-    const scope = applyScope(req, "o");
+    const scope = await applyScope(req, "o");
     const where = [scope.where];
     const params = [...scope.params];
 
@@ -168,6 +277,41 @@ router.get("/", async (req, res) => {
   }
 });
 
+router.get("/:id/activities", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
+    const row = await loadOpportunityScoped(req, id);
+    if (!row) return res.status(404).json({ success: false, message: "Opportunity not found" });
+
+    const [activities] = await pool.execute(
+      `SELECT a.*, u.email AS created_by_email
+       FROM opportunity_activities a
+       LEFT JOIN users u ON u.id = a.created_by
+       WHERE a.opportunity_id = ?
+       ORDER BY a.created_at DESC`,
+      [id]
+    );
+    res.json({ success: true, data: activities });
+  } catch (err) {
+    console.error("GET /api/opportunities/:id/activities", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.get("/:id", async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
+    const row = await loadOpportunityScoped(req, id);
+    if (!row) return res.status(404).json({ success: false, message: "Opportunity not found" });
+    res.json({ success: true, data: row });
+  } catch (err) {
+    console.error("GET /api/opportunities/:id", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 router.post("/:id/consultation", async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -176,7 +320,7 @@ router.post("/:id/consultation", async (req, res) => {
     if (!notes) return res.status(400).json({ success: false, message: "notes is required" });
     const atParam = normalizeDatetime(req.body?.consultation_at);
 
-    const scope = applyScope(req, "o");
+    const scope = await applyScope(req, "o");
     const [[existing]] = await pool.execute(
       `SELECT o.* FROM opportunities o WHERE o.id = ? AND ${scope.where}`,
       [id, ...scope.params]
@@ -219,9 +363,7 @@ router.post("/:id/consultation", async (req, res) => {
     }
 
     const [[row]] = await pool.execute("SELECT o.*, u.email AS owner_email FROM opportunities o LEFT JOIN users u ON u.id = o.owner_user_id WHERE o.id = ?", [id]);
-    emitAdminChanged({ scope: "opportunities", action: "consultation", tenantId: req.user?.tenantId || null });
-    emitCalendarChanged({ reason: "opportunities", tenantId: req.user?.tenantId || null });
-    emitOpportunitiesChanged({ action: "consultation", id, tenantId: req.user?.tenantId || null });
+    emitOppChanges(req, "consultation", { id });
     res.json({ success: true, data: row });
   } catch (err) {
     console.error("POST /api/opportunities/:id/consultation", err);
@@ -238,17 +380,16 @@ router.post("/:id/close-won", async (req, res) => {
       return res.status(400).json({ success: false, message: "final_amount is required and must be a non-negative number" });
     }
     const closeNotes = req.body?.notes != null ? String(req.body.notes) : null;
+    const createClient = req.body?.create_client === true || req.body?.create_client === 1;
+    const linkClientId = req.body?.client_id ? String(req.body.client_id).trim() : null;
 
-    const scope = applyScope(req, "o");
-    const [[existing]] = await pool.execute(
-      `SELECT o.* FROM opportunities o WHERE o.id = ? AND ${scope.where}`,
-      [id, ...scope.params]
-    );
+    const existing = await loadOpportunityScoped(req, id);
     if (!existing) return res.status(404).json({ success: false, message: "Opportunity not found" });
     if (existing.stage === "closed_won" || existing.stage === "closed_lost") {
       return res.status(400).json({ success: false, message: "Opportunity is already closed" });
     }
 
+    let clientPayload = null;
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
@@ -256,15 +397,35 @@ router.post("/:id/close-won", async (req, res) => {
         `UPDATE opportunities SET stage = 'closed_won', closed_won_at = NOW(), final_amount = ?, updated_at = NOW() WHERE id = ?`,
         [finalAmount, id]
       );
+
+      if (linkClientId) {
+        const link = await linkExistingClient(conn, id, linkClientId);
+        if (!link.ok) {
+          await conn.rollback();
+          return res.status(400).json({ success: false, message: link.message });
+        }
+        clientPayload = link.client;
+      } else if (createClient) {
+        const created = await createClientFromOpportunity(conn, existing, req.user.id);
+        if (created?.client_id) {
+          await conn.execute("UPDATE opportunities SET client_id = ? WHERE id = ?", [
+            created.client_id,
+            id,
+          ]);
+          clientPayload = created.row;
+        }
+      }
+
       await insertOpportunityActivity(conn, {
         opportunityId: id,
-        tenantId: req.user?.tenantId ?? null,
+        tenantId: tenantId(req),
         activityType: "close_won",
         notes: closeNotes,
         metadata: {
           from_stage: existing.stage,
           final_amount: finalAmount,
           forecast_amount: Number(existing.amount) || 0,
+          client_id: clientPayload?.client_id || linkClientId || null,
         },
         userId: req.user.id,
       });
@@ -280,11 +441,10 @@ router.post("/:id/close-won", async (req, res) => {
       conn.release();
     }
 
-    const [[row]] = await pool.execute("SELECT o.*, u.email AS owner_email FROM opportunities o LEFT JOIN users u ON u.id = o.owner_user_id WHERE o.id = ?", [id]);
-    emitAdminChanged({ scope: "opportunities", action: "close_won", tenantId: req.user?.tenantId || null });
-    emitCalendarChanged({ reason: "opportunities", tenantId: req.user?.tenantId || null });
-    emitOpportunitiesChanged({ action: "close_won", id, tenantId: req.user?.tenantId || null });
-    res.json({ success: true, data: row });
+    const row = await loadOpportunityScoped(req, id);
+    emitOppChanges(req, "close_won", { id });
+    if (clientPayload) emitFitnessChanged();
+    res.json({ success: true, data: row, client: clientPayload });
   } catch (err) {
     console.error("POST /api/opportunities/:id/close-won", err);
     res.status(500).json({ success: false, message: err.message });
@@ -297,7 +457,7 @@ router.post("/:id/close-lost", async (req, res) => {
     if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
     const lossReason = req.body?.loss_reason != null ? String(req.body.loss_reason).slice(0, 255) : null;
 
-    const scope = applyScope(req, "o");
+    const scope = await applyScope(req, "o");
     const [[existing]] = await pool.execute(
       `SELECT o.* FROM opportunities o WHERE o.id = ? AND ${scope.where}`,
       [id, ...scope.params]
@@ -335,9 +495,7 @@ router.post("/:id/close-lost", async (req, res) => {
     }
 
     const [[row]] = await pool.execute("SELECT o.*, u.email AS owner_email FROM opportunities o LEFT JOIN users u ON u.id = o.owner_user_id WHERE o.id = ?", [id]);
-    emitAdminChanged({ scope: "opportunities", action: "close_lost", tenantId: req.user?.tenantId || null });
-    emitCalendarChanged({ reason: "opportunities", tenantId: req.user?.tenantId || null });
-    emitOpportunitiesChanged({ action: "close_lost", id, tenantId: req.user?.tenantId || null });
+    emitOppChanges(req, "close_lost", { id });
     res.json({ success: true, data: row });
   } catch (err) {
     console.error("POST /api/opportunities/:id/close-lost", err);
@@ -373,16 +531,25 @@ router.post("/", async (req, res) => {
     }
 
     const ownerId = Number(req.body?.owner_user_id) || req.user.id;
+    const phone = req.body?.phone ? String(req.body.phone).trim().slice(0, 20) : null;
+    const visitPurpose = req.body?.visit_purpose ? String(req.body.visit_purpose).trim() : null;
+    const clientIdLink = req.body?.client_id ? String(req.body.client_id).trim().slice(0, 20) : null;
+    const followupAt = normalizeDatetime(req.body?.followup_at);
+
     const [r] = await pool.execute(
       `INSERT INTO opportunities
-       (tenant_id, title, lead_id, contact_id, company_name, amount, currency, stage, expected_close_date, owner_user_id, created_by, notes,
-        product_category, quantity, external_quotation_url, followup_at, followup_type, opportunity_type, lead_source, team, comments_history)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (tenant_id, title, lead_id, contact_id, client_id, phone, visit_purpose, company_name, amount, currency, stage,
+        expected_close_date, owner_user_id, created_by, notes, product_category, quantity, external_quotation_url,
+        followup_at, followup_type, opportunity_type, lead_source, team, comments_history)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        req.user?.tenantId || null,
+        tenantId(req),
         title,
         Number(req.body?.lead_id) || null,
         Number(req.body?.contact_id) || null,
+        clientIdLink || null,
+        phone,
+        visitPurpose,
         req.body?.company_name ? String(req.body.company_name) : null,
         Number(req.body?.amount) || 0,
         String(req.body?.currency || "INR").toUpperCase(),
@@ -394,7 +561,7 @@ router.post("/", async (req, res) => {
         productCategory ? productCategory : null,
         Number(req.body?.quantity) || 0,
         req.body?.external_quotation_url ? String(req.body.external_quotation_url).slice(0, 500) : null,
-        normalizeDatetime(req.body?.followup_at),
+        followupAt,
         followupType ? followupType : null,
         opportunityType ? opportunityType : null,
         leadSource ? leadSource : null,
@@ -403,10 +570,14 @@ router.post("/", async (req, res) => {
       ]
     );
 
-    const [[row]] = await pool.execute("SELECT * FROM opportunities WHERE id = ?", [r.insertId]);
-    emitAdminChanged({ scope: "opportunities", action: "create", tenantId: req.user?.tenantId || null });
-    emitCalendarChanged({ reason: "opportunities", tenantId: req.user?.tenantId || null });
-    emitOpportunitiesChanged({ action: "create", tenantId: req.user?.tenantId || null });
+    const oppId = r.insertId;
+    let row = await loadOpportunityScoped(req, oppId);
+    if (followupAt && row) {
+      await syncFollowupReminder(pool, row, req.user.id);
+      row = await loadOpportunityScoped(req, oppId);
+      emitRemindersChanged({ reason: "opportunities" });
+    }
+    emitOppChanges(req, "create", { id: oppId });
     res.status(201).json({ success: true, data: row });
   } catch (err) {
     console.error("POST /api/opportunities", err);
@@ -418,7 +589,7 @@ router.put("/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
-    const scope = applyScope(req, "o");
+    const scope = await applyScope(req, "o");
     const [[existing]] = await pool.execute(
       `SELECT o.* FROM opportunities o WHERE o.id = ? AND ${scope.where}`,
       [id, ...scope.params]
@@ -448,11 +619,15 @@ router.put("/:id", async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid lead_source" });
     }
 
+    const nextFollowupAt =
+      req.body?.followup_at != null ? normalizeDatetime(req.body.followup_at) : existing.followup_at;
+
     await pool.execute(
       `UPDATE opportunities
        SET title = ?, company_name = ?, amount = ?, currency = ?, stage = ?, expected_close_date = ?,
            owner_user_id = ?, notes = ?, product_category = ?, quantity = ?, external_quotation_url = ?,
-           followup_at = ?, followup_type = ?, opportunity_type = ?, lead_source = ?, team = ?, comments_history = ?, updated_at = NOW()
+           followup_at = ?, followup_type = ?, opportunity_type = ?, lead_source = ?, team = ?, comments_history = ?,
+           lead_id = ?, contact_id = ?, client_id = ?, phone = ?, visit_purpose = ?, updated_at = NOW()
        WHERE id = ?`,
       [
         req.body?.title != null ? String(req.body.title).trim() : existing.title,
@@ -470,19 +645,31 @@ router.put("/:id", async (req, res) => {
         req.body?.external_quotation_url != null
           ? String(req.body.external_quotation_url || "").slice(0, 500) || null
           : existing.external_quotation_url,
-        req.body?.followup_at != null ? normalizeDatetime(req.body.followup_at) : existing.followup_at,
+        nextFollowupAt,
         req.body?.followup_type != null ? (nextFollowupType || null) : existing.followup_type,
         req.body?.opportunity_type != null ? (nextOpportunityType || null) : existing.opportunity_type,
         req.body?.lead_source != null ? (nextLeadSource || null) : existing.lead_source,
         req.body?.team != null ? String(req.body.team || "").slice(0, 160) || null : existing.team,
         req.body?.comments_history != null ? String(req.body.comments_history || "") : existing.comments_history,
+        req.body?.lead_id != null ? Number(req.body.lead_id) || null : existing.lead_id,
+        req.body?.contact_id != null ? Number(req.body.contact_id) || null : existing.contact_id,
+        req.body?.client_id != null
+          ? String(req.body.client_id || "").trim().slice(0, 20) || null
+          : existing.client_id,
+        req.body?.phone != null ? String(req.body.phone || "").trim().slice(0, 20) || null : existing.phone,
+        req.body?.visit_purpose != null
+          ? String(req.body.visit_purpose || "").trim() || null
+          : existing.visit_purpose,
         id,
       ]
     );
-    const [[row]] = await pool.execute("SELECT * FROM opportunities WHERE id = ?", [id]);
-    emitAdminChanged({ scope: "opportunities", action: "update", tenantId: req.user?.tenantId || null });
-    emitCalendarChanged({ reason: "opportunities", tenantId: req.user?.tenantId || null });
-    emitOpportunitiesChanged({ action: "update", id, tenantId: req.user?.tenantId || null });
+    let row = await loadOpportunityScoped(req, id);
+    if (row && (req.body?.followup_at != null || req.body?.followup_type != null)) {
+      await syncFollowupReminder(pool, row, req.user.id);
+      row = await loadOpportunityScoped(req, id);
+      emitRemindersChanged({ reason: "opportunities" });
+    }
+    emitOppChanges(req, "update", { id });
     res.json({ success: true, data: row });
   } catch (err) {
     console.error("PUT /api/opportunities/:id", err);
@@ -497,7 +684,7 @@ router.patch("/:id/stage", async (req, res) => {
     if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
     if (!VALID_STAGE.has(stage)) return res.status(400).json({ success: false, message: "Invalid stage" });
     const normalizedStage = normalizeStage(stage);
-    const scope = applyScope(req, "o");
+    const scope = await applyScope(req, "o");
     const [[existing]] = await pool.execute(
       `SELECT o.stage FROM opportunities o WHERE o.id = ? AND ${scope.where}`,
       [id, ...scope.params]
@@ -518,9 +705,7 @@ router.patch("/:id/stage", async (req, res) => {
         userId: req.user.id,
       });
     }
-    emitAdminChanged({ scope: "opportunities", action: "stage", tenantId: req.user?.tenantId || null });
-    emitCalendarChanged({ reason: "opportunities", tenantId: req.user?.tenantId || null });
-    emitOpportunitiesChanged({ action: "stage", id, stage: normalizedStage, tenantId: req.user?.tenantId || null });
+    emitOppChanges(req, "stage", { id, stage: normalizedStage });
     res.json({ success: true });
   } catch (err) {
     console.error("PATCH /api/opportunities/:id/stage", err);
@@ -535,7 +720,7 @@ router.put("/:id/stage", async (req, res) => {
     if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
     if (!VALID_STAGE.has(stage)) return res.status(400).json({ success: false, message: "Invalid stage" });
     const normalizedStage = normalizeStage(stage);
-    const scope = applyScope(req, "o");
+    const scope = await applyScope(req, "o");
     const [[existing]] = await pool.execute(
       `SELECT o.stage FROM opportunities o WHERE o.id = ? AND ${scope.where}`,
       [id, ...scope.params]
@@ -556,9 +741,7 @@ router.put("/:id/stage", async (req, res) => {
         userId: req.user.id,
       });
     }
-    emitAdminChanged({ scope: "opportunities", action: "stage", tenantId: req.user?.tenantId || null });
-    emitCalendarChanged({ reason: "opportunities", tenantId: req.user?.tenantId || null });
-    emitOpportunitiesChanged({ action: "stage", id, stage: normalizedStage, tenantId: req.user?.tenantId || null });
+    emitOppChanges(req, "stage", { id, stage: normalizedStage });
     res.json({ success: true });
   } catch (err) {
     console.error("PUT /api/opportunities/:id/stage", err);
@@ -570,15 +753,14 @@ router.patch("/:id/star", async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
-    const scope = applyScope(req, "o");
+    const scope = await applyScope(req, "o");
     const starred = req.body?.starred ? 1 : 0;
     const [r] = await pool.execute(
       `UPDATE opportunities o SET o.is_starred = ?, o.updated_at = NOW() WHERE o.id = ? AND ${scope.where}`,
       [starred, id, ...scope.params]
     );
     if (!r.affectedRows) return res.status(404).json({ success: false, message: "Opportunity not found" });
-    emitAdminChanged({ scope: "opportunities", action: "star", tenantId: req.user?.tenantId || null });
-    emitOpportunitiesChanged({ action: "star", id, starred, tenantId: req.user?.tenantId || null });
+    emitOppChanges(req, "star", { id, starred });
     res.json({ success: true });
   } catch (err) {
     console.error("PATCH /api/opportunities/:id/star", err);
@@ -590,15 +772,14 @@ router.put("/:id/star", async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
-    const scope = applyScope(req, "o");
+    const scope = await applyScope(req, "o");
     const starred = req.body?.starred ? 1 : 0;
     const [r] = await pool.execute(
       `UPDATE opportunities o SET o.is_starred = ?, o.updated_at = NOW() WHERE o.id = ? AND ${scope.where}`,
       [starred, id, ...scope.params]
     );
     if (!r.affectedRows) return res.status(404).json({ success: false, message: "Opportunity not found" });
-    emitAdminChanged({ scope: "opportunities", action: "star", tenantId: req.user?.tenantId || null });
-    emitOpportunitiesChanged({ action: "star", id, starred, tenantId: req.user?.tenantId || null });
+    emitOppChanges(req, "star", { id, starred });
     res.json({ success: true });
   } catch (err) {
     console.error("PUT /api/opportunities/:id/star", err);
@@ -610,7 +791,7 @@ router.delete("/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
-    const scope = applyScope(req, "o");
+    const scope = await applyScope(req, "o");
     const [r] = await pool.execute(
       `UPDATE opportunities o
        SET o.is_deleted = 1, o.deleted_at = NOW(), o.updated_at = NOW()
@@ -618,9 +799,7 @@ router.delete("/:id", async (req, res) => {
       [id, ...scope.params]
     );
     if (!r.affectedRows) return res.status(404).json({ success: false, message: "Opportunity not found" });
-    emitAdminChanged({ scope: "opportunities", action: "delete", tenantId: req.user?.tenantId || null });
-    emitCalendarChanged({ reason: "opportunities", tenantId: req.user?.tenantId || null });
-    emitOpportunitiesChanged({ action: "delete", id, tenantId: req.user?.tenantId || null });
+    emitOppChanges(req, "delete", { id });
     res.json({ success: true });
   } catch (err) {
     console.error("DELETE /api/opportunities/:id", err);

@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
+import { useTodayFeed } from "@/lib/useTodayFeed";
 import styles from "./sidebar.module.css";
 import Image from "next/image";
 
@@ -13,6 +14,14 @@ const NAV = [
   {
     section: "Main",
     items: [
+      {
+        label: "Today",
+        icon: "fa-calendar-day",
+        href: "/today",
+        color: "#eab308",
+        bg: "rgba(234,179,8,0.18)",
+        badge: true,
+      },
       { label: "Dashboard", icon: "fa-gauge-high",   href: "/dashboard",  color: "#3b82f6", bg: "rgba(59,130,246,0.15)" },
       {
         label: "Lead",
@@ -33,6 +42,14 @@ const NAV = [
       { label: "Reminder",  icon: "fa-bell",          href: "/reminders",  color: "#f5c400", bg: "rgba(245,196,0,0.18)" },
       { label: "Meeting",   icon: "fa-video",         href: "/meetings",   color: "#06b6d4", bg: "rgba(6,182,212,0.15)" },
       { label: "To Do",     icon: "fa-clipboard-list", href: "/todos",     color: "#0ea5e9", bg: "rgba(14,165,233,0.15)" },
+      {
+        label: "Collections",
+        icon: "fa-hand-holding-dollar",
+        href: "/collections",
+        color: "#059669",
+        bg: "rgba(5,150,105,0.15)",
+        collectionsBadge: true,
+      },
     ],
   },
   {
@@ -81,6 +98,8 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle }) {
   const [mounted, setMounted] = useState(false);
   const [openMenus, setOpenMenus] = useState({});
   const [reportsCount, setReportsCount] = useState(0);
+  const [collectionsOpen, setCollectionsOpen] = useState(0);
+  const { todayCount } = useTodayFeed({ enabled: isLoaded });
 
   const navSections = useMemo(() => NAV, []);
 
@@ -98,6 +117,25 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle }) {
         if (!cancelled) setReportsCount(total);
       } catch {
         if (!cancelled) setReportsCount(0);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoaded, pathname]);
+
+  useEffect(() => {
+    if (!isLoaded) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiFetch("/collections/summary");
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || !json.success) return;
+        const n = Number(json.data?.open_count ?? 0);
+        if (!cancelled) setCollectionsOpen(n);
+      } catch {
+        if (!cancelled) setCollectionsOpen(0);
       }
     })();
     return () => {
@@ -180,6 +218,12 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle }) {
         <span className={styles.label}>{item.label}</span>
         {!collapsed && item.href === "/reports" && reportsCount > 0 ? (
           <span className={styles.countPill}>{reportsCount}</span>
+        ) : null}
+        {!collapsed && item.badge && item.href === "/today" && todayCount > 0 ? (
+          <span className={`${styles.countPill} ${styles.todayBadge}`}>{todayCount}</span>
+        ) : null}
+        {!collapsed && item.collectionsBadge && item.href === "/collections" && collectionsOpen > 0 ? (
+          <span className={styles.countPill}>{collectionsOpen}</span>
         ) : null}
         {isActive(item.href) && <span className={styles.activePip} />}
       </Link>

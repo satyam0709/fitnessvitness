@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSearchParams } from "next/navigation";
 import { apiFetch } from "@/lib/api";
+import { subscribeCrmLive } from "@/lib/chatRealtime";
 import AddLeadModal from "@/components/Leads/AddLeadModal";
 import LeadDateRangeModal from "@/components/Leads/LeadDateRangeModal";
 import LeadQuickModals from "@/components/Leads/LeadQuickModals";
@@ -126,6 +127,13 @@ export default function LeadsPage() {
 
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
   useEffect(() => { fetchUsers(); }, [fetchUsers]);
+
+  useEffect(() => {
+    const unsub = subscribeCrmLive(["leads:changed", "calendar:changed"], () => {
+      fetchLeads();
+    });
+    return unsub;
+  }, [fetchLeads]);
 
   // ── derived ─────────────────────────────────────────────────────────────
   const filteredLeads = leads.filter((l) => {

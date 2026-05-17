@@ -1,5 +1,5 @@
 const { pool } = require("../config/database");
-const { emitAdminChanged, emitCalendarChanged } = require("../realtime/meetingsRealtime");
+const { emitAdminChanged, emitCalendarChanged, emitRemindersChanged } = require("../realtime/meetingsRealtime");
 const { createUserNotification } = require("../services/notificationService");
 
 const REMINDER_TYPES = new Set([
@@ -166,6 +166,7 @@ async function createReminder(req, res) {
 
     emitAdminChanged({ scope: "stats", reason: "reminders", action: "create" });
     emitCalendarChanged({ reason: "reminders" });
+    emitRemindersChanged({ reason: "reminders" });
     if (assignId && assignId !== uid) {
       await createUserNotification({
         userId: assignId,
@@ -274,6 +275,7 @@ async function updateReminder(req, res) {
     );
     emitAdminChanged({ scope: "stats", reason: "reminders", action: "update" });
     emitCalendarChanged({ reason: "reminders" });
+    emitRemindersChanged({ reason: "reminders" });
     const nextAssigned =
       assignId !== undefined ? (assignId == null ? null : Number(assignId) || null) : Number(before?.assigned_to_user_id) || null;
     const prevAssigned = Number(before?.assigned_to_user_id) || null;
@@ -310,6 +312,7 @@ async function markReminderDone(req, res) {
       [rid, uid, uid]
     );
     emitCalendarChanged({ reason: "reminders" });
+    emitRemindersChanged({ reason: "reminders" });
     res.json({ success: true });
   } catch (err) {
     console.error("markReminderDone:", err.message);
@@ -333,6 +336,7 @@ async function deleteReminder(req, res) {
     }
     emitAdminChanged({ scope: "stats", reason: "reminders", action: "delete" });
     emitCalendarChanged({ reason: "reminders" });
+    emitRemindersChanged({ reason: "reminders" });
     res.json({ success: true });
   } catch (err) {
     console.error("deleteReminder:", err.message);
@@ -370,6 +374,7 @@ async function bulkDeleteReminders(req, res) {
     if (result.affectedRows) {
       emitAdminChanged({ scope: "stats", reason: "reminders", action: "bulk_delete" });
       emitCalendarChanged({ reason: "reminders" });
+      emitRemindersChanged({ reason: "reminders" });
     }
     res.json({ success: true, deleted: result.affectedRows });
   } catch (err) {

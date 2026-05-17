@@ -5,6 +5,7 @@ import { useUser, useAuth } from "@/contexts/AuthContext";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { apiFetch, connectGlobalSocket } from "@/lib/api";
+import { useTodayFeed } from "@/lib/useTodayFeed";
 import { getDashboardStats, getAllClients, importClientsExcel, exportClientsExcel, getTransactionSummaryYearly, getFitnessTransactionCharts } from "@/lib/fitnessApi";
 import { LeadStatusDonut, LeadSourceArea, ChartCardMenu } from "@/components/Dashboard/DashboardCharts";
 import { FitnessTransactionPies } from "@/components/FitnessTransactionPies/FitnessTransactionPies";
@@ -61,6 +62,54 @@ function daysAhead(n) {
 function fmtInrPill(n) {
   const v = Math.round(Number(n) || 0);
   return `₹ ${v.toLocaleString("en-IN")}`;
+}
+
+function TodayOverviewWidget({ summary }) {
+  const by = summary?.by_type || {};
+  const rows = [
+    { icon: "📞", label: "Lead Follow-ups", key: "lead_followup" },
+    { icon: "🤝", label: "Meetings", key: "meeting" },
+    { icon: "🔔", label: "Reminders", key: "reminder" },
+    { icon: "⚖️", label: "Client Check-ins", key: "client_followup" },
+    { icon: "✅", label: "Todos", key: "todo" },
+    { icon: "📋", label: "CRM Tasks", key: "task" },
+    { icon: "📅", label: "Calendar Events", key: "calendar_event" },
+    { icon: "🎯", label: "Prospect follow-ups", key: "opportunity_followup" },
+  ];
+  if (Number(by.google_event ?? 0) > 0) {
+    rows.push({ icon: "🌐", label: "Google Calendar", key: "google_event" });
+  }
+  const total = Number(summary?.total ?? 0);
+  const allClear = total === 0;
+
+  return (
+    <div className={styles.todayWidget}>
+      <div className={styles.todayWidgetHead}>
+        <h2 className={styles.todayWidgetTitle}>Today&apos;s Tasks</h2>
+        <Link href="/today" className={styles.todayWidgetLink}>
+          Open Command Center →
+        </Link>
+      </div>
+      {allClear ? (
+        <p className={styles.todayWidgetClear}>✅ All clear for today!</p>
+      ) : (
+        <>
+          <ul className={styles.todayWidgetList}>
+            {rows.map((r) => (
+              <li key={r.key} className={styles.todayWidgetRow}>
+                <span>{r.icon}</span>
+                <span>{r.label}</span>
+                <span className={styles.todayWidgetCount}>{by[r.key] ?? 0}</span>
+              </li>
+            ))}
+          </ul>
+          <p className={styles.todayWidgetFooter}>
+            {total} task{total === 1 ? "" : "s"} need attention today
+          </p>
+        </>
+      )}
+    </div>
+  );
 }
 
 function DashboardOprMiniCard({ href, label, value, loading, inrPill, valueClassName }) {
@@ -176,6 +225,10 @@ export default function DashboardPage() {
     hour < 12 ? "Good Morning" : hour < 17 ? "Good Afternoon" : "Good Evening";
   const hasLeadFeature = Boolean(featureMap?.lead_management || featureMap?.leads);
   const hasTaskFeature = Boolean(featureMap?.task_management || featureMap?.tasks);
+
+  const { summary: todayFeedSummary, refreshQuiet: refreshTodaySummary } = useTodayFeed({
+    enabled: isLoaded && isSignedIn === true && !isPlatformAdmin,
+  });
 
   const fetchStats = useCallback(
     async (opts = {}) => {
@@ -448,26 +501,39 @@ export default function DashboardPage() {
       const s = await connectGlobalSocket(true);
       if (cancelled || !s) return;
 
-      const onTodos = () => { if (!cancelled) queueQuietDashboardRefresh(); };
-      const onMeetings = () => { if (!cancelled) queueQuietDashboardRefresh(); };
-      const onCalendar = () => { if (!cancelled) queueQuietDashboardRefresh(); };
-      const onAccess = () => { if (!cancelled) queueQuietDashboardRefresh(); };
-      const onOpps = () => { if (!cancelled) queueQuietDashboardRefresh(); };
-      const onFitness = () => { if (!cancelled) loadFitnessStats(); };
+      const onRefresh = () => {
+        if (cancelled) return;
+        queueQuietDashboardRefresh();
+        refreshTodaySummary();
+      };
+      const onFitness = () => {
+        if (!cancelled) {
+          loadFitnessStats();
+          refreshTodaySummary();
+        }
+      };
 
-      s.on("todos:changed", onTodos);
-      s.on("meetings:changed", onMeetings);
-      s.on("calendar:changed", onCalendar);
-      s.on("workspace:access", onAccess);
-      s.on("opportunities:changed", onOpps);
+      s.on("todos:changed", onRefresh);
+      s.on("meetings:changed", onRefresh);
+      s.on("calendar:changed", onRefresh);
+      s.on("tasks:changed", onRefresh);
+      s.on("crm-tasks-changed", onRefresh);
+      s.on("reminders:changed", onRefresh);
+      s.on("leads:changed", onRefresh);
+      s.on("workspace:access", onRefresh);
+      s.on("opportunities:changed", onRefresh);
       s.on("fitness:changed", onFitness);
 
       return () => {
-        s.off("todos:changed", onTodos);
-        s.off("meetings:changed", onMeetings);
-        s.off("calendar:changed", onCalendar);
-        s.off("workspace:access", onAccess);
-        s.off("opportunities:changed", onOpps);
+        s.off("todos:changed", onRefresh);
+        s.off("meetings:changed", onRefresh);
+        s.off("calendar:changed", onRefresh);
+        s.off("tasks:changed", onRefresh);
+        s.off("crm-tasks-changed", onRefresh);
+        s.off("reminders:changed", onRefresh);
+        s.off("leads:changed", onRefresh);
+        s.off("workspace:access", onRefresh);
+        s.off("opportunities:changed", onRefresh);
         s.off("fitness:changed", onFitness);
       };
     }
@@ -480,7 +546,7 @@ export default function DashboardPage() {
       cancelled = true;
       if (cleanupFn) cleanupFn();
     };
-  }, [isLoaded, isSignedIn, isPlatformAdmin, queueQuietDashboardRefresh]);
+  }, [isLoaded, isSignedIn, isPlatformAdmin, queueQuietDashboardRefresh, refreshTodaySummary, loadFitnessStats]);
 
   const filteredLeads = useMemo(
     () => leads.filter((l) => normLeadStatus(l) === activeLeadTab),
@@ -604,7 +670,7 @@ export default function DashboardPage() {
   const openCards = [
     { href: "/leads?status=processing", label: "Leads", value: stats?.open?.leads ?? 0 },
     {
-      href: "/opportunities?stage=open",
+      href: "/opportunities?view=pipeline",
       label: "Opportunities",
       value: stats?.open?.opportunities ?? 0,
       inrPill: fmtInrPill(stats?.open?.opportunities_value),
@@ -620,7 +686,7 @@ export default function DashboardPage() {
   const periodicCards = [
     { href: "/leads", label: "Leads", value: stats?.periodic?.leads ?? 0 },
     {
-      href: "/opportunities",
+      href: "/opportunities?view=all",
       label: "Opportunities",
       value: stats?.periodic?.opportunities ?? 0,
       inrPill: fmtInrPill(stats?.periodic?.opportunities_value),
@@ -768,6 +834,61 @@ export default function DashboardPage() {
           <span>{actionError}</span>
         </div>
       ) : null}
+
+      <TodayOverviewWidget summary={todayFeedSummary} />
+
+      <div className={styles.oprGrid} aria-label="Prospects and pipeline">
+        <article className={styles.oprCard}>
+          <header className={styles.oprCardHeader}>
+            <h3 className={styles.oprTitle}>Open pipeline</h3>
+          </header>
+          <div className={styles.oprBody}>
+            <DashboardOprMiniCard
+              href="/opportunities?view=pipeline"
+              label="Open prospects"
+              value={stats?.open?.opportunities ?? 0}
+              inrPill={fmtInrPill(stats?.open?.opportunities_value)}
+              loading={statsLoading}
+            />
+          </div>
+        </article>
+        <article className={styles.oprCard}>
+          <header className={styles.oprCardHeader}>
+            <h3 className={styles.oprTitle}>Created today</h3>
+          </header>
+          <div className={styles.oprBody}>
+            <DashboardOprMiniCard
+              href="/opportunities?view=all"
+              label="New prospects"
+              value={stats?.periodic?.opportunities ?? 0}
+              inrPill={fmtInrPill(stats?.periodic?.opportunities_value)}
+              loading={statsLoading}
+            />
+          </div>
+        </article>
+        <article className={styles.oprCard}>
+          <header className={styles.oprCardHeader}>
+            <h3 className={styles.oprTitle}>Closed today</h3>
+          </header>
+          <div className={styles.oprBody}>
+            <DashboardOprPairBlock
+              loading={statsLoading}
+              left={{
+                href: "/opportunities?view=won",
+                label: "Won",
+                value: opportunityResultPanel.won,
+                inrPill: fmtInrPill(opportunityResultPanel.wonVal),
+              }}
+              right={{
+                href: "/opportunities?view=lost",
+                label: "Lost",
+                value: opportunityResultPanel.lost,
+                inrPill: fmtInrPill(opportunityResultPanel.lostVal),
+              }}
+            />
+          </div>
+        </article>
+      </div>
 
       <div className={styles.fitnessCRMCard}>
         <div className={styles.fitnessHeader}>

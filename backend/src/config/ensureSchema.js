@@ -2,9 +2,121 @@ const { mainPool: pool } = require("./database");
 const { INTEGRATIONS } = require("./integrationsCatalog");
 
 let schemaEnsured = false;
-const CURRENT_SCHEMA_VERSION = 9;
+let fitnessClientPatchesDone = false;
+let collectionsPatchesDone = false;
+const CURRENT_SCHEMA_VERSION = 10;
+
+/** Lightweight patches that must run even when schema version is current. */
+async function ensureFitnessClientPatches() {
+  if (fitnessClientPatchesDone) return;
+  fitnessClientPatchesDone = true;
+
+  const [tbl] = await pool.execute(
+    `SELECT TABLE_NAME FROM information_schema.tables
+     WHERE table_schema = DATABASE() AND table_name = 'fitness_clients'`
+  );
+  if (!tbl.length) return;
+
+  const fitnessClientCols = [
+    {
+      column: "referred_by_name",
+      definition: "VARCHAR(255) DEFAULT NULL AFTER referred_by_client_id",
+    },
+  ];
+  for (const { column, definition } of fitnessClientCols) {
+    const [cols] = await pool.execute(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fitness_clients' AND COLUMN_NAME = ?`,
+      [column]
+    );
+    if (cols.length === 0) {
+      try {
+        await pool.execute(
+          `ALTER TABLE fitness_clients ADD COLUMN \`${column}\` ${definition}`
+        );
+        console.log(`Migration: added fitness_clients.${column}`);
+      } catch (e) {
+        if (e.code !== "ER_DUP_FIELDNAME") throw e;
+      }
+    }
+  }
+}
+
+/** Collections tables — must run when schema version gate skips full ensureSchema. */
+async function ensureCollectionsPatches() {
+  if (collectionsPatchesDone) return;
+
+  const [ext] = await pool.execute(
+    `SELECT TABLE_NAME FROM information_schema.tables
+     WHERE table_schema = DATABASE() AND table_name = 'fitness_external_buyers'`
+  );
+  if (!ext.length) return;
+
+  try {
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS fitness_collections (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      client_id VARCHAR(20) NULL,
+      external_buyer_id INT UNSIGNED NULL,
+      collection_type ENUM('diet_plan','supplement','bundle','other') NOT NULL DEFAULT 'other',
+      title VARCHAR(255) NOT NULL,
+      total_inr DECIMAL(10,2) NOT NULL DEFAULT 0,
+      received_inr DECIMAL(10,2) NOT NULL DEFAULT 0,
+      pending_inr DECIMAL(10,2) NOT NULL DEFAULT 0,
+      next_followup_date DATE NULL,
+      assigned_to INT UNSIGNED NULL,
+      status ENUM('open','partial','paid','cancelled') NOT NULL DEFAULT 'open',
+      linked_transaction_id INT UNSIGNED NULL,
+      linked_supplement_id INT UNSIGNED NULL,
+      notes TEXT,
+      created_by INT UNSIGNED NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_fc_client (client_id),
+      KEY idx_fc_external (external_buyer_id),
+      KEY idx_fc_assigned (assigned_to),
+      KEY idx_fc_followup (next_followup_date),
+      KEY idx_fc_status (status),
+      KEY idx_fc_linked_tx (linked_transaction_id),
+      CONSTRAINT fk_fc_coll_external FOREIGN KEY (external_buyer_id) REFERENCES fitness_external_buyers(id) ON DELETE RESTRICT ON UPDATE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+  const [had] = await pool.execute(
+    `SELECT 1 FROM information_schema.tables
+     WHERE table_schema = DATABASE() AND table_name = 'fitness_collections' LIMIT 1`
+  );
+  if (!had.length) console.log("Migration: created fitness_collections");
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS fitness_collection_payments (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      collection_id INT UNSIGNED NOT NULL,
+      amount_inr DECIMAL(10,2) NOT NULL,
+      pay_mode ENUM('GPay','Cash','Online Transfer','Cheque','UPI','NEFT') DEFAULT 'GPay',
+      paid_at DATE NOT NULL,
+      notes TEXT,
+      created_by INT UNSIGNED NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_fcp_collection (collection_id),
+      CONSTRAINT fk_fcp_collection FOREIGN KEY (collection_id) REFERENCES fitness_collections(id) ON DELETE CASCADE ON UPDATE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+  const [hadPay] = await pool.execute(
+    `SELECT 1 FROM information_schema.tables
+     WHERE table_schema = DATABASE() AND table_name = 'fitness_collection_payments' LIMIT 1`
+  );
+  if (!hadPay.length) console.log("Migration: created fitness_collection_payments");
+    collectionsPatchesDone = true;
+  } catch (e) {
+    console.warn("ensureCollectionsPatches:", e.message);
+  }
+}
 
 async function ensureSchema() {
+  await ensureFitnessClientPatches();
+  await ensureCollectionsPatches();
   if (schemaEnsured) return;
   // FIXED: 5 schema version gate to skip expensive startup checks
   await pool.execute(`
@@ -283,6 +395,11 @@ async function ensureSchema() {
     { column: "final_amount", definition: "DECIMAL(12,2) DEFAULT NULL" },
     { column: "closed_lost_at", definition: "DATETIME DEFAULT NULL" },
     { column: "loss_reason", definition: "VARCHAR(255) DEFAULT NULL" },
+    { column: "tenant_id", definition: "INT UNSIGNED DEFAULT NULL" },
+    { column: "client_id", definition: "VARCHAR(20) DEFAULT NULL" },
+    { column: "phone", definition: "VARCHAR(20) DEFAULT NULL" },
+    { column: "visit_purpose", definition: "TEXT DEFAULT NULL" },
+    { column: "linked_reminder_id", definition: "INT UNSIGNED DEFAULT NULL" },
   ];
   for (const { column, definition } of opportunityExtraColumns) {
     const [cols] = await pool.execute(
@@ -331,6 +448,33 @@ async function ensureSchema() {
     }
   } catch (e) {
     console.warn("Migration: opportunities.product_category type change:", e.message);
+  }
+
+  const opportunityIndexes = [
+    { index: "idx_opps_followup_at", column: "followup_at" },
+    { index: "idx_opps_client_id", column: "client_id" },
+    { index: "idx_opps_tenant_id", column: "tenant_id" },
+  ];
+  for (const { index, column } of opportunityIndexes) {
+    try {
+      const [cols] = await pool.execute(
+        `SELECT 1 FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'opportunities' AND COLUMN_NAME = ?`,
+        [column]
+      );
+      if (!cols.length) continue;
+      const [idx] = await pool.execute(
+        `SELECT 1 FROM information_schema.STATISTICS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'opportunities' AND INDEX_NAME = ?`,
+        [index]
+      );
+      if (!idx.length) {
+        await pool.execute(`ALTER TABLE opportunities ADD INDEX \`${index}\` (\`${column}\`)`);
+        console.log(`Migration: added opportunities.${index}`);
+      }
+    } catch (e) {
+      console.warn(`Migration: opportunities index ${index}:`, e.message);
+    }
   }
 
   await pool.execute(`
@@ -481,6 +625,19 @@ async function ensureSchema() {
       if (cols.length === 0) {
         await pool.execute(`ALTER TABLE leads ADD COLUMN \`${column}\` ${definition}`);
         console.log(`Migration: added leads.${column}`);
+      }
+    }
+
+    const [fuIdx] = await pool.execute(
+      `SELECT INDEX_NAME FROM information_schema.STATISTICS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'leads' AND COLUMN_NAME = 'follow_up_date' LIMIT 1`
+    );
+    if (fuIdx.length === 0) {
+      try {
+        await pool.execute("ALTER TABLE leads ADD INDEX idx_leads_follow_up_date (follow_up_date)");
+        console.log("Migration: added leads.idx_leads_follow_up_date");
+      } catch (e) {
+        console.warn("ensureSchema: leads follow_up_date index:", e.message);
       }
     }
   }
@@ -900,6 +1057,97 @@ async function ensureSchema() {
       CONSTRAINT fk_todo_asg_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
+
+  const todayCommandCenterCols = [
+    { table: "crm_todos", column: "client_id", definition: "VARCHAR(20) DEFAULT NULL" },
+    { table: "crm_todos", column: "todo_category", definition: "VARCHAR(50) DEFAULT NULL" },
+    { table: "meetings", column: "consultation_type", definition: "VARCHAR(50) DEFAULT 'general'" },
+    { table: "meetings", column: "client_id", definition: "VARCHAR(20) DEFAULT NULL" },
+  ];
+  for (const { table, column, definition } of todayCommandCenterCols) {
+    const [tbl] = await pool.execute(
+      `SELECT TABLE_NAME FROM information_schema.tables
+       WHERE table_schema = DATABASE() AND table_name = ?`,
+      [table]
+    );
+    if (!tbl.length) continue;
+    const [cols] = await pool.execute(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+      [table, column]
+    );
+    if (cols.length === 0) {
+      await pool.execute(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${definition}`);
+      console.log(`Migration: added ${table}.${column}`);
+    }
+  }
+
+  const taskExtraCols = [
+    { column: "client_id", definition: "INT UNSIGNED DEFAULT NULL" },
+    { column: "task_category", definition: "VARCHAR(50) DEFAULT 'general'" },
+    { column: "task_type", definition: "VARCHAR(20) DEFAULT 'client'" },
+    { column: "frequency", definition: "VARCHAR(20) DEFAULT 'once'" },
+  ];
+  for (const { column, definition } of taskExtraCols) {
+    const [tbl] = await pool.execute(
+      `SELECT TABLE_NAME FROM information_schema.tables
+       WHERE table_schema = DATABASE() AND table_name = 'tasks'`
+    );
+    if (!tbl.length) continue;
+    const [cols] = await pool.execute(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tasks' AND COLUMN_NAME = ?`,
+      [column]
+    );
+    if (cols.length === 0) {
+      await pool.execute(`ALTER TABLE tasks ADD COLUMN \`${column}\` ${definition}`);
+      console.log(`Migration: added tasks.${column}`);
+    }
+  }
+  try {
+    const [tbl] = await pool.execute(
+      `SELECT TABLE_NAME FROM information_schema.tables
+       WHERE table_schema = DATABASE() AND table_name = 'tasks'`
+    );
+    if (tbl.length) {
+      await pool.execute(`
+        ALTER TABLE tasks MODIFY COLUMN status ENUM(
+          'new','in_feedback','processing','completed','rejected',
+          'todo','in_progress','done','carried_forward'
+        ) NOT NULL DEFAULT 'new'
+      `);
+      console.log("Migration: tasks.status includes carried_forward");
+    }
+  } catch (e) {
+    console.warn("Migration tasks.status carried_forward:", e.message);
+  }
+
+  const todayDateIndexes = [
+    { table: "crm_todos", index: "idx_todo_date", column: "todo_date" },
+    { table: "reminders", index: "idx_remind_at", column: "remind_at" },
+    { table: "fitness_clients", index: "idx_fitness_clients_next_due", column: "next_due_date" },
+  ];
+  for (const { table, index, column } of todayDateIndexes) {
+    const [tbl] = await pool.execute(
+      `SELECT TABLE_NAME FROM information_schema.tables
+       WHERE table_schema = DATABASE() AND table_name = ?`,
+      [table]
+    );
+    if (!tbl.length) continue;
+    const [idx] = await pool.execute(
+      `SELECT INDEX_NAME FROM information_schema.STATISTICS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ? LIMIT 1`,
+      [table, column]
+    );
+    if (idx.length === 0) {
+      try {
+        await pool.execute(`ALTER TABLE \`${table}\` ADD INDEX \`${index}\` (\`${column}\`)`);
+        console.log(`Migration: added ${table}.${index}`);
+      } catch (e) {
+        console.warn(`ensureSchema: ${table}.${index}:`, e.message);
+      }
+    }
+  }
 
   await pool.execute(`
     CREATE TABLE IF NOT EXISTS notifications (
@@ -1342,6 +1590,52 @@ async function ensureSchema() {
       console.warn("ensureSchema: chk_ft_client_xor_external (needs MySQL 8.0.16+):", e.message);
     }
   }
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS fitness_collections (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      client_id VARCHAR(20) NULL,
+      external_buyer_id INT UNSIGNED NULL,
+      collection_type ENUM('diet_plan','supplement','bundle','other') NOT NULL DEFAULT 'other',
+      title VARCHAR(255) NOT NULL,
+      total_inr DECIMAL(10,2) NOT NULL DEFAULT 0,
+      received_inr DECIMAL(10,2) NOT NULL DEFAULT 0,
+      pending_inr DECIMAL(10,2) NOT NULL DEFAULT 0,
+      next_followup_date DATE NULL,
+      assigned_to INT UNSIGNED NULL,
+      status ENUM('open','partial','paid','cancelled') NOT NULL DEFAULT 'open',
+      linked_transaction_id INT UNSIGNED NULL,
+      linked_supplement_id INT UNSIGNED NULL,
+      notes TEXT,
+      created_by INT UNSIGNED NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_fc_client (client_id),
+      KEY idx_fc_external (external_buyer_id),
+      KEY idx_fc_assigned (assigned_to),
+      KEY idx_fc_followup (next_followup_date),
+      KEY idx_fc_status (status),
+      KEY idx_fc_linked_tx (linked_transaction_id),
+      CONSTRAINT fk_fc_coll_main_external FOREIGN KEY (external_buyer_id) REFERENCES fitness_external_buyers(id) ON DELETE RESTRICT ON UPDATE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS fitness_collection_payments (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      collection_id INT UNSIGNED NOT NULL,
+      amount_inr DECIMAL(10,2) NOT NULL,
+      pay_mode ENUM('GPay','Cash','Online Transfer','Cheque','UPI','NEFT') DEFAULT 'GPay',
+      paid_at DATE NOT NULL,
+      notes TEXT,
+      created_by INT UNSIGNED NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_fcp_collection (collection_id),
+      CONSTRAINT fk_fcp_collection FOREIGN KEY (collection_id) REFERENCES fitness_collections(id) ON DELETE CASCADE ON UPDATE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
 
   await pool.execute(`
     CREATE TABLE IF NOT EXISTS fitness_referrals (

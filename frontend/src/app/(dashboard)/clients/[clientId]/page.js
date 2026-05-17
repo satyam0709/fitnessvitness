@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
@@ -52,6 +53,57 @@ function tierStars(tier) {
   return "⭐".repeat(n);
 }
 
+/** Portaled modal — avoids broken `position:fixed` inside animated dashboard layout. */
+function ClientPageModal({ open, onClose, title, children, titleId, disableClose = false }) {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => {
+      if (e.key === "Escape" && !disableClose) onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose, disableClose]);
+
+  if (!open || !mounted) return null;
+
+  return createPortal(
+    <div
+      className={styles.modalOverlay}
+      role="presentation"
+      onClick={() => !disableClose && onClose()}
+    >
+      <div
+        className={styles.modalContent}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className={styles.modalHeader}>
+          <h2 id={titleId}>{title}</h2>
+          <button
+            type="button"
+            className={styles.closeBtn}
+            disabled={disableClose}
+            onClick={onClose}
+            aria-label="Close"
+          >
+            &times;
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 export default function ClientDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -73,9 +125,10 @@ export default function ClientDetailPage() {
   // Search state for referrals
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState("");
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const deletePanelRef = useRef(null);
 
   // Form states
   const [consultForm, setConsultForm] = useState({
@@ -370,7 +423,7 @@ export default function ClientDetailPage() {
     setDeleteBusy(true);
     try {
       await deleteClient(client.client_id);
-      setShowDeleteModal(false);
+      setShowDeleteConfirm(false);
       router.push("/clients");
     } catch (err) {
       alert(err.message || "Delete failed");
@@ -378,6 +431,11 @@ export default function ClientDetailPage() {
       setDeleteBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (!showDeleteConfirm || !deletePanelRef.current) return;
+    deletePanelRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [showDeleteConfirm]);
 
   if (loading) return <div className={styles.loading}><div className={styles.spinner}></div>Synchronizing profile...</div>;
   if (!client) return <div className={styles.loading}>Client not found or error occurred.</div>;
@@ -455,13 +513,66 @@ export default function ClientDetailPage() {
             <button
               type="button"
               className={styles.dangerBtn}
+              aria-expanded={showDeleteConfirm}
               onClick={() => {
-                setDeleteConfirm("");
-                setShowDeleteModal(true);
+                if (showDeleteConfirm) {
+                  setShowDeleteConfirm(false);
+                  setDeleteConfirm("");
+                } else {
+                  setDeleteConfirm("");
+                  setShowDeleteConfirm(true);
+                }
               }}
             >
-              Delete client from database…
+              {showDeleteConfirm ? "Cancel delete" : "Delete client from database…"}
             </button>
+            {showDeleteConfirm ? (
+              <div
+                ref={deletePanelRef}
+                className={styles.dangerConfirmPanel}
+                role="dialog"
+                aria-labelledby="delete-client-title"
+              >
+                <h3 id="delete-client-title" className={styles.dangerConfirmTitle}>
+                  Delete client permanently
+                </h3>
+                <p className={styles.dangerModalText}>
+                  This cannot be undone. Type <strong>{client.client_id}</strong> below, then confirm.
+                </p>
+                <div className={styles.formField}>
+                  <label htmlFor="delete-confirm-input">Client ID</label>
+                  <input
+                    id="delete-confirm-input"
+                    type="text"
+                    autoComplete="off"
+                    value={deleteConfirm}
+                    onChange={(e) => setDeleteConfirm(e.target.value)}
+                    placeholder={client.client_id}
+                  />
+                </div>
+                <div className={styles.dangerConfirmActions}>
+                  <button
+                    type="button"
+                    className={styles.cancelBtn}
+                    disabled={deleteBusy}
+                    onClick={() => {
+                      setShowDeleteConfirm(false);
+                      setDeleteConfirm("");
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.dangerConfirmBtn}
+                    disabled={deleteBusy || deleteConfirm.trim() !== client.client_id}
+                    onClick={handlePermanentDelete}
+                  >
+                    {deleteBusy ? "Removing…" : "Delete permanently"}
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
         </section>
 
@@ -795,58 +906,13 @@ export default function ClientDetailPage() {
 
       </div>
 
-      {showDeleteModal && (
-        <div
-          className={styles.modalOverlay}
-          role="presentation"
-          onClick={() => !deleteBusy && setShowDeleteModal(false)}
-        >
-          <div className={styles.modalContent} role="dialog" aria-labelledby="delete-client-title" onClick={(e) => e.stopPropagation()}>
-            <div className={styles.modalHeader}>
-              <h2 id="delete-client-title">Delete client permanently</h2>
-              <button type="button" className={styles.closeBtn} disabled={deleteBusy} onClick={() => setShowDeleteModal(false)}>
-                &times;
-              </button>
-            </div>
-            <p className={styles.dangerModalText}>
-              This cannot be undone. Type <strong>{client.client_id}</strong> below, then confirm.
-            </p>
-            <div className={styles.formField}>
-              <label htmlFor="delete-confirm-input">Client ID</label>
-              <input
-                id="delete-confirm-input"
-                type="text"
-                autoComplete="off"
-                value={deleteConfirm}
-                onChange={(e) => setDeleteConfirm(e.target.value)}
-                placeholder={client.client_id}
-              />
-            </div>
-            <div className={styles.formActions}>
-              <button type="button" className={styles.cancelBtn} disabled={deleteBusy} onClick={() => setShowDeleteModal(false)}>
-                Cancel
-              </button>
-              <button
-                type="button"
-                className={styles.dangerConfirmBtn}
-                disabled={deleteBusy || deleteConfirm.trim() !== client.client_id}
-                onClick={handlePermanentDelete}
-              >
-                {deleteBusy ? "Removing…" : "Delete permanently"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* CONSULTATION MODAL */}
-      {showAddConsult && (
-        <div className={styles.modalOverlay}>
-          <div className={styles.modalContent}>
-            <div className={styles.modalHeader}>
-              <h2>Log Consultation</h2>
-              <button className={styles.closeBtn} onClick={() => setShowAddConsult(false)}>&times;</button>
-            </div>
+      <ClientPageModal
+        open={showAddConsult}
+        onClose={() => setShowAddConsult(false)}
+        title="Log Consultation"
+        titleId="consult-modal-title"
+      >
             <form onSubmit={handleAddConsultation} className={styles.formGrid}>
               <div className={styles.formField}>
                 <label>Date</label>
@@ -883,18 +949,15 @@ export default function ClientDetailPage() {
                 <button type="submit" className={styles.saveBtn}>Save Consultation</button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
+      </ClientPageModal>
 
       {/* TASK MODAL */}
-      {showAddTask && (
-        <div className={styles.modalOverlay}>
-          <div className={styles.modalContent}>
-            <div className={styles.modalHeader}>
-              <h2>Create New Task</h2>
-              <button className={styles.closeBtn} onClick={() => setShowAddTask(false)}>&times;</button>
-            </div>
+      <ClientPageModal
+        open={showAddTask}
+        onClose={() => setShowAddTask(false)}
+        title="Create New Task"
+        titleId="task-modal-title"
+      >
             <form onSubmit={handleAddTask} className={styles.formGrid}>
               <div className={styles.formField.full}>
                 <label>Task Description</label>
@@ -938,18 +1001,15 @@ export default function ClientDetailPage() {
                 <button type="submit" className={styles.saveBtn}>Create Task</button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
+      </ClientPageModal>
 
       {/* TRANSACTION MODAL */}
-      {showAddTransaction && (
-        <div className={styles.modalOverlay}>
-          <div className={styles.modalContent}>
-            <div className={styles.modalHeader}>
-              <h2>Add Transaction</h2>
-              <button className={styles.closeBtn} onClick={() => setShowAddTransaction(false)}>&times;</button>
-            </div>
+      <ClientPageModal
+        open={showAddTransaction}
+        onClose={() => setShowAddTransaction(false)}
+        title="Add Transaction"
+        titleId="transaction-modal-title"
+      >
             <form onSubmit={handleAddTransaction} className={styles.formGrid}>
               <div className={styles.formField}>
                 <label>Date</label>
@@ -1002,18 +1062,15 @@ export default function ClientDetailPage() {
                 <button type="submit" className={styles.saveBtn}>Add Record</button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
+      </ClientPageModal>
 
       {/* SUPPLEMENT MODAL */}
-      {showAddSupplement && (
-        <div className={styles.modalOverlay}>
-          <div className={styles.modalContent}>
-            <div className={styles.modalHeader}>
-              <h2>Prescribe Supplement</h2>
-              <button className={styles.closeBtn} onClick={() => setShowAddSupplement(false)}>&times;</button>
-            </div>
+      <ClientPageModal
+        open={showAddSupplement}
+        onClose={() => setShowAddSupplement(false)}
+        title="Prescribe Supplement"
+        titleId="supplement-modal-title"
+      >
             <form onSubmit={handleAddSupplement} className={styles.formGrid}>
               <div className={styles.formField.full}>
                 <label>Product Name</label>
@@ -1036,18 +1093,15 @@ export default function ClientDetailPage() {
                 <button type="submit" className={styles.saveBtn}>Save Prescription</button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
+      </ClientPageModal>
 
       {/* REFERRAL MODAL */}
-      {showAddReferral && (
-        <div className={styles.modalOverlay}>
-          <div className={styles.modalContent}>
-            <div className={styles.modalHeader}>
-              <h2>Record Referral</h2>
-              <button className={styles.closeBtn} onClick={() => setShowAddReferral(false)}>&times;</button>
-            </div>
+      <ClientPageModal
+        open={showAddReferral}
+        onClose={() => setShowAddReferral(false)}
+        title="Record Referral"
+        titleId="referral-modal-title"
+      >
             <div className={styles.formField.full}>
               <label>Search Client</label>
               <input 
@@ -1072,9 +1126,7 @@ export default function ClientDetailPage() {
                 )}
               </div>
             </div>
-          </div>
-        </div>
-      )}
+      </ClientPageModal>
 
     </div>
   );

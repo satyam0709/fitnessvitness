@@ -14,11 +14,13 @@ import TrialTopbarPill from "./TrialTopbarPill";
 import styles from "./dashboardtopbar.module.css";
 
 const QUICK_ACTIONS = [
+  { key: "prospect", label: "Prospect", icon: "fa-user-plus" },
   { key: "lead",     label: "Lead",     icon: "fa-filter" },
   { key: "task",     label: "Task",     icon: "fa-list-check" },
   { key: "reminder", label: "Reminder", icon: "fa-bell" },
   { key: "meeting",  label: "Meeting",  icon: "fa-video" },
   { key: "todo",     label: "To Do",    icon: "fa-clipboard-list" },
+  { key: "collection", label: "Collection", icon: "fa-hand-holding-dollar" },
   { key: "note",     label: "Note",     icon: "fa-note-sticky" },
   { key: "invoice",  label: "Invoice",  icon: "fa-file-invoice-dollar" },
 ];
@@ -176,6 +178,14 @@ export default function DashboardTopbar({ onMenuToggle, sidebarCollapsed }) {
                 onClick={() => {
                   if (a.key === "invoice") {
                     router.push("/invoice/sales/new");
+                    return;
+                  }
+                  if (a.key === "prospect") {
+                    router.push("/opportunities?create=1");
+                    return;
+                  }
+                  if (a.key === "collection") {
+                    router.push("/collections?create=1");
                     return;
                   }
                   openQuickCreate(a.key);
