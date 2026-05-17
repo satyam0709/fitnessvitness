@@ -2,13 +2,14 @@ const express = require("express");
 const { verifyToken } = require("../middleware/verifyToken");
 const { pool } = require("../config/database");
 const { createUserNotification } = require("../services/notificationService");
-const { emitCalendarChanged } = require("../realtime/meetingsRealtime");
+const { emitCalendarChanged, emitTasksChanged } = require("../realtime/meetingsRealtime");
 
 const router = express.Router();
 router.use(verifyToken);
 
 const VALID_STATUS = new Set([
   "new",
+  "pending",
   "in_feedback",
   "processing",
   "completed",
@@ -16,24 +17,36 @@ const VALID_STATUS = new Set([
   "todo",
   "in_progress",
   "done",
+  "carried_forward",
 ]);
+
+const TASK_FROM_JOIN = `FROM tasks t
+       LEFT JOIN users u ON t.assigned_to = u.id
+       LEFT JOIN users uc ON t.created_by = uc.id
+       LEFT JOIN fitness_clients fc ON t.client_id = fc.id`;
+
+const TASK_SELECT_FIELDS = `t.*,
+              u.email as assigned_email,
+              u.first_name as assignee_first_name,
+              u.last_name as assignee_last_name,
+              uc.email as creator_email,
+              uc.first_name as creator_first_name,
+              uc.last_name as creator_last_name,
+              fc.full_name as client_name,
+              fc.phone as client_phone`;
 
 async function resolveUserId(assignedTo) {
   if (assignedTo === null || assignedTo === undefined || assignedTo === "") return null;
 
-  if (Number.isInteger(Number(assignedTo))) {
+  const n = Number(assignedTo);
+  if (Number.isInteger(n) && n > 0) {
     const [rows] = await pool.execute(
       "SELECT id FROM users WHERE id = ? AND is_active = 1",
-      [Number(assignedTo)]
+      [n]
     );
     if (rows.length) return rows[0].id;
   }
-
-  const [rows] = await pool.execute(
-    "SELECT id FROM users WHERE clerk_user_id = ? AND is_active = 1",
-    [assignedTo]
-  );
-  return rows.length ? rows[0].id : null;
+  return null;
 }
 
 function addTenantCondition(conditions, params, req, tableAlias = "t") {
@@ -56,14 +69,25 @@ function sanitizeStatus(s) {
  */
 function statusToDbEnum(apiStatus) {
   const k = String(apiStatus || "new").toLowerCase();
+  if (k === "carried_forward") return "carried_forward";
   if (k === "in_progress" || k === "processing" || k === "in_feedback") {
     return "in_progress";
   }
   if (k === "done" || k === "completed") {
     return "done";
   }
-  // new, rejected, todo, and unknown → todo (open / not done)
+  if (k === "new") return "new";
+  if (k === "pending") return "todo";
+  if (k === "rejected") return "rejected";
   return "todo";
+}
+
+function emitTaskEvents(req, reason = "tasks") {
+  const tenantId = req.user?.tenantId || undefined;
+  emitTasksChanged({ reason, tenantId });
+  if (reason === "task_done" || reason === "tasks") {
+    emitCalendarChanged({ reason: reason === "task_done" ? "task_done" : "tasks", tenantId });
+  }
 }
 
 router.get("/", async (req, res) => {
@@ -78,6 +102,10 @@ router.get("/", async (req, res) => {
       my,
       q,
       label,
+      client_id,
+      task_category,
+      task_type,
+      scope,
       sort = "due_date",
       order = "asc",
     } = req.query;
@@ -85,6 +113,27 @@ router.get("/", async (req, res) => {
     const conditions = ["1=1"];
     const params = [];
     addTenantCondition(conditions, params, req, "t");
+
+    if (client_id) {
+      conditions.push("t.client_id = ?");
+      params.push(Number(client_id));
+    }
+    if (task_category && String(task_category).trim()) {
+      conditions.push("t.task_category = ?");
+      params.push(String(task_category).trim());
+    }
+    if (task_type && String(task_type).trim()) {
+      conditions.push("t.task_type = ?");
+      params.push(String(task_type).trim());
+    }
+    const scopeKey = scope != null ? String(scope).toLowerCase() : "";
+    if (scopeKey === "today") {
+      conditions.push("DATE(t.due_date) = CURDATE()");
+    } else if (scopeKey === "overdue") {
+      conditions.push(
+        "t.due_date < CURDATE() AND t.status NOT IN ('completed','done')"
+      );
+    }
 
     if (priority) {
       conditions.push("t.priority = ?");
@@ -162,20 +211,9 @@ router.get("/", async (req, res) => {
       orderClause = `t.due_date ${orderDir}, t.created_at DESC`;
     }
 
-    const fromJoin = `FROM tasks t
-       LEFT JOIN users u ON t.assigned_to = u.id
-       LEFT JOIN users uc ON t.created_by = uc.id`;
-
     const [tasks] = await pool.execute(
-      `SELECT t.*,
-              u.email as assigned_email,
-              u.first_name as assignee_first_name,
-              u.last_name as assignee_last_name,
-              u.clerk_user_id as assigned_to_clerk,
-              uc.email as creator_email,
-              uc.first_name as creator_first_name,
-              uc.last_name as creator_last_name
-       ${fromJoin}
+      `SELECT ${TASK_SELECT_FIELDS}
+       ${TASK_FROM_JOIN}
        WHERE ${conditions.join(" AND ")}
        ORDER BY ${orderClause}`,
       params
@@ -190,7 +228,7 @@ router.get("/", async (req, res) => {
            SUM(CASE WHEN t.status IN ('processing','in_progress') THEN 1 ELSE 0 END) AS processing_c,
            SUM(CASE WHEN t.status IN ('completed','done') THEN 1 ELSE 0 END) AS completed_c,
            SUM(CASE WHEN t.status = 'rejected' THEN 1 ELSE 0 END) AS rejected_c
-         ${fromJoin}
+         ${TASK_FROM_JOIN}
          WHERE ${baseConditions.join(" AND ")}`,
         baseParams
       );
@@ -216,17 +254,54 @@ router.get("/", async (req, res) => {
   }
 });
 
+router.post("/bulk-status", async (req, res) => {
+  try {
+    const { ids, status } = req.body || {};
+    const st = sanitizeStatus(status);
+    if (!st) {
+      return res.status(400).json({ success: false, message: "Invalid status" });
+    }
+    const idList = (Array.isArray(ids) ? ids : [])
+      .map((x) => Number(x))
+      .filter((n) => Number.isInteger(n) && n > 0);
+    if (idList.length === 0) {
+      return res.status(400).json({ success: false, message: "ids array required" });
+    }
+
+    const dbSt = statusToDbEnum(st);
+    const placeholders = idList.map(() => "?").join(",");
+    const [result] = await pool.execute(
+      `UPDATE tasks SET status = ?, updated_at = NOW()
+       WHERE id IN (${placeholders}) AND is_deleted = 0
+         AND (created_by = ? OR assigned_to = ?)
+         AND (? IS NULL OR tenant_id = ?)`,
+      [
+        dbSt,
+        ...idList,
+        req.user.id,
+        req.user.id,
+        req.user.tenantId || null,
+        req.user.tenantId || null,
+      ]
+    );
+
+    const reason = dbSt === "done" || dbSt === "completed" ? "task_done" : "tasks";
+    emitTaskEvents(req, reason);
+    res.json({ success: true, updated: result.affectedRows });
+  } catch (err) {
+    console.error("POST /api/tasks/bulk-status", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 router.get("/:id", async (req, res) => {
   try {
     const taskId = Number(req.params.id);
     if (!taskId) return res.status(400).json({ success: false, message: "Invalid task id" });
 
     const [rows] = await pool.execute(
-      `SELECT t.*, u.email as assigned_email, u.clerk_user_id as assigned_to_clerk,
-              uc.email as creator_email, uc.first_name as creator_first_name, uc.last_name as creator_last_name
-       FROM tasks t
-       LEFT JOIN users u ON t.assigned_to = u.id
-       LEFT JOIN users uc ON t.created_by = uc.id
+      `SELECT ${TASK_SELECT_FIELDS}
+       ${TASK_FROM_JOIN}
        WHERE t.id = ? AND t.is_deleted = 0 AND (? IS NULL OR t.tenant_id = ?)`,
       [taskId, req.user.tenantId || null, req.user.tenantId || null]
     );
@@ -251,11 +326,21 @@ router.post("/",  async (req, res) => {
       priority,
       status,
       label,
+      client_id,
+      task_category,
+      task_type,
+      frequency,
     } = req.body;
 
     if (!title) return res.status(400).json({ success: false, message: "title is required" });
 
     const assignedUserId = await resolveUserId(assigned_to);
+    const clientIdNum =
+      client_id != null && client_id !== "" ? Number(client_id) : null;
+    const taskType =
+      task_type ||
+      (clientIdNum ? "client" : "internal");
+    const taskCategory = task_category || "general";
 
     const apiSt = sanitizeStatus(status) || "new";
     const st = statusToDbEnum(apiSt);
@@ -267,6 +352,34 @@ router.post("/",  async (req, res) => {
 
     let insertId;
     try {
+      const [result] = await pool.execute(
+        `INSERT INTO tasks (tenant_id, title, label, description, lead_id, client_id, task_category, task_type, frequency, assigned_to, created_by, due_date, priority, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          req.user.tenantId || null,
+          title,
+          labelVal,
+          description || null,
+          lead_id || null,
+          clientIdNum,
+          taskCategory,
+          taskType,
+          frequency || "once",
+          assignedUserId,
+          req.user.id,
+          due_date || null,
+          priority || "medium",
+          st,
+        ]
+      );
+      insertId = result.insertId;
+    } catch (e) {
+      const msg = String(e && e.message ? e.message : e);
+      const missingNew =
+        e &&
+        (e.code === "ER_BAD_FIELD_ERROR" ||
+          /Unknown column/i.test(msg));
+      if (!missingNew) throw e;
       const [result] = await pool.execute(
         `INSERT INTO tasks (tenant_id, title, label, description, lead_id, assigned_to, created_by, due_date, priority, status)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -284,35 +397,11 @@ router.post("/",  async (req, res) => {
         ]
       );
       insertId = result.insertId;
-    } catch (e) {
-      const msg = String(e && e.message ? e.message : e);
-      const noLabel =
-        e && (e.code === "ER_BAD_FIELD_ERROR" || /Unknown column ['"]label['"]/i.test(msg));
-      if (!noLabel) throw e;
-      const [result] = await pool.execute(
-        `INSERT INTO tasks (tenant_id, title, description, lead_id, assigned_to, created_by, due_date, priority, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          req.user.tenantId || null,
-          title,
-          description || null,
-          lead_id || null,
-          assignedUserId,
-          req.user.id,
-          due_date || null,
-          priority || "medium",
-          st,
-        ]
-      );
-      insertId = result.insertId;
     }
 
     const [created] = await pool.execute(
-      `SELECT t.*, u.email as assigned_email,
-              uc.email as creator_email, uc.first_name as creator_first_name, uc.last_name as creator_last_name
-       FROM tasks t
-       LEFT JOIN users u ON t.assigned_to = u.id
-       LEFT JOIN users uc ON t.created_by = uc.id
+      `SELECT ${TASK_SELECT_FIELDS}
+       ${TASK_FROM_JOIN}
        WHERE t.id = ? AND (? IS NULL OR t.tenant_id = ?)`,
       [insertId, req.user.tenantId || null, req.user.tenantId || null]
     );
@@ -326,7 +415,7 @@ router.post("/",  async (req, res) => {
         body: String(title || "").trim() || "A task was assigned to you.",
       }).catch((e) => console.warn("task notification(create):", e.message));
     }
-    emitCalendarChanged({ reason: "tasks" });
+    emitTaskEvents(req, "tasks");
     res.status(201).json({ success: true, data: created[0] });
   } catch (err) {
     console.error("POST /api/tasks", err);
@@ -348,6 +437,10 @@ router.put("/:id", async (req, res) => {
       priority,
       status,
       label,
+      client_id,
+      task_category,
+      task_type,
+      frequency,
     } = req.body;
 
     const assignedUserId =
@@ -396,6 +489,22 @@ router.put("/:id", async (req, res) => {
       sets.push("status = ?");
       params.push(statusToDbEnum(st));
     }
+    if (client_id !== undefined) {
+      sets.push("client_id = ?");
+      params.push(client_id ? Number(client_id) : null);
+    }
+    if (task_category !== undefined) {
+      sets.push("task_category = ?");
+      params.push(task_category || "general");
+    }
+    if (task_type !== undefined) {
+      sets.push("task_type = ?");
+      params.push(task_type || "internal");
+    }
+    if (frequency !== undefined) {
+      sets.push("frequency = ?");
+      params.push(frequency || "once");
+    }
 
     if (sets.length === 0) {
       return res.status(400).json({ success: false, message: "No fields to update" });
@@ -419,11 +528,8 @@ router.put("/:id", async (req, res) => {
     }
 
     const [updated] = await pool.execute(
-      `SELECT t.*, u.email as assigned_email,
-              uc.email as creator_email, uc.first_name as creator_first_name, uc.last_name as creator_last_name
-       FROM tasks t
-       LEFT JOIN users u ON t.assigned_to = u.id
-       LEFT JOIN users uc ON t.created_by = uc.id
+      `SELECT ${TASK_SELECT_FIELDS}
+       ${TASK_FROM_JOIN}
        WHERE t.id = ? AND t.is_deleted = 0 AND (? IS NULL OR t.tenant_id = ?)`,
       [taskId, req.user.tenantId || null, req.user.tenantId || null]
     );
@@ -439,7 +545,10 @@ router.put("/:id", async (req, res) => {
         body: String(updated?.[0]?.title || "").trim() || "A task was assigned to you.",
       }).catch((e) => console.warn("task notification(assign):", e.message));
     }
-    emitCalendarChanged({ reason: "tasks" });
+    const dbSt = updated?.[0]?.status;
+    const reason =
+      dbSt === "done" || dbSt === "completed" ? "task_done" : "tasks";
+    emitTaskEvents(req, reason);
     res.json({ success: true, data: updated[0] });
   } catch (err) {
     console.error("PUT /api/tasks/:id", err);
@@ -462,7 +571,7 @@ router.delete("/:id", async (req, res) => {
       return res.status(404).json({ success: false, message: "Task not found" });
     }
 
-    emitCalendarChanged({ reason: "tasks" });
+    emitTaskEvents(req, "tasks");
     res.json({ success: true, message: "Task deleted" });
   } catch (err) {
     console.error("DELETE /api/tasks/:id", err);

@@ -4,7 +4,7 @@ const fs      = require("fs");
 const multer  = require("multer");
 const { verifyToken } = require("../middleware/verifyToken");
 const { pool }        = require("../config/database");
-const { emitAdminChanged, emitCalendarChanged } = require("../realtime/meetingsRealtime");
+const { emitAdminChanged, emitCalendarChanged, emitLeadsChanged } = require("../realtime/meetingsRealtime");
 const { canSeeAllTeamRecords } = require("../utils/crmTeamAccess");
 const { sendEmailWithRetry } = require("../services/emailService");
 
@@ -353,6 +353,7 @@ async function createLeadHandler(req, res) {
 
     emitAdminChanged({ scope: "stats", reason: "leads", action: "create" });
     emitCalendarChanged({ reason: "leads" });
+    emitLeadsChanged({ reason: "leads" });
     res.status(201).json({ success: true, data: formatRow(created[0]) });
   } catch (err) {
     console.error("POST /api/leads", err);
@@ -415,6 +416,7 @@ router.post("/:id/convert", async (req, res) => {
 
     emitAdminChanged({ scope: "stats", reason: "leads", action: "convert" });
     emitCalendarChanged({ reason: "leads" });
+    emitLeadsChanged({ reason: "leads" });
     res.json({ success: true, message: "Lead converted to customer" });
   } catch (err) {
     console.error("POST /api/leads/:id/convert", err);
@@ -640,6 +642,7 @@ router.put(
 
       emitAdminChanged({ scope: "stats", reason: "leads", action: "update" });
       emitCalendarChanged({ reason: "leads" });
+    emitLeadsChanged({ reason: "leads" });
       res.json({ success: true, data: formatRow(updated[0]) });
     } catch (err) {
       console.error("PUT /api/leads/:id", err);
@@ -676,6 +679,7 @@ router.patch(
 
     emitAdminChanged({ scope: "stats", reason: "leads", action: "status" });
     emitCalendarChanged({ reason: "leads" });
+    emitLeadsChanged({ reason: "leads" });
     res.json({ success: true, message: "Status updated" });
   } catch (err) {
     console.error("PATCH /api/leads/:id/status", err);
@@ -717,6 +721,7 @@ router.delete(
     );
     emitAdminChanged({ scope: "stats", reason: "leads", action: "delete" });
     emitCalendarChanged({ reason: "leads" });
+    emitLeadsChanged({ reason: "leads" });
     res.json({ success: true, message: "Lead deleted" });
   } catch (err) {
     console.error("DELETE /api/leads/:id", err);

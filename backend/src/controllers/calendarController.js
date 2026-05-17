@@ -311,6 +311,35 @@ async function getCalendarFeed(req, res) {
       });
     });
 
+    try {
+      const [oppRows] = await pool.query(
+        `SELECT o.id, o.title, o.followup_at, o.followup_type, o.stage
+         FROM opportunities o
+         WHERE o.is_deleted = 0
+           AND o.followup_at IS NOT NULL
+           AND o.followup_at >= ? AND o.followup_at <= ?
+           AND o.stage NOT IN ('closed_won', 'closed_lost')
+           AND (o.owner_user_id = ? OR o.created_by = ?)`,
+        [rs, re, uid, uid]
+      );
+      oppRows.forEach((o) => {
+        const start = o.followup_at;
+        items.push({
+          id: `opportunity-${o.id}`,
+          source: "opportunity",
+          type: "opportunity",
+          title: o.title ? `Prospect: ${o.title}` : "Prospect follow-up",
+          description: o.followup_type ? `Follow-up: ${o.followup_type}` : null,
+          start,
+          end: start,
+          allDay: false,
+          meta: { opportunityId: o.id, stage: o.stage },
+        });
+      });
+    } catch (e) {
+      console.warn("calendar opportunity followups:", e.message);
+    }
+
     // --- Fitness CRM: Client Milestones & Consultations ---
     const [fitnessRows] = await pool.query(
       `SELECT client_id, full_name, plan_start_date, plan_expiry_date, next_due_date, status

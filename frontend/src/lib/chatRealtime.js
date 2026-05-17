@@ -6,6 +6,7 @@ const chatSubs = new Set();
 const notifSubs = new Set();
 const calendarSubs = new Set();
 const workspaceSubs = new Set();
+const crmSubs = new Map();
 
 function safeNotifyChat(type, payload) {
   chatSubs.forEach((fn) => {
@@ -47,8 +48,21 @@ function safeNotifyWorkspace(payload) {
   });
 }
 
+function safeNotifyCrm(event, payload) {
+  crmSubs.forEach((handler, events) => {
+    if (!events.has(event) && !events.has("*")) return;
+    try {
+      handler(event, payload);
+    } catch {
+      /* ignore */
+    }
+  });
+}
+
 function totalSubscribers() {
-  return chatSubs.size + notifSubs.size + calendarSubs.size + workspaceSubs.size;
+  return (
+    chatSubs.size + notifSubs.size + calendarSubs.size + workspaceSubs.size + crmSubs.size
+  );
 }
 
 async function ensureSocket(getTokenFn) {
@@ -96,6 +110,16 @@ async function ensureSocket(getTokenFn) {
     s.on("todos:changed", (payload) => safeNotifyCalendar({ ...payload, _channel: "todos" }));
     // Keep workspace access events on this same socket so the app doesn't juggle multiple connections.
     s.on("workspace:access", (payload) => safeNotifyWorkspace(payload));
+
+    s.on("leads:changed", (payload) => safeNotifyCrm("leads:changed", payload));
+    s.on("reminders:changed", (payload) => safeNotifyCrm("reminders:changed", payload));
+    s.on("tasks:changed", (payload) => safeNotifyCrm("tasks:changed", payload));
+    s.on("crm-tasks-changed", (payload) => safeNotifyCrm("tasks:changed", payload));
+    s.on("tickets:changed", (payload) => safeNotifyCrm("tickets:changed", payload));
+    s.on("contacts:changed", (payload) => safeNotifyCrm("contacts:changed", payload));
+    s.on("notes:changed", (payload) => safeNotifyCrm("notes:changed", payload));
+    s.on("opportunities:changed", (payload) => safeNotifyCrm("opportunities:changed", payload));
+    s.on("collections:changed", (payload) => safeNotifyCrm("collections:changed", payload));
 
     s.io.on("reconnect_attempt", async () => {
       try {
@@ -184,5 +208,60 @@ export function subscribeWorkspaceAccess(handler, getTokenFn) {
   return () => {
     workspaceSubs.delete(handler);
     maybeDisconnectSocket();
+  };
+}
+
+/**
+ * Subscribe to CRM list refresh events on the shared socket.
+ * @param {string[]} events e.g. ["leads:changed", "calendar:changed"] or ["*"]
+ * @param {(event: string, payload: unknown) => void} handler
+ */
+export function subscribeCrmLive(events, handler, getTokenFn) {
+  const set = new Set(Array.isArray(events) ? events : [events]);
+  crmSubs.set(handler, set);
+  void ensureSocket(getTokenFn);
+
+  return () => {
+    crmSubs.delete(handler);
+    maybeDisconnectSocket();
+  };
+}
+
+/** Refetch Today Command Center when any relevant CRM/calendar/fitness data changes. */
+export function subscribeTodayLive(handler, getTokenFn) {
+  const notify = () => {
+    try {
+      handler();
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const unsubCal = subscribeCalendarLive(notify, getTokenFn);
+  const unsubCrm = subscribeCrmLive(
+    [
+      "tasks:changed",
+      "reminders:changed",
+      "leads:changed",
+      "opportunities:changed",
+      "collections:changed",
+    ],
+    notify,
+    getTokenFn
+  );
+
+  let socketRef = null;
+  const onFitness = () => notify();
+  void ensureSocket(getTokenFn).then((s) => {
+    socketRef = s;
+    s.on("fitness:changed", onFitness);
+  });
+
+  return () => {
+    unsubCal();
+    unsubCrm();
+    if (socketRef) {
+      socketRef.off("fitness:changed", onFitness);
+    }
   };
 }

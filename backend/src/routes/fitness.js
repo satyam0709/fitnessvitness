@@ -21,9 +21,19 @@ function handleValidationErrors(req, res, next) {
 // ─────────────────────────────────────────────────────────────────
 const createClientValidation = [
   body("full_name").trim().notEmpty().withMessage("Full name is required"),
-  body("phone").trim().notEmpty().withMessage("Phone is required"),
-  body("plan_type").trim().notEmpty().withMessage("Plan type is required"),
-  body("plan_start_date").notEmpty().withMessage("Plan start date is required").isISO8601().withMessage("Plan start date must be a valid date"),
+  body("phone").optional({ values: "falsy" }).trim(),
+  body("email").optional({ values: "falsy" }).trim().isEmail().withMessage("Invalid email format"),
+  body("plan_type").optional({ values: "falsy" }).trim(),
+  body("plan_start_date")
+    .optional({ values: "falsy" })
+    .isISO8601({ strict: false })
+    .withMessage("Plan start date must be a valid date"),
+  body("age").optional({ values: "falsy" }).isInt({ min: 1, max: 150 }).withMessage("Age must be 1–150"),
+  body("tier").optional({ values: "falsy" }).isInt({ min: 1, max: 5 }).withMessage("Tier must be 1–5"),
+  body("follow_up_freq_days")
+    .optional({ values: "falsy" })
+    .isInt({ min: 1 })
+    .withMessage("Follow-up frequency must be a positive number"),
 ];
 
 const createTransactionValidation = [

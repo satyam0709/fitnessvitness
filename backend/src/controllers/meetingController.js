@@ -1,5 +1,10 @@
 const { pool } = require("../config/database");
-const { emitMeetingsChanged, emitAdminChanged, emitCalendarChanged } = require("../realtime/meetingsRealtime");
+const {
+  emitMeetingsChanged,
+  emitAdminChanged,
+  emitCalendarChanged,
+  emitFitnessChanged,
+} = require("../realtime/meetingsRealtime");
 const { createUserNotification } = require("../services/notificationService");
 
 const MEETING_TYPES = new Set(["in_person", "virtual", "phone", "other"]);
@@ -388,6 +393,8 @@ async function createMeeting(req, res) {
       status,
       recurrence,
       assigned_to_user_id,
+      consultation_type,
+      client_id: clientIdRaw,
     } = req.body;
 
     if (!title?.trim()) return res.status(400).json({ success: false, message: "Title required" });
@@ -409,10 +416,18 @@ async function createMeeting(req, res) {
     const endSql = toMysqlDateTime(end_time);
     if (!startSql) return res.status(400).json({ success: false, message: "Invalid start_time" });
 
+    const consultType =
+      consultation_type != null && String(consultation_type).trim()
+        ? String(consultation_type).trim().slice(0, 50)
+        : "general";
+    const fitnessClientId =
+      clientIdRaw != null && String(clientIdRaw).trim() ? String(clientIdRaw).trim().slice(0, 20) : null;
+
     const [result] = await pool.query(
       `INSERT INTO meetings (title, description, start_time, end_time, location, meet_link,
-        meeting_type, status, recurrence, organizer_id, assigned_to_user_id, lead_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        meeting_type, status, recurrence, organizer_id, assigned_to_user_id, lead_id,
+        consultation_type, client_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         title.trim(),
         description || null,
@@ -426,10 +441,24 @@ async function createMeeting(req, res) {
         uid,
         assigneeId,
         safeLeadId(lead_id),
+        consultType,
+        fitnessClientId,
       ]
     );
 
     const meetingId = result.insertId;
+
+    if (consultType !== "general" && fitnessClientId) {
+      try {
+        await pool.query(
+          `UPDATE fitness_clients SET next_due_date = DATE(?), updated_at = NOW() WHERE client_id = ?`,
+          [startSql, fitnessClientId]
+        );
+        emitFitnessChanged();
+      } catch (e) {
+        console.warn("meeting create: fitness_clients next_due_date update:", e.message);
+      }
+    }
 
     await pool.query("INSERT IGNORE INTO meeting_attendees (meeting_id, user_id) VALUES (?, ?)", [
       meetingId,

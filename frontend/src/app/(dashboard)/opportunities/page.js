@@ -4,7 +4,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSearchParams } from "next/navigation";
-import { apiFetch, getApiOrigin } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { subscribeTodayLive } from "@/lib/chatRealtime";
+import { useListHighlight, itemHighlightClass } from "@/lib/useListHighlight";
 import { useToast } from "@/components/Toast/ToastContext";
 import {
   useConfirmDialog,
@@ -98,10 +100,29 @@ const EMPTY_FORM = {
   followup_at: "",
   followup_type: "call",
   opportunity_type: "new_business",
-  lead_source: "website",
+  lead_source: "walk_in",
+  phone: "",
+  visit_purpose: "",
   comments_history: "",
   team: "",
 };
+
+const EMPTY_WIN_MODAL = {
+  open: false,
+  opp: null,
+  final_amount: "",
+  notes: "",
+  create_client: true,
+  client_id: "",
+  clientSearch: "",
+  clientOptions: [],
+};
+
+function formatFollowupAt(value) {
+  if (!value) return "—";
+  const s = String(value).replace("T", " ");
+  return s.length >= 16 ? s.slice(0, 16) : s.slice(0, 10);
+}
 
 async function opportunitiesRequest( suffix = "", options = {}) {
   const cleanSuffix = suffix.startsWith("/") || suffix.startsWith("?") ? suffix : `/${suffix}`;
@@ -130,13 +151,13 @@ export default function OpportunitiesPage() {
   const searchParams = useSearchParams();
   const [listView, setListView] = useState("pipeline");
   const [consultModal, setConsultModal] = useState({ open: false, opp: null, notes: "", at: "" });
-  const [winModal, setWinModal] = useState({ open: false, opp: null, final_amount: "", notes: "" });
+  const [winModal, setWinModal] = useState(EMPTY_WIN_MODAL);
+  const [stageBreakdown, setStageBreakdown] = useState(null);
   const [lossModal, setLossModal] = useState({ open: false, opp: null, reason: "" });
   const [actionSaving, setActionSaving] = useState(false);
 
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [liveConnected, setLiveConnected] = useState(false);
   const [stageFilter, setStageFilter] = useState(normalizeStageForUi(searchParams.get("stage") || ""));
   const [q, setQ] = useState("");
   const [fromDate, setFromDate] = useState("");
@@ -183,6 +204,7 @@ export default function OpportunitiesPage() {
         return;
       }
       setItems(Array.isArray(json.data) ? json.data : []);
+      setStageBreakdown(Array.isArray(json.stageBreakdown) ? json.stageBreakdown : null);
     } catch {
       showToast("Could not load opportunities", "error");
       setItems([]);
@@ -196,65 +218,53 @@ export default function OpportunitiesPage() {
   }, [fetchItems]);
 
   useEffect(() => {
-    if (!isLoaded) return;
-    const timer = setInterval(fetchItems, 20000);
-    return () => clearInterval(timer);
+    if (!isLoaded) return undefined;
+    return subscribeTodayLive(() => fetchItems());
   }, [isLoaded, fetchItems]);
 
   useEffect(() => {
-    if (!isLoaded) {
-      setLiveConnected(false);
-      return;
+    const view = searchParams.get("view");
+    if (view && ["pipeline", "won", "lost", "all"].includes(view)) {
+      setListView(view);
     }
-    let cancelled = false;
-    const sockRef = { current: null };
-
-    async function connectSocket() {
-      if (cancelled) return;
-      try {
-        const { io } = await import("socket.io-client");
-        const s = io(getApiOrigin(), {
-          path: "/socket.io",
-          auth: {},
-          transports: ["websocket", "polling"],
-          withCredentials: true,
-          reconnection: true,
-        });
-        sockRef.current = s;
-        s.on("connect", () => !cancelled && setLiveConnected(true));
-        s.on("disconnect", () => !cancelled && setLiveConnected(false));
-        s.on("connect_error", () => !cancelled && setLiveConnected(false));
-        s.on("calendar:changed", () => !cancelled && fetchItems());
-        s.on("opportunities:changed", () => !cancelled && fetchItems());
-      } catch {
-        if (!cancelled) setLiveConnected(false);
-      }
+    const stage = searchParams.get("stage");
+    if (stage === "open") {
+      setListView("pipeline");
+      setStageFilter("");
+    } else if (stage) {
+      setStageFilter(normalizeStageForUi(stage));
     }
+    if (searchParams.get("create") === "1") {
+      setEditingId(null);
+      setForm(EMPTY_FORM);
+      setCreateModalOpen(true);
+    }
+  }, [searchParams]);
 
-    connectSocket();
-    return () => {
-      cancelled = true;
-      setLiveConnected(false);
-      if (sockRef.current) {
-        try {
-          sockRef.current.removeAllListeners();
-          sockRef.current.disconnect();
-        } catch {
-          /* ignore */
-        }
-      }
-    };
-  }, [isLoaded, fetchItems]);
+  const highlightId = searchParams.get("highlight");
+  const { highlightedId } = useListHighlight(highlightId, !loading, styles.highlighted, {
+    idPrefix: "opp",
+  });
 
   const stageCounts = useMemo(() => {
-    const out = { all: items.length };
+    const out = { all: 0 };
     for (const s of STAGES) out[s.value] = 0;
+    if (stageBreakdown?.length && (listView === "pipeline" || listView === "all")) {
+      for (const b of stageBreakdown) {
+        const key = normalizeStageForUi(b.key);
+        const n = Number(b.count) || 0;
+        if (out[key] != null) out[key] = n;
+        out.all += n;
+      }
+      return out;
+    }
+    out.all = items.length;
     for (const it of items) {
       const stageKey = normalizeStageForUi(it.stage);
       if (out[stageKey] != null) out[stageKey] += 1;
     }
     return out;
-  }, [items]);
+  }, [items, listView, stageBreakdown]);
 
   const totalAmount = useMemo(() => {
     return items.reduce((acc, it) => {
@@ -327,7 +337,9 @@ export default function OpportunitiesPage() {
       followup_at: item.followup_at ? String(item.followup_at).slice(0, 16).replace(" ", "T") : "",
       followup_type: item.followup_type || "call",
       opportunity_type: item.opportunity_type || "new_business",
-      lead_source: item.lead_source || "website",
+      lead_source: item.lead_source || "walk_in",
+      phone: item.phone || "",
+      visit_purpose: item.visit_purpose || "",
       comments_history: item.comments_history || "",
       team: item.team || "",
     });
@@ -337,7 +349,7 @@ export default function OpportunitiesPage() {
   async function createOpportunity(e) {
     e.preventDefault();
     if (!form.title.trim()) {
-      showToast("Opportunity name is required", "error");
+      showToast("Visitor / prospect name is required", "error");
       return;
     }
     setSaving(true);
@@ -378,10 +390,10 @@ export default function OpportunitiesPage() {
       const opp = items.find((x) => x.id === id);
       if (opp) {
         setWinModal({
+          ...EMPTY_WIN_MODAL,
           open: true,
           opp,
           final_amount: String(opp.amount != null ? opp.amount : ""),
-          notes: "",
         });
       }
       return;
@@ -495,6 +507,22 @@ export default function OpportunitiesPage() {
     }
   }
 
+  async function searchClientsForWin(query) {
+    if (String(query || "").trim().length < 2) {
+      setWinModal((m) => ({ ...m, clientOptions: [] }));
+      return;
+    }
+    try {
+      const res = await apiFetch(`/fitness/clients/search?q=${encodeURIComponent(query.trim())}`);
+      const json = await res.json().catch(() => ({}));
+      if (res.ok && json.success && Array.isArray(json.data)) {
+        setWinModal((m) => ({ ...m, clientOptions: json.data }));
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
   async function submitCloseWon(e) {
     e.preventDefault();
     if (!winModal.opp) return;
@@ -511,6 +539,8 @@ export default function OpportunitiesPage() {
         body: JSON.stringify({
           final_amount: amt,
           notes: winModal.notes?.trim() || undefined,
+          create_client: winModal.create_client,
+          client_id: winModal.client_id?.trim() || undefined,
         }),
       });
       if (!res) {
@@ -522,8 +552,13 @@ export default function OpportunitiesPage() {
         showToast(json.message || "Could not close as won", "error");
         return;
       }
-      showToast("Marked won — appears under Revenue (won)");
-      setWinModal({ open: false, opp: null, final_amount: "", notes: "" });
+      const clientId = json.client?.client_id || json.data?.client_id;
+      showToast(
+        clientId
+          ? `Marked won — client ${clientId} linked`
+          : "Marked won — appears under Revenue (won)"
+      );
+      setWinModal(EMPTY_WIN_MODAL);
       fetchItems();
     } catch {
       showToast("Could not close as won", "error");
@@ -564,19 +599,25 @@ export default function OpportunitiesPage() {
   }
 
   const showWonCols = listView === "won";
+  const showLostCols = listView === "lost";
+
+  function purposeLabel(it) {
+    if (it.visit_purpose?.trim()) return it.visit_purpose.trim();
+    return (
+      intakeTypeLabels[normalizeIntakeTypeKey(it.product_category)] ||
+      prettifyToken(it.product_category) ||
+      "—"
+    );
+  }
 
   return (
     <div className={styles.page}>
       <div className={styles.headerRow}>
-        <h1 className={styles.title}>Opportunities</h1>
+        <h1 className={styles.title}>Walk-in prospects</h1>
         <div className={styles.headerMeta}>
           <button type="button" className={styles.btnPrimary} onClick={openCreateModal}>
-            <i className="fas fa-plus" /> Create
+            <i className="fas fa-plus" /> New walk-in
           </button>
-          <span className={styles.liveMeta}>
-            <span className={`${styles.liveDot} ${liveConnected ? "" : styles.liveDotOff}`} />
-            {liveConnected ? "Live" : "Offline"}
-          </span>
           <div className={styles.totalValue}>
             {listView === "won"
               ? "Booked revenue"
@@ -619,7 +660,7 @@ export default function OpportunitiesPage() {
           className={`${styles.stageCard} ${!stageFilter ? styles.stageCardActive : ""}`}
           onClick={() => setStageFilter("")}
         >
-          <span>All [Sales Stage]</span>
+          <span>All stages</span>
           <strong>{stageCounts.all || 0}</strong>
         </button>
         {STAGES.map((s) => (
@@ -682,22 +723,27 @@ export default function OpportunitiesPage() {
             <thead>
               <tr>
                 <th />
-                <th>Opportunity Name</th>
-                <th>Account Name</th>
-                <th>Intake / service</th>
-                <th>{showWonCols ? "Forecast (INR)" : "Expected Amount (INR)"}</th>
+                <th>Visitor / prospect</th>
+                <th>Phone</th>
+                <th>Purpose of visit</th>
+                {!showWonCols && !showLostCols ? <th>Follow-up</th> : null}
+                {!showWonCols ? <th>Channel</th> : null}
+                <th>{showWonCols ? "Forecast (INR)" : "Amount (INR)"}</th>
                 {showWonCols ? (
                   <>
                     <th>Booked (INR)</th>
                     <th>Won date</th>
                   </>
                 ) : null}
-                <th>Qty</th>
-                <th>Expected Close Date</th>
-                <th>Sales Stage</th>
-                <th>Followup Type</th>
-                <th>Opportunity Type</th>
-                <th>Lead Source</th>
+                {showLostCols ? (
+                  <>
+                    <th>Loss reason</th>
+                    <th>Lost date</th>
+                  </>
+                ) : !showWonCols ? (
+                  <th>Stage</th>
+                ) : null}
+                {!showWonCols && !showLostCols ? <th>Source</th> : null}
                 <th>Assigned</th>
                 <th />
               </tr>
@@ -809,7 +855,11 @@ export default function OpportunitiesPage() {
             </thead>
             <tbody>
               {filteredRows.map((it) => (
-                <tr key={it.id}>
+                <tr
+                  key={it.id}
+                  id={`opp-${it.id}`}
+                  className={itemHighlightClass(it.id, highlightedId, styles.highlighted)}
+                >
                   <td>
                     <button
                       type="button"
@@ -821,8 +871,16 @@ export default function OpportunitiesPage() {
                     </button>
                   </td>
                   <td>{it.title}</td>
-                  <td>{it.company_name || "-"}</td>
-                  <td>{intakeTypeLabels[normalizeIntakeTypeKey(it.product_category)] || prettifyToken(it.product_category) || "-"}</td>
+                  <td>{it.phone || "—"}</td>
+                  <td>{purposeLabel(it)}</td>
+                  {!showWonCols && !showLostCols ? <td>{formatFollowupAt(it.followup_at)}</td> : null}
+                  {!showWonCols ? (
+                    <td>
+                      {followupTypeLabels[String(it.followup_type || "").toLowerCase()] ||
+                        prettifyToken(it.followup_type) ||
+                        "—"}
+                    </td>
+                  ) : null}
                   <td>INR {Number(it.amount || 0).toLocaleString("en-IN")}</td>
                   {showWonCols ? (
                     <>
@@ -836,30 +894,39 @@ export default function OpportunitiesPage() {
                       </td>
                     </>
                   ) : null}
-                  <td>{Number(it.quantity || 0)}</td>
-                  <td>{it.expected_close_date ? String(it.expected_close_date).slice(0, 10) : "-"}</td>
-                  <td>
-                    {it.stage === "closed_won" || it.stage === "closed_lost" ? (
-                      <span className={styles.stagePill}>
-                        {selectedStageMeta[normalizeStageForUi(it.stage)] || prettifyToken(it.stage)}
-                      </span>
-                    ) : (
-                      <select
-                        className={styles.stageSelect}
-                        value={normalizeStageForUi(it.stage)}
-                        onChange={(e) => updateStage(it.id, e.target.value)}
-                      >
-                        {TABLE_STAGE_OPTIONS.map((s) => (
-                          <option key={s.value} value={s.value}>
-                            {s.label}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                  </td>
-                  <td>{followupTypeLabels[String(it.followup_type || "").toLowerCase()] || prettifyToken(it.followup_type) || "-"}</td>
-                  <td>{opportunityTypeLabels[String(it.opportunity_type || "").toLowerCase()] || prettifyToken(it.opportunity_type) || "-"}</td>
-                  <td>{leadSourceLabels[String(it.lead_source || "").toLowerCase()] || prettifyToken(it.lead_source) || "-"}</td>
+                  {showLostCols ? (
+                    <>
+                      <td>{it.loss_reason || "—"}</td>
+                      <td>{it.closed_lost_at ? String(it.closed_lost_at).slice(0, 10) : "—"}</td>
+                    </>
+                  ) : !showWonCols ? (
+                    <td>
+                      {it.stage === "closed_won" || it.stage === "closed_lost" ? (
+                        <span className={styles.stagePill}>
+                          {selectedStageMeta[normalizeStageForUi(it.stage)] || prettifyToken(it.stage)}
+                        </span>
+                      ) : (
+                        <select
+                          className={styles.stageSelect}
+                          value={normalizeStageForUi(it.stage)}
+                          onChange={(e) => updateStage(it.id, e.target.value)}
+                        >
+                          {TABLE_STAGE_OPTIONS.map((s) => (
+                            <option key={s.value} value={s.value}>
+                              {s.label}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </td>
+                  ) : null}
+                  {!showWonCols && !showLostCols ? (
+                    <td>
+                      {leadSourceLabels[String(it.lead_source || "").toLowerCase()] ||
+                        prettifyToken(it.lead_source) ||
+                        "—"}
+                    </td>
+                  ) : null}
                   <td>{it.owner_email || "-"}</td>
                   <td>
                     <div className={styles.actionIcons}>
@@ -883,10 +950,10 @@ export default function OpportunitiesPage() {
                             className={styles.iconBtn}
                             onClick={() =>
                               setWinModal({
+                                ...EMPTY_WIN_MODAL,
                                 open: true,
                                 opp: it,
                                 final_amount: String(it.amount != null ? it.amount : ""),
-                                notes: "",
                               })
                             }
                             title="Mark won"
@@ -923,7 +990,7 @@ export default function OpportunitiesPage() {
             <div className={styles.modalBackdrop} onClick={() => setCreateModalOpen(false)}>
               <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
                 <div className={styles.modalHead}>
-                  <h2>{editingId ? "Edit Opportunity" : "Create Opportunity"}</h2>
+                  <h2>{editingId ? "Edit prospect" : "New walk-in prospect"}</h2>
                   <button type="button" className={styles.modalCloseBtn} onClick={() => setCreateModalOpen(false)}>
                     <i className="fas fa-times" />
                   </button>
@@ -931,7 +998,7 @@ export default function OpportunitiesPage() {
                 <form className={styles.modalForm} onSubmit={createOpportunity}>
                   <div className={styles.modalFormGrid}>
               <label className={styles.field}>
-                Opportunity Name *
+                Visitor / prospect name *
                 <input
                   className={styles.input}
                   required
@@ -940,7 +1007,15 @@ export default function OpportunitiesPage() {
                 />
               </label>
               <label className={styles.field}>
-                Account Name
+                Phone
+                <input
+                  className={styles.input}
+                  value={form.phone}
+                  onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
+                />
+              </label>
+              <label className={styles.field}>
+                Account / company (optional)
                 <input
                   className={styles.input}
                   value={form.company_name}
@@ -948,7 +1023,7 @@ export default function OpportunitiesPage() {
                 />
               </label>
               <label className={styles.field}>
-                Intake / service type
+                Purpose of visit
                 <select
                   className={styles.input}
                   value={form.product_category}
@@ -960,6 +1035,15 @@ export default function OpportunitiesPage() {
                     </option>
                   ))}
                 </select>
+              </label>
+              <label className={`${styles.field} ${styles.fullWidth}`}>
+                Why they came (free text)
+                <input
+                  className={styles.input}
+                  value={form.visit_purpose}
+                  onChange={(e) => setForm((f) => ({ ...f, visit_purpose: e.target.value }))}
+                  placeholder="e.g. weight loss consult, follow-up on plan"
+                />
               </label>
               <label className={styles.field}>
                 Quantity
@@ -1147,14 +1231,14 @@ export default function OpportunitiesPage() {
 
       {winModal.open && winModal.opp && typeof document !== "undefined"
         ? createPortal(
-            <div className={styles.modalBackdrop} onClick={() => setWinModal({ open: false, opp: null, final_amount: "", notes: "" })}>
+            <div className={styles.modalBackdrop} onClick={() => setWinModal(EMPTY_WIN_MODAL)}>
               <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
                 <div className={styles.modalHead}>
                   <h2>Mark won — {winModal.opp.title}</h2>
                   <button
                     type="button"
                     className={styles.modalCloseBtn}
-                    onClick={() => setWinModal({ open: false, opp: null, final_amount: "", notes: "" })}
+                    onClick={() => setWinModal(EMPTY_WIN_MODAL)}
                   >
                     <i className="fas fa-times" />
                   </button>
@@ -1185,8 +1269,71 @@ export default function OpportunitiesPage() {
                       onChange={(e) => setWinModal((m) => ({ ...m, notes: e.target.value }))}
                     />
                   </label>
+                  <label className={styles.field} style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    <input
+                      type="checkbox"
+                      checked={winModal.create_client}
+                      onChange={(e) =>
+                        setWinModal((m) => ({
+                          ...m,
+                          create_client: e.target.checked,
+                          client_id: e.target.checked ? "" : m.client_id,
+                        }))
+                      }
+                    />
+                    Create fitness client from this prospect
+                  </label>
+                  {!winModal.create_client ? (
+                    <>
+                      <label className={styles.field}>
+                        Link existing client
+                        <input
+                          className={styles.input}
+                          value={winModal.clientSearch}
+                          onChange={(e) => {
+                            const q = e.target.value;
+                            setWinModal((m) => ({ ...m, clientSearch: q }));
+                            searchClientsForWin(q);
+                          }}
+                          placeholder="Search by name or phone"
+                        />
+                      </label>
+                      {winModal.clientOptions?.length > 0 ? (
+                        <ul className={styles.clientPickList}>
+                          {winModal.clientOptions.map((c) => (
+                            <li key={c.client_id}>
+                              <button
+                                type="button"
+                                className={
+                                  winModal.client_id === c.client_id ? styles.clientPickActive : ""
+                                }
+                                onClick={() =>
+                                  setWinModal((m) => ({
+                                    ...m,
+                                    client_id: c.client_id,
+                                    clientSearch: c.full_name || c.client_id,
+                                  }))
+                                }
+                              >
+                                {c.full_name || c.client_id} — {c.phone || "no phone"}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      <label className={styles.field}>
+                        Or client ID
+                        <input
+                          className={styles.input}
+                          value={winModal.client_id}
+                          onChange={(e) => setWinModal((m) => ({ ...m, client_id: e.target.value }))}
+                          placeholder="e.g. CL-00042"
+                        />
+                      </label>
+                    </>
+                  ) : null}
                   <div className={styles.modalActions}>
-                    <button type="button" className={styles.btnGhost} onClick={() => setWinModal({ open: false, opp: null, final_amount: "", notes: "" })}>
+                    <button type="button" className={styles.btnGhost} onClick={() => setWinModal(EMPTY_WIN_MODAL)}>
                       Cancel
                     </button>
                     <button type="submit" className={styles.btnPrimary} disabled={actionSaving}>

@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch, getApiBase, getApiOrigin } from "@/lib/api";
@@ -10,6 +11,7 @@ import {
   useConfirmDialog,
   buildDeleteMessage,
 } from "@/components/ConfirmDialog/ConfirmDialogContext";
+import { useListHighlight, itemHighlightClass } from "@/lib/useListHighlight";
 import styles from "./meetings.module.css";
 
 /** Recurrence filter (matches Add Meeting + DB column `recurrence`) */
@@ -88,9 +90,11 @@ function statusDisplay(s) {
   return m[String(s || "").toLowerCase()] || s || "—";
 }
 
-export default function MeetingsPage() {
+function MeetingsPageContent() {
   const { confirm } = useConfirmDialog();
   const { isLoaded, isSignedIn } = useAuth();
+  const searchParams = useSearchParams();
+  const highlightId = searchParams.get("highlight");
 
   const [items, setItems] = useState([]);
   const [total, setTotal] = useState(0);
@@ -110,7 +114,10 @@ export default function MeetingsPage() {
   const [dateRange, setDateRange] = useState(null);
   const [leads, setLeads] = useState([]);
 
-  const [viewMode, setViewMode] = useState("list");
+  const [viewMode, setViewMode] = useState(() => {
+    if (typeof window === "undefined") return "list";
+    return new URLSearchParams(window.location.search).get("highlight") ? "list" : "list";
+  });
   const [dateModalOpen, setDateModalOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignUserId, setAssignUserId] = useState("");
@@ -126,6 +133,16 @@ export default function MeetingsPage() {
   const [stats, setStats] = useState(null);
 
   const loadRef = useRef(() => {});
+
+  useLayoutEffect(() => {
+    if (highlightId) setViewMode("list");
+  }, [highlightId]);
+
+  const { highlightedId } = useListHighlight(
+    highlightId,
+    !loading && viewMode === "list",
+    styles.highlighted
+  );
 
   useEffect(() => {
     const t = setTimeout(() => setSearchDebounced(searchInput.trim()), 350);
@@ -816,7 +833,11 @@ export default function MeetingsPage() {
                 const org = userById.get(m.organizer_id);
                 const asg = m.assigned_to_user_id != null ? userById.get(m.assigned_to_user_id) : org;
                 return (
-                  <tr key={m.id}>
+                  <tr
+                    key={m.id}
+                    id={`item-${m.id}`}
+                    className={itemHighlightClass(m.id, highlightedId, styles.highlighted)}
+                  >
                     <td>
                       <input
                         type="checkbox"
@@ -1045,5 +1066,13 @@ export default function MeetingsPage() {
         </div>
       ) : null}
     </div>
+  );
+}
+
+export default function MeetingsPage() {
+  return (
+    <Suspense fallback={null}>
+      <MeetingsPageContent />
+    </Suspense>
   );
 }
