@@ -74,16 +74,17 @@ export function UserRoleProvider({ children }) {
     });
   }, [isLoaded, userId, user?.is_platform_admin, user?.isPlatformAdmin, me?.is_platform_admin]);
 
-  const value = useMemo(
-    () => ({
+  const value = useMemo(() => {
+    const r = String(role || "").toLowerCase();
+    const isAdmin = r === "admin" || r === "owner" || r === "manager";
+    return {
       role,
-      isAdmin: role === "admin",
+      isAdmin,
       loading,
       me,
       refreshNonce,
-    }),
-    [role, loading, me, refreshNonce]
-  );
+    };
+  }, [role, loading, me, refreshNonce]);
 
   return <UserRoleContext.Provider value={value}>{children}</UserRoleContext.Provider>;
 }

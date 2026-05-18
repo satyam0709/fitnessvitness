@@ -1,20 +1,18 @@
 const { mainPool } = require("../config/database");
+const {
+  fetchUserRowById,
+  mapUserRowToProfile,
+  getUsersColumns,
+  userNameSelectSql,
+} = require("../utils/userSchema");
 
 async function getMe(req, res) {
   try {
     if (req.user?.id == null) {
       return res.status(401).json({ success: false, message: "Not authenticated" });
     }
-    const [rows] = await mainPool.query(
-      `SELECT u.id, u.email, u.full_name, u.role, u.is_active,
-              u.last_login, u.created_at
-       FROM users u
-       WHERE u.id = ?
-       LIMIT 1`,
-      [req.user.id]
-    );
-    const row = rows[0];
-    if (!row || !row.id) {
+    const row = await fetchUserRowById(req.user.id);
+    if (!row?.id) {
       return res.status(404).json({
         success: false,
         message: "User not found in database.",
@@ -26,25 +24,17 @@ async function getMe(req, res) {
         message: "Your account has been deactivated. Contact support.",
       });
     }
-    const effectiveRole = String(req.user?.role || row.role || "staff").toLowerCase();
 
-    mainPool.query("UPDATE users SET last_login = NOW() WHERE id = ?", [row.id]).catch((err) => {
-      console.error("last_login update error:", err.message);
-    });
-    const nameParts = (row.full_name || "").split(" ");
-    const firstName = nameParts[0] || "";
-    const lastName = nameParts.slice(1).join(" ") || "";
+    const cols = await getUsersColumns();
+    if (cols.has("last_login")) {
+      mainPool
+        .query("UPDATE users SET last_login = NOW() WHERE id = ?", [row.id])
+        .catch((err) => console.error("last_login update error:", err.message));
+    }
 
     return res.json({
       success: true,
-      data: {
-        ...row,
-        first_name: firstName,
-        last_name: lastName,
-        role: effectiveRole,
-        is_platform_admin: 0,
-        mustChangePassword: false,
-      },
+      data: mapUserRowToProfile(row, req.user?.role),
     });
   } catch (err) {
     console.error("getMe error:", err);
@@ -57,15 +47,7 @@ async function syncCurrentUser(req, res) {
     if (req.user?.id == null) {
       return res.status(401).json({ success: false, message: "Not authenticated" });
     }
-    const [rows] = await mainPool.execute(
-      `SELECT u.id, u.email, u.full_name, u.role, u.is_active,
-              u.last_login, u.created_at
-       FROM users u
-       WHERE u.id = ?
-       LIMIT 1`,
-      [req.user.id]
-    );
-    const row = rows[0] || null;
+    const row = await fetchUserRowById(req.user.id);
     if (!row) {
       return res.json({
         success: true,
@@ -73,19 +55,10 @@ async function syncCurrentUser(req, res) {
         data: null,
       });
     }
-    const effectiveRole = String(req.user?.role || row.role || "staff").toLowerCase();
-    const nameParts = (row.full_name || "").split(" ");
-    const user = {
-      ...row,
-      first_name: nameParts[0] || "",
-      last_name: nameParts.slice(1).join(" ") || "",
-      role: effectiveRole,
-      is_platform_admin: 0,
-    };
     return res.json({
       success: true,
       message: "User synced successfully",
-      data: user,
+      data: mapUserRowToProfile(row, req.user?.role),
     });
   } catch (err) {
     console.error("syncCurrentUser error:", err);
@@ -99,7 +72,13 @@ async function clearMustChangePassword(req, res) {
     if (uid == null) {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
-    await mainPool.query("UPDATE users SET must_change_password = 0, updated_at = NOW() WHERE id = ?", [uid]);
+    const cols = await getUsersColumns();
+    if (cols.has("must_change_password")) {
+      await mainPool.query(
+        "UPDATE users SET must_change_password = 0, updated_at = NOW() WHERE id = ?",
+        [uid]
+      );
+    }
     return res.json({ success: true });
   } catch (err) {
     console.error("clearMustChangePassword error:", err);
@@ -109,9 +88,11 @@ async function clearMustChangePassword(req, res) {
 
 async function listUsers(req, res) {
   try {
+    const cols = await getUsersColumns();
+    const nameSel = userNameSelectSql(cols);
+    const lastLogin = cols.has("last_login") ? "last_login" : "NULL AS last_login";
     const [rows] = await mainPool.query(
-      `SELECT id, email, full_name,
-              role, is_active, last_login, created_at
+      `SELECT id, email, ${nameSel}, role, is_active, ${lastLogin}, created_at
        FROM users
        ORDER BY created_at DESC`
     );
@@ -127,18 +108,27 @@ async function updateProfile(req, res) {
     if (!userId) return res.status(401).json({ success: false, message: "Unauthorized" });
 
     const { firstName, lastName, full_name } = req.body;
-    let updates = [];
-    let params = [];
+    const cols = await getUsersColumns();
+    const updates = [];
+    const params = [];
 
-    // Allow updating full_name directly, or combining firstName + lastName if passed
     let computedFullName = full_name;
     if (!computedFullName && (firstName !== undefined || lastName !== undefined)) {
-      computedFullName = `${firstName || ''} ${lastName || ''}`.trim();
+      computedFullName = `${firstName || ""} ${lastName || ""}`.trim();
     }
 
-    if (computedFullName !== undefined) {
+    if (cols.has("full_name") && computedFullName !== undefined) {
       updates.push("full_name = ?");
       params.push(computedFullName);
+    } else if (cols.has("first_name")) {
+      if (firstName !== undefined) {
+        updates.push("first_name = ?");
+        params.push(firstName);
+      }
+      if (lastName !== undefined && cols.has("last_name")) {
+        updates.push("last_name = ?");
+        params.push(lastName);
+      }
     }
 
     if (updates.length > 0) {

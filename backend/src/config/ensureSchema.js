@@ -139,10 +139,31 @@ async function ensureCollectionsPatches() {
   }
 }
 
+/** Allow fitness CRM `owner` role on users.role (Aiven / ensureSchema ENUM). */
+async function ensureUsersRoleOwnerPatch() {
+  try {
+    const [cols] = await pool.execute(
+      `SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'role'`
+    );
+    const colType = String(cols[0]?.COLUMN_TYPE || "");
+    if (colType.includes("owner")) return;
+    if (!colType.toLowerCase().startsWith("enum(")) return;
+    await pool.execute(
+      `ALTER TABLE users MODIFY COLUMN role
+       ENUM('admin','manager','staff','owner') NOT NULL DEFAULT 'staff'`
+    );
+    console.log("Migration: users.role includes owner");
+  } catch (e) {
+    console.warn("ensureUsersRoleOwnerPatch:", e.message);
+  }
+}
+
 async function ensureSchema() {
   await ensureFitnessClientPatches();
   await ensureCollectionsPatches();
   await dropFitnessTransactionsXorCheck();
+  await ensureUsersRoleOwnerPatch();
   if (schemaEnsured) return;
   // FIXED: 5 schema version gate to skip expensive startup checks
   await pool.execute(`
