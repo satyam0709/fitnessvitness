@@ -1,6 +1,7 @@
 const jwt = require("jsonwebtoken");
 const { mainPool } = require("../config/database");
 const { getCookie, verifyAccessToken, REFRESH_COOKIE } = require("../services/authService");
+const { fetchUserRowById, isAdminRole } = require("../utils/userSchema");
 
 const lastLoginWriteByUser = new Map();
 const LAST_LOGIN_WINDOW_MS = 5 * 60 * 1000;
@@ -106,16 +107,7 @@ async function verifyToken(req, res, next) {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
 
-    // Use execute() for parameterized DB reads
-    const [rows] = await mainPool.execute(
-      `SELECT id, email, full_name, role, is_active
-       FROM users
-       WHERE id = ?
-       LIMIT 1`,
-      [userId]
-    );
-
-    const user = rows[0];
+    const user = await fetchUserRowById(userId);
     if (!user) {
       auth401Diagnostics(req, "user_not_found");
       return res.status(401).json({ success: false, message: "Unauthorized" });
@@ -129,9 +121,7 @@ async function verifyToken(req, res, next) {
     }
 
     const role = String(user.role || "staff").toLowerCase();
-    
-    // Split full_name safely into first and last name for frontend compatibility if needed
-    const nameParts = (user.full_name || "").split(" ");
+    const nameParts = String(user.full_name || "").trim().split(/\s+/).filter(Boolean);
     const firstName = nameParts[0] || "";
     const lastName = nameParts.slice(1).join(" ") || "";
 
@@ -142,9 +132,9 @@ async function verifyToken(req, res, next) {
       last_name: lastName,
       full_name: user.full_name || "",
       role,
-      isAdmin: role === "admin",
-      is_platform_admin: false,
-      mustChangePassword: false,
+      isAdmin: isAdminRole(role),
+      is_platform_admin: Number(user.is_platform_admin) === 1,
+      mustChangePassword: Number(user.must_change_password) === 1,
     };
 
     req.tenantId = null; // No multi-tenancy

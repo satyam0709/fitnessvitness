@@ -145,7 +145,9 @@ export default function DashboardTopbar({ onMenuToggle, sidebarCollapsed }) {
   const fullName = clerkHasName
     ? [cf, cl].filter(Boolean).join(" ")
     : dbName || clerkFallback || "User";
-  const role      = user?.publicMetadata?.role || "Member";
+  const roleRaw = me?.role || user?.role || user?.publicMetadata?.role || "member";
+  const role =
+    String(roleRaw).charAt(0).toUpperCase() + String(roleRaw).slice(1).toLowerCase();
 
   return (
     <header

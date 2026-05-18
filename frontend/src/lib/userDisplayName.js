@@ -32,11 +32,12 @@ export function displayNameFromClerkUser(user) {
   return prettifyEmailLocalPart(email);
 }
 
-/** @param {{ first_name?: string|null; last_name?: string|null } | null | undefined} row */
+/** @param {{ first_name?: string|null; last_name?: string|null; full_name?: string|null } | null | undefined} row */
 export function displayNameFromDbUser(row) {
   if (!row) return "";
   const f = row.first_name != null ? String(row.first_name).trim() : "";
   const l = row.last_name != null ? String(row.last_name).trim() : "";
   const joined = [f, l].filter(Boolean).join(" ").trim();
-  return joined;
+  if (joined) return joined;
+  return row.full_name != null ? String(row.full_name).trim() : "";
 }

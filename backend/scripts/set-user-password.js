@@ -16,7 +16,7 @@ const email = String(process.env.SET_USER_EMAIL || process.argv[2] || "")
 const password = process.env.SET_USER_PASSWORD || process.argv[3];
 const firstName = process.env.SET_USER_FIRST_NAME || "Satyam";
 const lastName = process.env.SET_USER_LAST_NAME || "Singh";
-const role = process.env.SET_USER_ROLE || "admin";
+const role = process.env.SET_USER_ROLE || "owner";
 
 if (!email || !password) {
   console.error(`
@@ -110,7 +110,7 @@ main()
   .catch((e) => {
     console.error("Failed:", e.message);
     if (e.message.includes("Data truncated") && role !== "admin") {
-      console.error('Tip: On Aiven try SET_USER_ROLE=admin');
+      console.error('Tip: run again with SET_USER_ROLE=admin');
     }
     process.exit(1);
   })
