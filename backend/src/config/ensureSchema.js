@@ -42,6 +42,31 @@ async function ensureFitnessClientPatches() {
   }
 }
 
+/** MySQL 8.4+ rejects CHECK on columns used in FK referential actions — drop if present. */
+async function dropFitnessTransactionsXorCheck() {
+  const [rows] = await pool.execute(
+    `SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fitness_transactions'
+       AND CONSTRAINT_NAME = 'chk_ft_client_xor_external'`
+  );
+  if (!rows.length) return;
+  try {
+    await pool.execute(
+      `ALTER TABLE fitness_transactions DROP CHECK chk_ft_client_xor_external`
+    );
+    console.log("Migration: dropped chk_ft_client_xor_external");
+  } catch (e) {
+    try {
+      await pool.execute(
+        `ALTER TABLE fitness_transactions DROP CONSTRAINT chk_ft_client_xor_external`
+      );
+      console.log("Migration: dropped chk_ft_client_xor_external (constraint)");
+    } catch (e2) {
+      console.warn("dropFitnessTransactionsXorCheck:", e2.message);
+    }
+  }
+}
+
 /** Collections tables — must run when schema version gate skips full ensureSchema. */
 async function ensureCollectionsPatches() {
   if (collectionsPatchesDone) return;
@@ -117,6 +142,7 @@ async function ensureCollectionsPatches() {
 async function ensureSchema() {
   await ensureFitnessClientPatches();
   await ensureCollectionsPatches();
+  await dropFitnessTransactionsXorCheck();
   if (schemaEnsured) return;
   // FIXED: 5 schema version gate to skip expensive startup checks
   await pool.execute(`
@@ -1543,11 +1569,7 @@ async function ensureSchema() {
       KEY idx_fitness_transactions_external (external_buyer_id),
       KEY idx_fitness_transactions_date (transaction_date),
       KEY idx_fitness_transactions_type (type),
-      CONSTRAINT fk_fitness_transactions_external FOREIGN KEY (external_buyer_id) REFERENCES fitness_external_buyers(id) ON DELETE RESTRICT ON UPDATE CASCADE,
-      CONSTRAINT chk_ft_client_xor_external CHECK (
-        (client_id IS NOT NULL AND external_buyer_id IS NULL)
-        OR (client_id IS NULL AND external_buyer_id IS NOT NULL)
-      )
+      CONSTRAINT fk_fitness_transactions_external FOREIGN KEY (external_buyer_id) REFERENCES fitness_external_buyers(id) ON DELETE RESTRICT ON UPDATE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
   `);
 
@@ -1578,16 +1600,6 @@ async function ensureSchema() {
       );
     } catch (e) {
       console.warn("ensureSchema: fk_fitness_transactions_external:", e.message);
-    }
-    try {
-      await pool.execute(`
-        ALTER TABLE fitness_transactions ADD CONSTRAINT chk_ft_client_xor_external CHECK (
-          (client_id IS NOT NULL AND external_buyer_id IS NULL)
-          OR (client_id IS NULL AND external_buyer_id IS NOT NULL)
-        )
-      `);
-    } catch (e) {
-      console.warn("ensureSchema: chk_ft_client_xor_external (needs MySQL 8.0.16+):", e.message);
     }
   }
 

@@ -112,6 +112,15 @@ async function resolveExternalBuyer(eb) {
 }
 
 async function syncLinkedTransaction(conn, collection, payMode, transactionDate) {
+  const hasClient = Boolean(collection.client_id);
+  const hasExternal = Boolean(collection.external_buyer_id);
+  if (hasClient && hasExternal) {
+    throw new Error("Transaction cannot have both client_id and external_buyer_id");
+  }
+  if (!hasClient && !hasExternal) {
+    throw new Error("Transaction requires client_id or external_buyer_id");
+  }
+
   const txType = mapTxType(collection.collection_type);
   const today = new Date().toISOString().slice(0, 10);
   const date = toSqlDate(transactionDate, toSqlDate(collection.created_at, today));

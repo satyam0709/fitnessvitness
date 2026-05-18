@@ -1,0 +1,20 @@
+# Render Blueprint — Web Service for Express API
+# Dashboard: New → Blueprint → connect repo, or create Web Service manually with rootDir: backend
+services:
+  - type: web
+    name: crm-backend
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: "1"
+      # Set in Render dashboard (Secrets) — do not commit real values:
+      # DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+      # DB_SSL_CA (base64 PEM from Aiven) OR place ca.pem in backend/certs/
+      # JWT_SECRET, JWT_REFRESH_SECRET (min 24 chars, random)
+      # FRONTEND_URL, ALLOWED_ORIGINS (your Vercel URL)
