@@ -72,6 +72,12 @@ async function testConnection() {
     console.log("✅ DB connected successfully");
   } catch (err) {
     console.error("❌ DB connection failed:", err.message);
+    const msg = String(err.message || "");
+    if (/certificate|SSL|self-signed/i.test(msg)) {
+      console.error(
+        "[DB] Aiven needs SSL. For local dev add DB_SSL_REJECT_UNAUTHORIZED=0, or download CA from Aiven → backend/certs/ca.pem"
+      );
+    }
     process.exit(1);
   } finally {
     if (conn) conn.release();

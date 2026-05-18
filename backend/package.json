@@ -8,6 +8,7 @@
     "start": "node src/server.js",
     "db:setup": "node src/config/setupDb.js",
     "db:seed": "node src/config/seedData.js",
+    "user:set-password": "node scripts/set-user-password.js",
     "smoke:api": "node scripts/smoke-api-contract.js",
     "smoke:indexes": "node scripts/smoke-db-index-audit.js",
     "smoke:isolation": "node scripts/smoke-tenant-isolation.js",
