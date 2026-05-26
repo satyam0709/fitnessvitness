@@ -950,6 +950,7 @@ async function updateConsultation(req, res) {
     if (!rows.length) {
       return res.status(404).json({ success: false, message: "Consultation not found" });
     }
+    emitFitnessChanged();
     res.json({ success: true, data: rows[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -965,6 +966,7 @@ async function deleteConsultation(req, res) {
     if (result.affectedRows === 0) {
       return res.status(404).json({ success: false, message: "Consultation not found" });
     }
+    emitFitnessChanged();
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1162,6 +1164,7 @@ async function updateSupplement(req, res) {
     if (!rows.length) {
       return res.status(404).json({ success: false, message: "Supplement not found" });
     }
+    emitFitnessChanged();
     res.json({ success: true, data: rows[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1177,6 +1180,7 @@ async function deleteSupplement(req, res) {
     if (result.affectedRows === 0) {
       return res.status(404).json({ success: false, message: "Supplement not found" });
     }
+    emitFitnessChanged();
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

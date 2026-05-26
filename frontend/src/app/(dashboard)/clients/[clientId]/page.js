@@ -27,6 +27,19 @@ const TASK_STATUSES = ["Open", "In Progress", "Done", "Carried Forward", "Overdu
 const TASK_PERIODS = ["This Week", "Next Week", "This Month", "Before Expiry", "Week 1"];
 const TRANSACTION_TYPES = ["Membership", "Supplement", "Other"];
 const PAY_MODES = ["GPay", "Cash", "Online Transfer", "Cheque", "UPI", "NEFT"];
+const DATE_FIELDS = new Set([
+  "last_consultation_date",
+  "plan_start_date",
+  "plan_expiry_date",
+  "next_due_date",
+]);
+const SECTION_FIELDS = {
+  key: ["last_consultation_date", "progress", "status", "plan_type", "follow_up_freq_days", "tier", "source"],
+  personal: ["full_name", "age", "phone", "city", "email", "address", "occupation", "referred_by_name", "emergency_contact"],
+  plan: ["health_goal", "plan_type", "plan_start_date", "plan_expiry_date", "next_due_date", "medical_conditions", "allergies", "activity_level", "current_medications"],
+  body: ["height_cm", "current_weight_kg", "start_weight_kg", "target_weight_kg"],
+  notes: ["coach_notes"],
+};
 
 function formatDate(d) { 
   if (!d) return "—"; 
@@ -112,15 +125,20 @@ export default function ClientDetailPage() {
 
   const [client, setClient] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState({});
+  const [editingSections, setEditingSections] = useState({});
+  const [sectionDrafts, setSectionDrafts] = useState({});
+  const [sectionSaving, setSectionSaving] = useState({});
   const [error, setError] = useState(null);
 
   // Modal states
   const [showAddConsult, setShowAddConsult] = useState(false);
   const [showAddTask, setShowAddTask] = useState(false);
   const [showAddSupplement, setShowAddSupplement] = useState(false);
+  const [showEditSupplement, setShowEditSupplement] = useState(false);
   const [showAddTransaction, setShowAddTransaction] = useState(false);
   const [showEditTransaction, setShowEditTransaction] = useState(false);
+  const [showEditConsult, setShowEditConsult] = useState(false);
+  const [showEditTask, setShowEditTask] = useState(false);
   const [showAddReferral, setShowAddReferral] = useState(false);
   
   // Search state for referrals
@@ -163,6 +181,9 @@ export default function ClientDetailPage() {
     notes: "",
   });
   const [editTransForm, setEditTransForm] = useState({ id: null });
+  const [editConsultForm, setEditConsultForm] = useState({ id: null });
+  const [editTaskForm, setEditTaskForm] = useState({ id: null });
+  const [editSuppForm, setEditSuppForm] = useState({ id: null });
   const [referralForm, setReferralForm] = useState({ referred_client_id: "" });
 
   const loadClient = useCallback(async (opts = {}) => {
@@ -211,50 +232,88 @@ export default function ClientDetailPage() {
     };
   }, [isLoaded, isSignedIn, clientId, loadClient]);
 
-  const handleFieldUpdate = async (field, value) => {
-    setSaving(prev => ({ ...prev, [field]: true }));
+  const draftValueForField = (field) => {
+    const value = client?.[field];
+    if (DATE_FIELDS.has(field)) return formatDateForInput(value);
+    return value ?? "";
+  };
+
+  const startSectionEdit = (sectionKey, fields) => {
+    const draft = {};
+    fields.forEach((field) => {
+      draft[field] = draftValueForField(field);
+    });
+    setSectionDrafts((prev) => ({ ...prev, [sectionKey]: draft }));
+    setEditingSections((prev) => ({ ...prev, [sectionKey]: true }));
+  };
+
+  const cancelSectionEdit = (sectionKey) => {
+    setEditingSections((prev) => ({ ...prev, [sectionKey]: false }));
+    setSectionDrafts((prev) => {
+      const next = { ...prev };
+      delete next[sectionKey];
+      return next;
+    });
+  };
+
+  const updateSectionDraft = (sectionKey, field, value) => {
+    setSectionDrafts((prev) => ({
+      ...prev,
+      [sectionKey]: {
+        ...(prev[sectionKey] || {}),
+        [field]: value,
+      },
+    }));
+  };
+
+  const saveSectionEdit = async (sectionKey) => {
+    const draft = sectionDrafts[sectionKey] || {};
+    setSectionSaving((prev) => ({ ...prev, [sectionKey]: true }));
     try {
-      await updateClient(clientId, { [field]: value });
+      await updateClient(clientId, draft);
+      setEditingSections((prev) => ({ ...prev, [sectionKey]: false }));
       await loadClient({ quiet: true });
     } catch (err) {
-      console.error(`Failed to update ${field}:`, err);
+      alert(err.message || "Could not save changes");
     } finally {
-      setSaving(prev => ({ ...prev, [field]: false }));
+      setSectionSaving((prev) => ({ ...prev, [sectionKey]: false }));
     }
   };
 
-  const EditableCell = ({ field, value, type = "text", options = null }) => {
-    const [localValue, setLocalValue] = useState(value || "");
-    const [isEditing, setIsEditing] = useState(false);
+  const SectionActions = ({ sectionKey, fields }) => {
+    const editing = !!editingSections[sectionKey];
+    const busy = !!sectionSaving[sectionKey];
+    return (
+      <div className={styles.sectionActions}>
+        {editing ? (
+          <>
+            <button type="button" className={styles.sectionCancelBtn} disabled={busy} onClick={() => cancelSectionEdit(sectionKey)}>
+              Cancel
+            </button>
+            <button type="button" className={styles.sectionSaveBtn} disabled={busy} onClick={() => saveSectionEdit(sectionKey)}>
+              {busy ? "Saving..." : "Save"}
+            </button>
+          </>
+        ) : (
+          <button type="button" className={styles.sectionEditBtn} onClick={() => startSectionEdit(sectionKey, fields)}>
+            <i className="fa-solid fa-pen"></i> Edit
+          </button>
+        )}
+      </div>
+    );
+  };
 
-    useEffect(() => {
-      setLocalValue(value || "");
-    }, [value]);
-
-    const handleBlur = () => {
-      setIsEditing(false);
-      if (localValue !== value) {
-        handleFieldUpdate(field, localValue);
-      }
-    };
-
-    if (!isEditing && options) {
-      return (
-        <td className={styles.editable} onClick={() => setIsEditing(true)}>
-          {value || "—"}
-        </td>
-      );
-    }
+  const EditableCell = ({ sectionKey, field, value, type = "text", options = null, readOnly = false }) => {
+    const isEditing = !!editingSections[sectionKey] && !readOnly;
+    const currentValue = sectionDrafts[sectionKey]?.[field] ?? "";
 
     if (isEditing && options) {
       return (
         <td className={styles.editable}>
-          <select 
-            autoFocus 
+          <select
             className={styles.editInput}
-            value={localValue}
-            onChange={(e) => setLocalValue(e.target.value)}
-            onBlur={handleBlur}
+            value={currentValue}
+            onChange={(e) => updateSectionDraft(sectionKey, field, e.target.value)}
           >
             {options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
           </select>
@@ -266,57 +325,45 @@ export default function ClientDetailPage() {
       return (
         <td className={styles.editable}>
           <input
-            autoFocus
             type={type}
             className={styles.editInput}
-            value={localValue}
-            onChange={(e) => setLocalValue(e.target.value)}
-            onBlur={handleBlur}
-            onKeyDown={(e) => e.key === 'Enter' && handleBlur()}
+            value={currentValue}
+            onChange={(e) => updateSectionDraft(sectionKey, field, e.target.value)}
           />
         </td>
       );
     }
 
-    return (
-      <td className={styles.editable} onClick={() => setIsEditing(true)}>
-        {type === "date" ? formatDate(value) : value || "—"}
-      </td>
-    );
+    return <td>{type === "date" ? formatDate(value) : value || "—"}</td>;
   };
 
-  const DetailField = ({ label, field, value, type = "text" }) => {
-    const [localValue, setLocalValue] = useState(value || "");
-    const [isEditing, setIsEditing] = useState(false);
-
-    useEffect(() => {
-      setLocalValue(value || "");
-    }, [value]);
-
-    const handleBlur = () => {
-      setIsEditing(false);
-      if (localValue !== value) {
-        handleFieldUpdate(field, localValue);
-      }
-    };
+  const DetailField = ({ sectionKey, label, field, value, type = "text", options = null, readOnly = false }) => {
+    const isEditing = !!editingSections[sectionKey] && !readOnly;
+    const currentValue = sectionDrafts[sectionKey]?.[field] ?? "";
 
     return (
       <div className={styles.detailItem}>
         <div className={styles.detailLabel}>{label}</div>
         <div className={styles.detailValue}>
-          {isEditing ? (
+          {isEditing && options ? (
+            <select
+              className={styles.editInput}
+              style={{ textAlign: 'left' }}
+              value={currentValue}
+              onChange={(e) => updateSectionDraft(sectionKey, field, e.target.value)}
+            >
+              {options.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+            </select>
+          ) : isEditing ? (
             <input
-              autoFocus
               type={type}
               className={styles.editInput}
               style={{ textAlign: 'left' }}
-              value={localValue}
-              onChange={(e) => setLocalValue(e.target.value)}
-              onBlur={handleBlur}
-              onKeyDown={(e) => e.key === 'Enter' && handleBlur()}
+              value={currentValue}
+              onChange={(e) => updateSectionDraft(sectionKey, field, e.target.value)}
             />
           ) : (
-            <div style={{ width: '100%', minHeight: '20px' }} onClick={() => setIsEditing(true)}>
+            <div style={{ width: '100%', minHeight: '20px' }}>
               {type === "date" ? formatDate(value) : value || "—"}
             </div>
           )}
@@ -412,6 +459,100 @@ export default function ClientDetailPage() {
     } catch (err) { alert(err.message); }
   };
 
+  const openEditConsultation = (consult) => {
+    setEditConsultForm({
+      id: consult.id,
+      consult_date: formatDateForInput(consult.consult_date),
+      consult_type: consult.consult_type || "Check-in",
+      weight_kg: consult.weight_kg ?? "",
+      key_observations: consult.key_observations || "",
+      diet_changes: consult.diet_changes || "",
+      next_steps: consult.next_steps || "",
+      next_appointment: consult.next_appointment || "",
+    });
+    setShowEditConsult(true);
+  };
+
+  const handleEditConsultation = async (e) => {
+    e.preventDefault();
+    if (!editConsultForm.id) return;
+    try {
+      await updateConsultation(editConsultForm.id, {
+        consult_date: editConsultForm.consult_date,
+        consult_type: editConsultForm.consult_type,
+        weight_kg: editConsultForm.weight_kg === "" ? null : Number(editConsultForm.weight_kg),
+        key_observations: editConsultForm.key_observations || null,
+        diet_changes: editConsultForm.diet_changes || null,
+        next_steps: editConsultForm.next_steps || null,
+        next_appointment: editConsultForm.next_appointment || null,
+      });
+      setShowEditConsult(false);
+      loadClient({ quiet: true });
+    } catch (err) { alert(err.message); }
+  };
+
+  const openEditTask = (task) => {
+    setEditTaskForm({
+      id: task.id,
+      task_description: task.task_description || "",
+      due_date: formatDateForInput(task.due_date),
+      priority: task.priority || "Medium",
+      status: task.status || "Open",
+      period: task.period || "",
+      completed_on: formatDateForInput(task.completed_on),
+      notes: task.notes || "",
+    });
+    setShowEditTask(true);
+  };
+
+  const handleEditTask = async (e) => {
+    e.preventDefault();
+    if (!editTaskForm.id) return;
+    try {
+      await updateClientTask(editTaskForm.id, {
+        task_description: editTaskForm.task_description,
+        due_date: editTaskForm.due_date || null,
+        priority: editTaskForm.priority,
+        status: editTaskForm.status,
+        period: editTaskForm.period || null,
+        completed_on: editTaskForm.completed_on || null,
+        notes: editTaskForm.notes || null,
+      });
+      setShowEditTask(false);
+      loadClient({ quiet: true });
+    } catch (err) { alert(err.message); }
+  };
+
+  const openEditSupplement = (supp) => {
+    setEditSuppForm({
+      id: supp.id,
+      product_name: supp.product_name || "",
+      prescribed_date: formatDateForInput(supp.prescribed_date),
+      quantity: supp.quantity ?? "",
+      mrp_inr: supp.mrp_inr ?? "",
+      rate_inr: supp.rate_inr ?? "",
+      notes: supp.notes || "",
+    });
+    setShowEditSupplement(true);
+  };
+
+  const handleEditSupplement = async (e) => {
+    e.preventDefault();
+    if (!editSuppForm.id) return;
+    try {
+      await updateSupplement(editSuppForm.id, {
+        product_name: editSuppForm.product_name,
+        prescribed_date: editSuppForm.prescribed_date || null,
+        quantity: editSuppForm.quantity === "" ? null : Number(editSuppForm.quantity),
+        mrp_inr: editSuppForm.mrp_inr === "" ? null : Number(editSuppForm.mrp_inr),
+        rate_inr: editSuppForm.rate_inr === "" ? null : Number(editSuppForm.rate_inr),
+        notes: editSuppForm.notes || null,
+      });
+      setShowEditSupplement(false);
+      loadClient({ quiet: true });
+    } catch (err) { alert(err.message); }
+  };
+
   const handleSearchClients = async (query) => {
     setSearchQuery(query);
     if (query.length < 2) return setSearchResults([]);
@@ -503,6 +644,7 @@ export default function ClientDetailPage() {
           <div className={styles.sectionHeader}>
             <i className="fa-solid fa-key"></i>
             Key Fields — These automatically update the Master Sheet
+            <SectionActions sectionKey="key" fields={SECTION_FIELDS.key} />
           </div>
           <div className={styles.tableWrap}>
             <table className={styles.infoTable}>
@@ -522,14 +664,14 @@ export default function ClientDetailPage() {
               <tbody>
                 <tr>
                   <td>{client.client_id}</td>
-                  <EditableCell field="last_consultation_date" value={formatDateForInput(client.last_consultation_date)} type="date" />
-                  <EditableCell field="progress" value={client.progress} options={PROGRESS_OPTIONS} />
-                  <EditableCell field="status" value={client.status} options={STATUS_OPTIONS} />
-                  <EditableCell field="plan_type" value={client.plan_type} options={PLAN_TYPES} />
+                  <EditableCell sectionKey="key" field="last_consultation_date" value={formatDateForInput(client.last_consultation_date)} type="date" />
+                  <EditableCell sectionKey="key" field="progress" value={client.progress} options={PROGRESS_OPTIONS} />
+                  <EditableCell sectionKey="key" field="status" value={client.status} options={STATUS_OPTIONS} />
+                  <EditableCell sectionKey="key" field="plan_type" value={client.plan_type} options={PLAN_TYPES} />
                   <td>{formatDate(client.plan_expiry_date)}</td>
-                  <EditableCell field="follow_up_freq_days" value={client.follow_up_freq_days} type="number" />
-                  <EditableCell field="tier" value={client.tier} type="number" />
-                  <EditableCell field="source" value={client.source} options={SOURCE_OPTIONS} />
+                  <EditableCell sectionKey="key" field="follow_up_freq_days" value={client.follow_up_freq_days} type="number" />
+                  <EditableCell sectionKey="key" field="tier" value={client.tier} type="number" />
+                  <EditableCell sectionKey="key" field="source" value={client.source} options={SOURCE_OPTIONS} />
                 </tr>
               </tbody>
             </table>
@@ -545,18 +687,19 @@ export default function ClientDetailPage() {
             <div className={styles.sectionHeader}>
               <i className="fa-solid fa-user"></i>
               Personal Details
+              <SectionActions sectionKey="personal" fields={SECTION_FIELDS.personal} />
             </div>
             <div className={styles.detailGrid}>
-              <DetailField label="Full Name" field="full_name" value={client.full_name} />
-              <DetailField label="Age" field="age" value={client.age} type="number" />
-              <DetailField label="Client ID" field="client_id" value={client.client_id} />
-              <DetailField label="Phone" field="phone" value={client.phone} />
-              <DetailField label="City" field="city" value={client.city} />
-              <DetailField label="Email" field="email" value={client.email} />
-              <DetailField label="Address" field="address" value={client.address} />
-              <DetailField label="Occupation" field="occupation" value={client.occupation} />
-              <DetailField label="Referred By" field="referred_by_name" value={client.referred_by_name} />
-              <DetailField label="Emergency Contact" field="emergency_contact" value={client.emergency_contact} />
+              <DetailField sectionKey="personal" label="Full Name" field="full_name" value={client.full_name} />
+              <DetailField sectionKey="personal" label="Age" field="age" value={client.age} type="number" />
+              <DetailField sectionKey="personal" label="Client ID" field="client_id" value={client.client_id} readOnly />
+              <DetailField sectionKey="personal" label="Phone" field="phone" value={client.phone} />
+              <DetailField sectionKey="personal" label="City" field="city" value={client.city} />
+              <DetailField sectionKey="personal" label="Email" field="email" value={client.email} />
+              <DetailField sectionKey="personal" label="Address" field="address" value={client.address} />
+              <DetailField sectionKey="personal" label="Occupation" field="occupation" value={client.occupation} />
+              <DetailField sectionKey="personal" label="Referred By" field="referred_by_name" value={client.referred_by_name} />
+              <DetailField sectionKey="personal" label="Emergency Contact" field="emergency_contact" value={client.emergency_contact} />
             </div>
           </section>
 
@@ -565,19 +708,20 @@ export default function ClientDetailPage() {
             <div className={styles.sectionHeader}>
               <i className="fa-solid fa-bullseye"></i>
               Plan & Goals
+              <SectionActions sectionKey="plan" fields={SECTION_FIELDS.plan} />
             </div>
             <div className={styles.detailGrid}>
-              <DetailField label="Health Goal" field="health_goal" value={client.health_goal} />
-              <DetailField label="Plan Type" field="plan_type" value={client.plan_type} />
-              <DetailField label="Plan Start Date" field="plan_start_date" value={formatDateForInput(client.plan_start_date)} type="date" />
-              <DetailField label="Plan Duration" field="plan_duration" value={client.plan_type ? `${client.plan_type} (Auto)` : "—"} />
-              <DetailField label="Plan Expiry" field="plan_expiry_date" value={formatDateForInput(client.plan_expiry_date)} type="date" />
-              <DetailField label="Next Due" field="next_due_date" value={formatDateForInput(client.next_due_date)} type="date" />
-              <DetailField label="Days Remaining" field="days_remaining" value={client.days_remaining !== null ? `${client.days_remaining} days` : "—"} />
-              <DetailField label="Medical Conditions" field="medical_conditions" value={client.medical_conditions} />
-              <DetailField label="Allergies / Avoid" field="allergies" value={client.allergies} />
-              <DetailField label="Activity Level" field="activity_level" value={client.activity_level} />
-              <DetailField label="Current Medications" field="current_medications" value={client.current_medications} />
+              <DetailField sectionKey="plan" label="Health Goal" field="health_goal" value={client.health_goal} />
+              <DetailField sectionKey="plan" label="Plan Type" field="plan_type" value={client.plan_type} options={PLAN_TYPES} />
+              <DetailField sectionKey="plan" label="Plan Start Date" field="plan_start_date" value={formatDateForInput(client.plan_start_date)} type="date" />
+              <DetailField sectionKey="plan" label="Plan Duration" field="plan_duration" value={client.plan_type ? `${client.plan_type} (Auto)` : "—"} readOnly />
+              <DetailField sectionKey="plan" label="Plan Expiry" field="plan_expiry_date" value={formatDateForInput(client.plan_expiry_date)} type="date" />
+              <DetailField sectionKey="plan" label="Next Due" field="next_due_date" value={formatDateForInput(client.next_due_date)} type="date" />
+              <DetailField sectionKey="plan" label="Days Remaining" field="days_remaining" value={client.days_remaining !== null ? `${client.days_remaining} days` : "—"} readOnly />
+              <DetailField sectionKey="plan" label="Medical Conditions" field="medical_conditions" value={client.medical_conditions} />
+              <DetailField sectionKey="plan" label="Allergies / Avoid" field="allergies" value={client.allergies} />
+              <DetailField sectionKey="plan" label="Activity Level" field="activity_level" value={client.activity_level} />
+              <DetailField sectionKey="plan" label="Current Medications" field="current_medications" value={client.current_medications} />
             </div>
           </section>
         </div>
@@ -587,6 +731,7 @@ export default function ClientDetailPage() {
           <div className={styles.sectionHeader}>
             <i className="fa-solid fa-chart-line"></i>
             Body Stats & BMI
+            <SectionActions sectionKey="body" fields={SECTION_FIELDS.body} />
           </div>
           <div className={styles.tableWrap}>
             <table className={styles.infoTable}>
@@ -604,14 +749,14 @@ export default function ClientDetailPage() {
               </thead>
               <tbody>
                 <tr>
-                  <EditableCell field="height_cm" value={client.height_cm} type="number" />
-                  <EditableCell field="current_weight_kg" value={client.current_weight_kg} type="number" />
+                  <EditableCell sectionKey="body" field="height_cm" value={client.height_cm} type="number" />
+                  <EditableCell sectionKey="body" field="current_weight_kg" value={client.current_weight_kg} type="number" />
                   <td style={{ fontWeight: 700 }}>{client.bmi || "—"}</td>
                   <td style={{ color: client.weight_change < 0 ? '#10b981' : '#ef4444', fontWeight: 700 }}>
                     {client.weight_change !== null ? `${client.weight_change > 0 ? '+' : ''}${client.weight_change} kg` : "—"}
                   </td>
-                  <EditableCell field="start_weight_kg" value={client.start_weight_kg} type="number" />
-                  <EditableCell field="target_weight_kg" value={client.target_weight_kg} type="number" />
+                  <EditableCell sectionKey="body" field="start_weight_kg" value={client.start_weight_kg} type="number" />
+                  <EditableCell sectionKey="body" field="target_weight_kg" value={client.target_weight_kg} type="number" />
                   <td className={client.bmi_category?.status === 'good' ? styles.bmiGood : client.bmi_category?.status === 'warning' ? styles.bmiWarning : styles.bmiDanger}>
                     {client.bmi_category?.label || "—"}
                   </td>
@@ -694,6 +839,7 @@ export default function ClientDetailPage() {
                   <th>Period</th>
                   <th>Completed On</th>
                   <th>Notes</th>
+                  <th>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -715,10 +861,15 @@ export default function ClientDetailPage() {
                     <td>{task.period || "—"}</td>
                     <td>{formatDate(task.completed_on)}</td>
                     <td>{task.notes}</td>
+                    <td>
+                      <button type="button" className={styles.actionBtn} onClick={() => openEditTask(task)}>
+                        <i className="fa-solid fa-pen"></i> Edit
+                      </button>
+                    </td>
                   </tr>
                 ))}
                 {(!client.tasks || client.tasks.length === 0) && (
-                  <tr><td colSpan="7" style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>No active tasks</td></tr>
+                  <tr><td colSpan="8" style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>No active tasks</td></tr>
                 )}
               </tbody>
             </table>
@@ -743,6 +894,7 @@ export default function ClientDetailPage() {
                   <th>Diet Changes Made</th>
                   <th>Next Steps</th>
                   <th>Next Appt</th>
+                  <th>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -755,10 +907,15 @@ export default function ClientDetailPage() {
                     <td>{consult.diet_changes}</td>
                     <td>{consult.next_steps}</td>
                     <td>{consult.next_appointment}</td>
+                    <td>
+                      <button type="button" className={styles.actionBtn} onClick={() => openEditConsultation(consult)}>
+                        <i className="fa-solid fa-pen"></i> Edit
+                      </button>
+                    </td>
                   </tr>
                 ))}
                 {(!client.consultations || client.consultations.length === 0) && (
-                  <tr><td colSpan="7" style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>No consultation history</td></tr>
+                  <tr><td colSpan="8" style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>No consultation history</td></tr>
                 )}
               </tbody>
             </table>
@@ -837,6 +994,7 @@ export default function ClientDetailPage() {
                   <th>MRP (₹)</th>
                   <th>Rate (₹)</th>
                   <th>Notes</th>
+                  <th>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -848,10 +1006,15 @@ export default function ClientDetailPage() {
                     <td>₹{supp.mrp_inr}</td>
                     <td>₹{supp.rate_inr}</td>
                     <td>{supp.notes}</td>
+                    <td>
+                      <button type="button" className={styles.actionBtn} onClick={() => openEditSupplement(supp)}>
+                        <i className="fa-solid fa-pen"></i> Edit
+                      </button>
+                    </td>
                   </tr>
                 ))}
                 {(!client.supplements || client.supplements.length === 0) && (
-                  <tr><td colSpan="6" style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>No supplements prescribed</td></tr>
+                  <tr><td colSpan="7" style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>No supplements prescribed</td></tr>
                 )}
               </tbody>
               {(client.supplements?.length > 0) && (
@@ -860,7 +1023,7 @@ export default function ClientDetailPage() {
                     <td colSpan={3} style={{ fontWeight: 800 }}>Totals</td>
                     <td style={{ fontWeight: 800 }}>₹{Number(supplementTotals.mrp).toLocaleString("en-IN")}</td>
                     <td style={{ fontWeight: 800 }}>₹{Number(supplementTotals.rate).toLocaleString("en-IN")}</td>
-                    <td />
+                    <td colSpan={2} />
                   </tr>
                 </tfoot>
               )}
@@ -873,6 +1036,7 @@ export default function ClientDetailPage() {
           <div className={styles.sectionHeader}>
             <i className="fa-solid fa-comment-medical"></i>
             Coach's Private Notes
+            <SectionActions sectionKey="notes" fields={SECTION_FIELDS.notes} />
           </div>
           <div className={styles.sectionBody}>
             <p style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '0.5rem' }}>
@@ -881,8 +1045,9 @@ export default function ClientDetailPage() {
             <textarea 
               className={styles.notesArea}
               placeholder="Start typing private notes here..."
-              defaultValue={client.coach_notes}
-              onBlur={(e) => handleFieldUpdate('coach_notes', e.target.value)}
+              disabled={!editingSections.notes}
+              value={editingSections.notes ? (sectionDrafts.notes?.coach_notes ?? "") : (client.coach_notes || "")}
+              onChange={(e) => updateSectionDraft("notes", "coach_notes", e.target.value)}
             />
           </div>
         </section>
@@ -1122,6 +1287,140 @@ export default function ClientDetailPage() {
                 <button type="submit" className={styles.saveBtn}>Add Record</button>
               </div>
             </form>
+      </ClientPageModal>
+
+      {/* EDIT CONSULTATION MODAL */}
+      <ClientPageModal
+        open={showEditConsult}
+        onClose={() => setShowEditConsult(false)}
+        title="Edit Consultation"
+        titleId="edit-consult-modal-title"
+      >
+        <form onSubmit={handleEditConsultation} className={styles.formGrid}>
+          <div className={styles.formField}>
+            <label>Date</label>
+            <input type="date" required value={editConsultForm.consult_date || ""} onChange={e => setEditConsultForm({...editConsultForm, consult_date: e.target.value})} />
+          </div>
+          <div className={styles.formField}>
+            <label>Type</label>
+            <select value={editConsultForm.consult_type || "Check-in"} onChange={e => setEditConsultForm({...editConsultForm, consult_type: e.target.value})}>
+              {CONSULT_TYPES.map(t => <option key={t}>{t}</option>)}
+            </select>
+          </div>
+          <div className={styles.formField}>
+            <label>Weight (kg)</label>
+            <input type="number" step="0.1" value={editConsultForm.weight_kg ?? ""} onChange={e => setEditConsultForm({...editConsultForm, weight_kg: e.target.value})} />
+          </div>
+          <div className={styles.formField.full}>
+            <label>Key Observations</label>
+            <textarea value={editConsultForm.key_observations || ""} onChange={e => setEditConsultForm({...editConsultForm, key_observations: e.target.value})} />
+          </div>
+          <div className={styles.formField.full}>
+            <label>Diet Changes Made</label>
+            <textarea value={editConsultForm.diet_changes || ""} onChange={e => setEditConsultForm({...editConsultForm, diet_changes: e.target.value})} />
+          </div>
+          <div className={styles.formField.full}>
+            <label>Next Steps</label>
+            <textarea value={editConsultForm.next_steps || ""} onChange={e => setEditConsultForm({...editConsultForm, next_steps: e.target.value})} />
+          </div>
+          <div className={styles.formField}>
+            <label>Next Appt</label>
+            <input type="text" value={editConsultForm.next_appointment || ""} onChange={e => setEditConsultForm({...editConsultForm, next_appointment: e.target.value})} />
+          </div>
+          <div className={styles.formActions}>
+            <button type="button" className={styles.cancelBtn} onClick={() => setShowEditConsult(false)}>Cancel</button>
+            <button type="submit" className={styles.saveBtn}>Save Changes</button>
+          </div>
+        </form>
+      </ClientPageModal>
+
+      {/* EDIT TASK MODAL */}
+      <ClientPageModal
+        open={showEditTask}
+        onClose={() => setShowEditTask(false)}
+        title="Edit Task"
+        titleId="edit-task-modal-title"
+      >
+        <form onSubmit={handleEditTask} className={styles.formGrid}>
+          <div className={styles.formField.full}>
+            <label>Task Description</label>
+            <input type="text" required value={editTaskForm.task_description || ""} onChange={e => setEditTaskForm({...editTaskForm, task_description: e.target.value})} />
+          </div>
+          <div className={styles.formField}>
+            <label>Due Date</label>
+            <input type="date" value={editTaskForm.due_date || ""} onChange={e => setEditTaskForm({...editTaskForm, due_date: e.target.value})} />
+          </div>
+          <div className={styles.formField}>
+            <label>Priority</label>
+            <select value={editTaskForm.priority || "Medium"} onChange={e => setEditTaskForm({...editTaskForm, priority: e.target.value})}>
+              {TASK_PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </div>
+          <div className={styles.formField}>
+            <label>Status</label>
+            <select value={editTaskForm.status || "Open"} onChange={e => setEditTaskForm({...editTaskForm, status: e.target.value})}>
+              {TASK_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+          <div className={styles.formField}>
+            <label>Period</label>
+            <select value={editTaskForm.period || ""} onChange={e => setEditTaskForm({...editTaskForm, period: e.target.value})}>
+              <option value="">—</option>
+              {TASK_PERIODS.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </div>
+          <div className={styles.formField}>
+            <label>Completed On</label>
+            <input type="date" value={editTaskForm.completed_on || ""} onChange={e => setEditTaskForm({...editTaskForm, completed_on: e.target.value})} />
+          </div>
+          <div className={styles.formField.full}>
+            <label>Notes</label>
+            <textarea value={editTaskForm.notes || ""} onChange={e => setEditTaskForm({...editTaskForm, notes: e.target.value})} rows={3} />
+          </div>
+          <div className={styles.formActions}>
+            <button type="button" className={styles.cancelBtn} onClick={() => setShowEditTask(false)}>Cancel</button>
+            <button type="submit" className={styles.saveBtn}>Save Changes</button>
+          </div>
+        </form>
+      </ClientPageModal>
+
+      {/* EDIT SUPPLEMENT MODAL */}
+      <ClientPageModal
+        open={showEditSupplement}
+        onClose={() => setShowEditSupplement(false)}
+        title="Edit Supplement"
+        titleId="edit-supplement-modal-title"
+      >
+        <form onSubmit={handleEditSupplement} className={styles.formGrid}>
+          <div className={styles.formField.full}>
+            <label>Product Name</label>
+            <input type="text" required value={editSuppForm.product_name || ""} onChange={e => setEditSuppForm({...editSuppForm, product_name: e.target.value})} />
+          </div>
+          <div className={styles.formField}>
+            <label>Date</label>
+            <input type="date" value={editSuppForm.prescribed_date || ""} onChange={e => setEditSuppForm({...editSuppForm, prescribed_date: e.target.value})} />
+          </div>
+          <div className={styles.formField}>
+            <label>Quantity</label>
+            <input type="number" value={editSuppForm.quantity ?? ""} onChange={e => setEditSuppForm({...editSuppForm, quantity: e.target.value})} />
+          </div>
+          <div className={styles.formField}>
+            <label>MRP (₹)</label>
+            <input type="number" min="0" step="0.01" value={editSuppForm.mrp_inr ?? ""} onChange={e => setEditSuppForm({...editSuppForm, mrp_inr: e.target.value})} />
+          </div>
+          <div className={styles.formField}>
+            <label>Rate (₹)</label>
+            <input type="number" min="0" step="0.01" value={editSuppForm.rate_inr ?? ""} onChange={e => setEditSuppForm({...editSuppForm, rate_inr: e.target.value})} />
+          </div>
+          <div className={styles.formField.full}>
+            <label>Notes</label>
+            <textarea value={editSuppForm.notes || ""} onChange={e => setEditSuppForm({...editSuppForm, notes: e.target.value})} />
+          </div>
+          <div className={styles.formActions}>
+            <button type="button" className={styles.cancelBtn} onClick={() => setShowEditSupplement(false)}>Cancel</button>
+            <button type="submit" className={styles.saveBtn}>Save Changes</button>
+          </div>
+        </form>
       </ClientPageModal>
 
       {/* EDIT TRANSACTION MODAL */}
