@@ -5,6 +5,7 @@ let schemaEnsured = false;
 let fitnessClientPatchesDone = false;
 let collectionsPatchesDone = false;
 let tasksClientDuePatchesDone = false;
+let fitnessTransactionPaymentDuePatchesDone = false;
 const CURRENT_SCHEMA_VERSION = 10;
 
 /** Lightweight patches that must run even when schema version is current. */
@@ -168,6 +169,42 @@ async function ensureTasksClientDuePatches() {
   tasksClientDuePatchesDone = true;
 }
 
+async function ensureFitnessTransactionPaymentDuePatches() {
+  if (fitnessTransactionPaymentDuePatchesDone) return;
+  const [tbl] = await pool.execute(
+    `SELECT TABLE_NAME FROM information_schema.tables
+     WHERE table_schema = DATABASE() AND table_name = 'fitness_transactions'`
+  );
+  if (!tbl.length) {
+    fitnessTransactionPaymentDuePatchesDone = true;
+    return;
+  }
+
+  const [cols] = await pool.execute(
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fitness_transactions' AND COLUMN_NAME = 'payment_due_date'`
+  );
+  if (cols.length === 0) {
+    await pool.execute(
+      `ALTER TABLE fitness_transactions ADD COLUMN payment_due_date DATE NULL AFTER pending_inr`
+    );
+    console.log("Migration: added fitness_transactions.payment_due_date");
+  }
+
+  const [idx] = await pool.execute(
+    `SELECT INDEX_NAME FROM information_schema.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fitness_transactions' AND INDEX_NAME = 'idx_fitness_transactions_payment_due' LIMIT 1`
+  );
+  if (idx.length === 0) {
+    await pool.execute(
+      `ALTER TABLE fitness_transactions ADD INDEX idx_fitness_transactions_payment_due (payment_due_date)`
+    );
+    console.log("Migration: added fitness_transactions.idx_fitness_transactions_payment_due");
+  }
+
+  fitnessTransactionPaymentDuePatchesDone = true;
+}
+
 /** Allow fitness CRM `owner` role on users.role (Aiven / ensureSchema ENUM). */
 async function ensureUsersRoleOwnerPatch() {
   try {
@@ -194,6 +231,7 @@ async function ensureSchema() {
   await dropFitnessTransactionsXorCheck();
   await ensureUsersRoleOwnerPatch();
   await ensureTasksClientDuePatches();
+  await ensureFitnessTransactionPaymentDuePatches();
   if (schemaEnsured) return;
   // FIXED: 5 schema version gate to skip expensive startup checks
   await pool.execute(`
@@ -1610,6 +1648,7 @@ async function ensureSchema() {
       rate_inr DECIMAL(10,2),
       received_inr DECIMAL(10,2) DEFAULT 0,
       pending_inr DECIMAL(10,2) DEFAULT 0,
+      payment_due_date DATE NULL,
       cost_inr DECIMAL(10,2) DEFAULT 0,
       profit_inr DECIMAL(10,2) GENERATED ALWAYS AS (received_inr - cost_inr) STORED,
       pay_mode ENUM('GPay','Cash','Online Transfer','Cheque','UPI','NEFT') DEFAULT 'GPay',
@@ -1619,6 +1658,7 @@ async function ensureSchema() {
       KEY idx_fitness_transactions_client (client_id),
       KEY idx_fitness_transactions_external (external_buyer_id),
       KEY idx_fitness_transactions_date (transaction_date),
+      KEY idx_fitness_transactions_payment_due (payment_due_date),
       KEY idx_fitness_transactions_type (type),
       CONSTRAINT fk_fitness_transactions_external FOREIGN KEY (external_buyer_id) REFERENCES fitness_external_buyers(id) ON DELETE RESTRICT ON UPDATE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4

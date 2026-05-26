@@ -32,6 +32,7 @@ const SOURCE_META = {
   google_event: { icon: "🌐", label: "Google", border: styles.borderGoogle },
   opportunity_followup: { icon: "🎯", label: "Prospect", border: styles.borderProspect },
   collection_followup: { icon: "💰", label: "Payment due", border: styles.borderPayment },
+  fitness_payment_due: { icon: "💰", label: "Payment due", border: styles.borderPayment },
 };
 
 const READ_ONLY_TYPES = new Set(["calendar_event", "google_event"]);
@@ -100,6 +101,8 @@ function getViewHref(item) {
       return `/clients/${item.client_id || id}`;
     case "collection_followup":
       return `/collections?highlight=${id}`;
+    case "fitness_payment_due":
+      return item.client_id ? `/clients/${item.client_id}` : `/business-tracker?highlight=${id}`;
     case "calendar_event":
     case "google_event": {
       const d = item.due_date ? String(item.due_date).slice(0, 10) : "";
@@ -129,7 +132,9 @@ function matchesFilter(item, filterId) {
     );
   }
   if (filterId === "prospects") return item.source_type === "opportunity_followup";
-  if (filterId === "payments") return item.source_type === "collection_followup";
+  if (filterId === "payments") {
+    return item.source_type === "collection_followup" || item.source_type === "fitness_payment_due";
+  }
   return true;
 }
 
@@ -144,8 +149,14 @@ function TodayCard({ item, onDone, doing, showDoneButton = true }) {
   const showDone = showDoneButton && canMarkDone(item);
   const parts = [];
   if (item.client_name) parts.push(item.client_name);
-  if (item.source_type === "collection_followup" && item.meta?.pending_inr != null) {
+  if (
+    (item.source_type === "collection_followup" || item.source_type === "fitness_payment_due") &&
+    item.meta?.pending_inr != null
+  ) {
     parts.push(`₹${Number(item.meta.pending_inr).toLocaleString("en-IN")} pending`);
+  }
+  if (item.source_type === "fitness_payment_due" && item.meta?.product_plan) {
+    parts.push(item.meta.product_plan);
   }
   if (dueTime) parts.push(`at ${dueTime}`);
   if (overdueDays > 0) parts.push(`🔴 ${overdueDays} day${overdueDays === 1 ? "" : "s"} overdue`);

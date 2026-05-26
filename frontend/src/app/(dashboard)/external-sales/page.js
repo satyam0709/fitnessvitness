@@ -49,6 +49,7 @@ export default function ExternalSalesPage() {
     buyer_phone: "",
     buyer_notes: "",
     transaction_date: todayYmdLocal(),
+    payment_due_date: "",
     product_plan: "",
     type: "Supplement",
     mrp_inr: "",
@@ -202,6 +203,7 @@ export default function ExternalSalesPage() {
         ? {
             external_buyer_id: selectedBuyerId,
             transaction_date: form.transaction_date,
+            payment_due_date: form.payment_due_date || undefined,
             product_plan: form.product_plan.trim(),
             type: form.type,
             mrp_inr: form.mrp_inr === "" ? undefined : form.mrp_inr,
@@ -215,6 +217,7 @@ export default function ExternalSalesPage() {
         : {
             external_buyer,
             transaction_date: form.transaction_date,
+            payment_due_date: form.payment_due_date || undefined,
             product_plan: form.product_plan.trim(),
             type: form.type,
             mrp_inr: form.mrp_inr === "" ? undefined : form.mrp_inr,
@@ -233,6 +236,7 @@ export default function ExternalSalesPage() {
         buyer_phone: "",
         buyer_notes: "",
         transaction_date: todayYmdLocal(),
+        payment_due_date: "",
         product_plan: "",
         type: "Supplement",
         mrp_inr: "",
@@ -395,6 +399,7 @@ export default function ExternalSalesPage() {
                   <th>Product</th>
                   <th>Type</th>
                   <th>Received</th>
+                  <th>Next Due</th>
                   <th>Profit</th>
                   <th>Mode</th>
                   <th>Referred by</th>
@@ -420,6 +425,7 @@ export default function ExternalSalesPage() {
                       <span className={styles[`type_${t.type}`]}>{t.type}</span>
                     </td>
                     <td>₹{t.received_inr}</td>
+                    <td>{formatDate(t.payment_due_date)}</td>
                     <td className={Number(t.profit_inr) > 0 ? styles.profit : ""}>₹{t.profit_inr}</td>
                     <td>{t.pay_mode}</td>
                     <td>{t.referred_by_client_name || "—"}</td>
@@ -559,6 +565,16 @@ export default function ExternalSalesPage() {
                   value={form.transaction_date}
                   onChange={(e) =>
                     setForm((p) => ({ ...p, transaction_date: e.target.value }))
+                  }
+                />
+              </div>
+              <div className={styles.field}>
+                <label>Next payment due</label>
+                <input
+                  type="date"
+                  value={form.payment_due_date}
+                  onChange={(e) =>
+                    setForm((p) => ({ ...p, payment_due_date: e.target.value }))
                   }
                 />
               </div>

@@ -202,6 +202,15 @@ function normalizeItem(row) {
         collection_id: row.source_id ?? row.id,
       };
       break;
+    case "fitness_payment_due":
+      item.meta = {
+        pending_inr: row.pending_inr ?? null,
+        product_plan: row.product_plan ?? null,
+        transaction_type: row.transaction_type ?? row.type ?? null,
+        transaction_date: toIsoDateTime(row.transaction_date),
+        pay_mode: row.pay_mode ?? null,
+      };
+      break;
     default:
       break;
   }
@@ -233,6 +242,7 @@ function buildSummary(items) {
     google_event: 0,
     opportunity_followup: 0,
     collection_followup: 0,
+    fitness_payment_due: 0,
   };
   let overdue = 0;
   for (const it of items) {
@@ -582,6 +592,30 @@ async function fetchClientFollowups(date) {
   return rows;
 }
 
+async function fetchPaymentDues(date) {
+  if (!(await hasColumn("fitness_transactions", "payment_due_date"))) return [];
+
+  const [rows] = await pool.execute(
+    `SELECT ft.id,
+            CONCAT('Payment due: ', COALESCE(fc.full_name, ft.product_plan)) AS title,
+            ft.payment_due_date AS due_date,
+            ft.pending_inr, ft.product_plan, ft.type AS transaction_type,
+            ft.transaction_date, ft.pay_mode,
+            ft.client_id, fc.full_name AS client_name,
+            'fitness_payment_due' AS source_type,
+            CASE WHEN DATE(ft.payment_due_date) < ? THEN 1 ELSE 0 END AS is_overdue,
+            ft.id AS source_id, NULL AS status, 'high' AS priority
+     FROM fitness_transactions ft
+     LEFT JOIN fitness_clients fc ON fc.client_id = ft.client_id
+     WHERE ft.payment_due_date IS NOT NULL
+       AND DATE(ft.payment_due_date) <= ?
+     ORDER BY ft.payment_due_date ASC
+     LIMIT ${OVERDUE_LIMIT}`,
+    [date, date]
+  );
+  return rows;
+}
+
 async function fetchUpcomingTasks(date, userId, tenantId) {
   const until = addDaysYmd(date, UPCOMING_DAYS);
   const hasClientCol = await hasColumn("tasks", "client_id");
@@ -718,6 +752,31 @@ async function fetchUpcomingClientFollowups(date) {
   return rows;
 }
 
+async function fetchUpcomingPaymentDues(date) {
+  if (!(await hasColumn("fitness_transactions", "payment_due_date"))) return [];
+  const until = addDaysYmd(date, UPCOMING_DAYS);
+  const [rows] = await pool.execute(
+    `SELECT ft.id,
+            CONCAT('Payment due: ', COALESCE(fc.full_name, ft.product_plan)) AS title,
+            ft.payment_due_date AS due_date,
+            ft.pending_inr, ft.product_plan, ft.type AS transaction_type,
+            ft.transaction_date, ft.pay_mode,
+            ft.client_id, fc.full_name AS client_name,
+            'fitness_payment_due' AS source_type,
+            0 AS is_overdue,
+            ft.id AS source_id, NULL AS status, 'high' AS priority
+     FROM fitness_transactions ft
+     LEFT JOIN fitness_clients fc ON fc.client_id = ft.client_id
+     WHERE ft.payment_due_date IS NOT NULL
+       AND DATE(ft.payment_due_date) >= ?
+       AND DATE(ft.payment_due_date) <= ?
+     ORDER BY ft.payment_due_date ASC
+     LIMIT ${UPCOMING_LIMIT}`,
+    [date, until]
+  );
+  return rows;
+}
+
 async function safeFetch(label, fn) {
   try {
     return await fn();
@@ -749,6 +808,7 @@ router.get("/", async (req, res) => {
       googleEvents,
       opportunityFollowups,
       collectionFollowups,
+      paymentDues,
     ] = await Promise.all([
       safeFetch("todos", () => fetchTodos(date, userId, tenantId)),
       safeFetch("meetings", () => fetchMeetings(date, userId)),
@@ -764,6 +824,7 @@ router.get("/", async (req, res) => {
       safeFetch("collection_followup", () =>
         fetchCollectionFollowups(date, userId, req.user?.role)
       ),
+      safeFetch("fitness_payment_due", () => fetchPaymentDues(date)),
     ]);
 
     const raw = [
@@ -777,6 +838,7 @@ router.get("/", async (req, res) => {
       ...googleEvents,
       ...opportunityFollowups,
       ...collectionFollowups,
+      ...paymentDues,
     ];
     const items = sortItems(raw.map(normalizeItem));
     const summary = buildSummary(items);
@@ -786,6 +848,7 @@ router.get("/", async (req, res) => {
         safeFetch("upcoming_meetings", () => fetchUpcomingMeetings(date, userId)),
         safeFetch("upcoming_reminders", () => fetchUpcomingReminders(date, userId)),
         safeFetch("upcoming_client_followups", () => fetchUpcomingClientFollowups(date)),
+        safeFetch("upcoming_payment_dues", () => fetchUpcomingPaymentDues(date)),
       ])
     ).flat();
     const upcoming = sortItems(upcomingRaw.map(normalizeItem)).slice(0, UPCOMING_LIMIT);
@@ -925,6 +988,19 @@ async function markCollectionFollowupDone(id, userId, body) {
   return ok ? { ok: true } : { ok: false, status: 404 };
 }
 
+async function markPaymentDueDone(id) {
+  if (!(await hasColumn("fitness_transactions", "payment_due_date"))) {
+    return { ok: false, status: 404 };
+  }
+  const [result] = await pool.execute(
+    `UPDATE fitness_transactions
+     SET payment_due_date = NULL
+     WHERE id = ? AND payment_due_date IS NOT NULL`,
+    [id]
+  );
+  return result.affectedRows > 0 ? { ok: true } : { ok: false, status: 404 };
+}
+
 async function markOpportunityFollowupDone(id, userId) {
   if (!(await opportunitiesTableExists())) {
     return { ok: false, status: 404 };
@@ -981,6 +1057,7 @@ const VALID_SOURCE_TYPES = new Set([
   "task",
   "opportunity_followup",
   "collection_followup",
+  "fitness_payment_due",
 ]);
 
 router.patch("/:sourceType/:id/done", async (req, res) => {
@@ -1023,6 +1100,9 @@ router.patch("/:sourceType/:id/done", async (req, res) => {
       case "collection_followup":
         result = await markCollectionFollowupDone(id, userId, req.body);
         break;
+      case "fitness_payment_due":
+        result = await markPaymentDueDone(id);
+        break;
       default:
         result = { ok: false, status: 400 };
     }
@@ -1055,6 +1135,8 @@ router.patch("/:sourceType/:id/done", async (req, res) => {
     } else if (sourceType === "collection_followup") {
       const { emitCollectionsChanged } = require("../realtime/meetingsRealtime");
       emitCollectionsChanged({ reason: "today_done", id });
+    } else if (sourceType === "fitness_payment_due") {
+      emitFitnessChanged();
     }
 
     res.json({ success: true, source_type: sourceType, id });

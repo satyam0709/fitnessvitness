@@ -1249,6 +1249,7 @@ async function createTransaction(req, res) {
       external_buyer_id: extIdBody,
       external_buyer,
       transaction_date,
+      payment_due_date,
       product_plan,
       type,
       mrp_inr,
@@ -1273,6 +1274,8 @@ async function createTransaction(req, res) {
 
     const dateErr = validateDate(transaction_date, "transaction_date");
     if (dateErr) return sendValidationError(res, dateErr);
+    const paymentDueDateErr = validateDate(payment_due_date, "payment_due_date");
+    if (paymentDueDateErr) return sendValidationError(res, paymentDueDateErr);
 
     const typeErr = validateEnum(type, VALID_ENUMS.transaction_type, "type");
     if (typeErr) return sendValidationError(res, typeErr);
@@ -1396,12 +1399,13 @@ async function createTransaction(req, res) {
     try {
       await conn.beginTransaction();
       const [result] = await conn.execute(
-        `INSERT INTO fitness_transactions (client_id, external_buyer_id, transaction_date, product_plan, type, mrp_inr, rate_inr, received_inr, pending_inr, cost_inr, pay_mode, notes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO fitness_transactions (client_id, external_buyer_id, transaction_date, payment_due_date, product_plan, type, mrp_inr, rate_inr, received_inr, pending_inr, cost_inr, pay_mode, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           finalClientId,
           finalExtBuyerId,
           transaction_date,
+          payment_due_date || null,
           product_plan,
           type,
           mrp_inr,
@@ -1438,7 +1442,7 @@ async function createTransaction(req, res) {
 async function updateTransaction(req, res) {
   try {
     const { id } = req.params;
-    const { transaction_date, product_plan, type, mrp_inr, rate_inr, received_inr, pending_inr, cost_inr, pay_mode, notes } = req.body;
+    const { transaction_date, payment_due_date, product_plan, type, mrp_inr, rate_inr, received_inr, pending_inr, cost_inr, pay_mode, notes } = req.body;
 
     // Validate ID
     const idNum = parseInt(id, 10);
@@ -1446,6 +1450,10 @@ async function updateTransaction(req, res) {
 
     if (transaction_date) {
       const err = validateDate(transaction_date, 'transaction_date');
+      if (err) return sendValidationError(res, err);
+    }
+    if (payment_due_date) {
+      const err = validateDate(payment_due_date, 'payment_due_date');
       if (err) return sendValidationError(res, err);
     }
     if (type) {
@@ -1475,9 +1483,9 @@ async function updateTransaction(req, res) {
 
     await mainPool.execute(
       `UPDATE fitness_transactions
-       SET transaction_date = ?, product_plan = ?, type = ?, mrp_inr = ?, rate_inr = ?, received_inr = ?, pending_inr = ?, cost_inr = ?, pay_mode = ?, notes = ?
+       SET transaction_date = ?, payment_due_date = ?, product_plan = ?, type = ?, mrp_inr = ?, rate_inr = ?, received_inr = ?, pending_inr = ?, cost_inr = ?, pay_mode = ?, notes = ?
        WHERE id = ?`,
-      [transaction_date, product_plan, type, mrp_inr, rate_inr, received_inr, pending_inr, cost_inr, pay_mode, notes, id]
+      [transaction_date, payment_due_date || null, product_plan, type, mrp_inr, rate_inr, received_inr, pending_inr, cost_inr, pay_mode, notes, id]
     );
 
     const [rows] = await mainPool.execute(`${sqlFitnessTransactionsJoined()} WHERE ft.id = ?`, [id]);

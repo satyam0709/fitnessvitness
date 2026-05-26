@@ -170,6 +170,7 @@ export default function ClientDetailPage() {
   const [suppForm, setSuppForm] = useState({ product_name: "", prescribed_date: new Date().toISOString().split('T')[0], quantity: "", mrp_inr: "", rate_inr: "", notes: "" });
   const [transForm, setTransForm] = useState({
     transaction_date: new Date().toISOString().split("T")[0],
+    payment_due_date: "",
     product_plan: "",
     type: "Membership",
     mrp_inr: "",
@@ -406,6 +407,7 @@ export default function ClientDetailPage() {
       await createTransaction({
         client_id: clientId,
         transaction_date: transForm.transaction_date,
+        payment_due_date: transForm.payment_due_date || undefined,
         product_plan: transForm.product_plan,
         type: transForm.type,
         mrp_inr: transForm.mrp_inr === "" ? undefined : Number(transForm.mrp_inr),
@@ -425,6 +427,7 @@ export default function ClientDetailPage() {
     setEditTransForm({
       id: tx.id,
       transaction_date: formatDateForInput(tx.transaction_date),
+      payment_due_date: formatDateForInput(tx.payment_due_date),
       product_plan: tx.product_plan || "",
       type: tx.type || "Membership",
       mrp_inr: tx.mrp_inr ?? "",
@@ -444,6 +447,7 @@ export default function ClientDetailPage() {
     try {
       await updateTransaction(editTransForm.id, {
         transaction_date: editTransForm.transaction_date,
+        payment_due_date: editTransForm.payment_due_date || null,
         product_plan: editTransForm.product_plan,
         type: editTransForm.type,
         mrp_inr: editTransForm.mrp_inr === "" ? null : Number(editTransForm.mrp_inr),
@@ -940,6 +944,7 @@ export default function ClientDetailPage() {
                   <th>Rate (₹)</th>
                   <th>Received (₹)</th>
                   <th>Pending (₹)</th>
+                  <th>Next Due</th>
                   <th>Profit (₹)</th>
                   <th>Mode</th>
                   <th>Action</th>
@@ -955,6 +960,9 @@ export default function ClientDetailPage() {
                     <td>₹{tx.rate_inr}</td>
                     <td style={{ color: '#10b981', fontWeight: 600 }}>₹{tx.received_inr}</td>
                     <td style={{ color: tx.pending_inr > 0 ? '#ef4444' : '#64748b' }}>₹{tx.pending_inr}</td>
+                    <td style={isDateOverdue(tx.payment_due_date) ? { color: "#ef4444", fontWeight: 700 } : undefined}>
+                      {formatDate(tx.payment_due_date)}
+                    </td>
                     <td>₹{tx.profit_inr}</td>
                     <td>{tx.pay_mode}</td>
                     <td>
@@ -970,7 +978,7 @@ export default function ClientDetailPage() {
                   </tr>
                 ))}
                 {(!client.transactions || client.transactions.length === 0) && (
-                  <tr><td colSpan="10" style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>No financial records</td></tr>
+                  <tr><td colSpan="11" style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>No financial records</td></tr>
                 )}
               </tbody>
             </table>
@@ -1241,6 +1249,10 @@ export default function ClientDetailPage() {
                 <input type="date" required value={transForm.transaction_date} onChange={e => setTransForm({...transForm, transaction_date: e.target.value})} />
               </div>
               <div className={styles.formField}>
+                <label>Next Due Date</label>
+                <input type="date" value={transForm.payment_due_date} onChange={e => setTransForm({...transForm, payment_due_date: e.target.value})} />
+              </div>
+              <div className={styles.formField}>
                 <label>Product / Plan</label>
                 <input type="text" required value={transForm.product_plan} onChange={e => setTransForm({...transForm, product_plan: e.target.value})} />
               </div>
@@ -1434,6 +1446,10 @@ export default function ClientDetailPage() {
               <div className={styles.formField}>
                 <label>Date</label>
                 <input type="date" required value={editTransForm.transaction_date || ""} onChange={e => setEditTransForm({...editTransForm, transaction_date: e.target.value})} />
+              </div>
+              <div className={styles.formField}>
+                <label>Next Due Date</label>
+                <input type="date" value={editTransForm.payment_due_date || ""} onChange={e => setEditTransForm({...editTransForm, payment_due_date: e.target.value})} />
               </div>
               <div className={styles.formField}>
                 <label>Product / Plan</label>
