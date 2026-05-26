@@ -38,6 +38,7 @@ const createClientValidation = [
 
 const createTransactionValidation = [
   body("transaction_date").notEmpty().withMessage("Transaction date is required").isISO8601().withMessage("Transaction date must be a valid date"),
+  body("payment_due_date").optional({ values: "falsy" }).isISO8601().withMessage("Payment due date must be a valid date"),
   body("product_plan").trim().notEmpty().withMessage("Product/Plan is required"),
   body("type").trim().notEmpty().withMessage("Type is required"),
   body("rate_inr").notEmpty().withMessage("Rate is required").isNumeric().withMessage("Rate must be a number"),

@@ -89,10 +89,12 @@ async function setupFitness() {
         rate_inr        DECIMAL(10,2) DEFAULT 0,
         received_inr    DECIMAL(10,2) DEFAULT 0,
         pending_inr     DECIMAL(10,2) DEFAULT 0,
+        payment_due_date DATE         DEFAULT NULL,
         profit_inr      DECIMAL(10,2) DEFAULT 0,
         mode            VARCHAR(50)   DEFAULT NULL,
         created_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (id),
+        KEY idx_payment_due_date (payment_due_date),
         FOREIGN KEY (client_id) REFERENCES fitness_clients(client_id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);

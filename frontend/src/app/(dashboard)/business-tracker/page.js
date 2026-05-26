@@ -38,7 +38,7 @@ export default function BusinessTrackerPage() {
   const [submitError, setSubmitError] = useState(null);
 
   const [form, setForm] = useState({
-    client_id: "", transaction_date: "", product_plan: "", type: "Membership",
+    client_id: "", transaction_date: "", payment_due_date: "", product_plan: "", type: "Membership",
     mrp_inr: "", rate_inr: "", received_inr: "", cost_inr: "", pay_mode: "GPay", notes: ""
   });
 
@@ -157,7 +157,7 @@ export default function BusinessTrackerPage() {
       // Optimistic update
       setTransactions(prev => [newTx, ...prev]);
       setShowAdd(false);
-      setForm({ client_id: "", transaction_date: "", product_plan: "", type: "Membership", mrp_inr: "", rate_inr: "", received_inr: "", cost_inr: "", pay_mode: "GPay", notes: "" });
+      setForm({ client_id: "", transaction_date: "", payment_due_date: "", product_plan: "", type: "Membership", mrp_inr: "", rate_inr: "", received_inr: "", cost_inr: "", pay_mode: "GPay", notes: "" });
       setFormError({});
       setClientSearch("");
       loadSummary();
@@ -309,7 +309,7 @@ export default function BusinessTrackerPage() {
           <>
             <table className={styles.table}>
               <thead>
-                <tr><th>Date</th><th>Client</th><th>Product/Plan</th><th>Type</th><th>MRP</th><th>Rate</th><th>Received</th><th>Pending</th><th>Cost</th><th>Profit</th><th>Mode</th><th></th></tr>
+                <tr><th>Date</th><th>Client</th><th>Product/Plan</th><th>Type</th><th>MRP</th><th>Rate</th><th>Received</th><th>Pending</th><th>Next Due</th><th>Cost</th><th>Profit</th><th>Mode</th><th></th></tr>
               </thead>
               <tbody>
                 {transactions.map(t => (
@@ -322,6 +322,7 @@ export default function BusinessTrackerPage() {
                     <td>₹{t.rate_inr}</td>
                     <td>₹{t.received_inr}</td>
                     <td className={t.pending_inr > 0 ? styles.pending : ""}>₹{t.pending_inr}</td>
+                    <td>{formatDate(t.payment_due_date)}</td>
                     <td>₹{t.cost_inr}</td>
                     <td className={t.profit_inr > 0 ? styles.profit : t.profit_inr < 0 ? styles.loss : ""}>₹{t.profit_inr}</td>
                     <td>{t.pay_mode}</td>
@@ -364,6 +365,9 @@ export default function BusinessTrackerPage() {
               </div>
               <div className={styles.field}>{formError.transaction_date && <span className={styles.fieldError}>{formError.transaction_date}</span>}
                 <label>Transaction Date *</label><input type="date" value={form.transaction_date} onChange={e => { setForm({...form, transaction_date: e.target.value}); setFormError(prev => ({...prev, transaction_date: null})); }} /></div>
+              <div className={styles.field}>
+                <label>Next Payment Due</label><input type="date" value={form.payment_due_date} onChange={e => setForm({...form, payment_due_date: e.target.value})} />
+              </div>
               <div className={styles.field}>{formError.product_plan && <span className={styles.fieldError}>{formError.product_plan}</span>}
                 <label>Product/Plan Protocol *</label><input value={form.product_plan} onChange={e => { setForm({...form, product_plan: e.target.value}); setFormError(prev => ({...prev, product_plan: null})); }} placeholder="e.g., 3 Month Elite Plan" /></div>
               <div className={styles.field}>{formError.type && <span className={styles.fieldError}>{formError.type}</span>}
