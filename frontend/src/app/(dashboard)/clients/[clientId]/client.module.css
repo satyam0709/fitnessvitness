@@ -100,6 +100,46 @@
   font-size: 1.1rem;
 }
 
+.sectionActions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.sectionEditBtn,
+.sectionSaveBtn,
+.sectionCancelBtn {
+  border: none;
+  padding: 0.4rem 0.85rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sectionEditBtn {
+  background: white;
+  color: #004d7a;
+}
+
+.sectionSaveBtn {
+  background: #16a34a;
+  color: white;
+}
+
+.sectionCancelBtn {
+  background: rgba(255,255,255,0.2);
+  color: white;
+  border: 1px solid rgba(255,255,255,0.5);
+}
+
+.sectionEditBtn:hover,
+.sectionSaveBtn:hover,
+.sectionCancelBtn:hover {
+  transform: translateY(-1px);
+}
+
 .sectionBody {
   padding: 1.5rem;
 }
@@ -306,6 +346,12 @@
 .notesArea:focus {
   border-color: #3a86ff;
   box-shadow: 0 0 0 3px rgba(58, 134, 255, 0.1);
+}
+
+.notesArea:disabled {
+  cursor: not-allowed;
+  color: #475569;
+  background: #f8fafc;
 }
 
 /* Loading & Empty States */
