@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { apiFetch, connectGlobalSocket } from "@/lib/api";
+import { updateClient } from "@/lib/fitnessApi";
 import styles from "./clients.module.css";
 
 const STATUS_COLORS = {
@@ -52,6 +53,7 @@ export default function ClientsPage() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
+  const [savingDue, setSavingDue] = useState({});
 
   const loadClients = useCallback(async () => {
     try {
@@ -71,6 +73,19 @@ export default function ClientsPage() {
       setLoading(false);
     }
   }, [filter, search]);
+
+  const handleDueDateChange = async (clientId, value) => {
+    setSavingDue((prev) => ({ ...prev, [clientId]: true }));
+    try {
+      await updateClient(clientId, { next_due_date: value || null });
+      await loadClients();
+    } catch (err) {
+      console.error("Failed to update due date:", err);
+      alert(err.message || "Could not update next due date");
+    } finally {
+      setSavingDue((prev) => ({ ...prev, [clientId]: false }));
+    }
+  };
 
   useEffect(() => {
     loadClients();
@@ -131,7 +146,7 @@ export default function ClientsPage() {
 
       <div className={styles.filters}>
         <div className={styles.filterBtns}>
-          {["all", "Active", "Hold", "Overdue", "High Risk"].map(f => (
+          {["all", "Active", "Hold", "Overdue", "High Risk", "Next Due"].map(f => (
             <button
               key={f}
               className={`${styles.filterBtn} ${filter === f ? styles.active : ""}`}
@@ -185,7 +200,11 @@ export default function ClientsPage() {
                     className={`${client.tier === 5 ? styles.goldRow : ""} ${client.is_high_risk ? styles.highRisk : ""}`}
                   >
                     <td><Link href={`/clients/${client.client_id}`} className={styles.clientLink}>{client.client_id}</Link></td>
-                    <td><strong>{client.full_name}</strong></td>
+                    <td>
+                      <Link href={`/clients/${client.client_id}`} className={styles.clientLink}>
+                        <strong>{client.full_name}</strong>
+                      </Link>
+                    </td>
                     <td><span className={`${styles.riskBadge} ${client.is_high_risk ? styles.highRiskBadge : ""}`}>{risk}</span></td>
                     <td>
                       <span className={styles.badge} style={{ 
@@ -200,7 +219,16 @@ export default function ClientsPage() {
                         {client.progress}
                       </span>
                     </td>
-                    <td>{formatDate(client.next_due_date)}</td>
+                    <td>
+                      <input
+                        type="date"
+                        className={styles.dueInput}
+                        value={client.next_due_date ? String(client.next_due_date).slice(0, 10) : ""}
+                        disabled={!!savingDue[client.client_id]}
+                        title={formatDate(client.next_due_date)}
+                        onChange={(e) => handleDueDateChange(client.client_id, e.target.value)}
+                      />
+                    </td>
                     <td><span className={`${styles.priority} ${priority.className}`}>{priority.label}</span></td>
                     <td>
                       {daysLeft !== null && (

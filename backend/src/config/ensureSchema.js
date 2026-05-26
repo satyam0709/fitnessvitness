@@ -4,6 +4,7 @@ const { INTEGRATIONS } = require("./integrationsCatalog");
 let schemaEnsured = false;
 let fitnessClientPatchesDone = false;
 let collectionsPatchesDone = false;
+let tasksClientDuePatchesDone = false;
 const CURRENT_SCHEMA_VERSION = 10;
 
 /** Lightweight patches that must run even when schema version is current. */
@@ -139,6 +140,34 @@ async function ensureCollectionsPatches() {
   }
 }
 
+async function ensureTasksClientDuePatches() {
+  if (tasksClientDuePatchesDone) return;
+  const [tbl] = await pool.execute(
+    `SELECT TABLE_NAME FROM information_schema.tables
+     WHERE table_schema = DATABASE() AND table_name = 'tasks'`
+  );
+  if (!tbl.length) return;
+
+  const taskCols = [
+    { column: "client_id", definition: "INT UNSIGNED DEFAULT NULL" },
+    { column: "task_category", definition: "VARCHAR(50) DEFAULT 'general'" },
+    { column: "task_type", definition: "VARCHAR(20) DEFAULT 'client'" },
+    { column: "frequency", definition: "VARCHAR(20) DEFAULT 'once'" },
+  ];
+  for (const { column, definition } of taskCols) {
+    const [cols] = await pool.execute(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tasks' AND COLUMN_NAME = ?`,
+      [column]
+    );
+    if (cols.length === 0) {
+      await pool.execute(`ALTER TABLE tasks ADD COLUMN \`${column}\` ${definition}`);
+      console.log(`Migration: added tasks.${column}`);
+    }
+  }
+  tasksClientDuePatchesDone = true;
+}
+
 /** Allow fitness CRM `owner` role on users.role (Aiven / ensureSchema ENUM). */
 async function ensureUsersRoleOwnerPatch() {
   try {
@@ -164,6 +193,7 @@ async function ensureSchema() {
   await ensureCollectionsPatches();
   await dropFitnessTransactionsXorCheck();
   await ensureUsersRoleOwnerPatch();
+  await ensureTasksClientDuePatches();
   if (schemaEnsured) return;
   // FIXED: 5 schema version gate to skip expensive startup checks
   await pool.execute(`

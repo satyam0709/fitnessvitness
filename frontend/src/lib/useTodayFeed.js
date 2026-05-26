@@ -12,6 +12,7 @@ export function useTodayFeed({ enabled = true, debounceMs = 250 } = {}) {
   const [error, setError] = useState("");
   const [summary, setSummary] = useState(null);
   const [items, setItems] = useState([]);
+  const [upcoming, setUpcoming] = useState([]);
   const [date, setDate] = useState(null);
   const timerRef = useRef(null);
 
@@ -28,6 +29,7 @@ export function useTodayFeed({ enabled = true, debounceMs = 250 } = {}) {
         }
         setSummary(json.summary || null);
         setItems(Array.isArray(json.items) ? json.items : []);
+        setUpcoming(Array.isArray(json.upcoming) ? json.upcoming : []);
         setDate(json.date || null);
       } catch (e) {
         if (!silent) setError(e.message || "Failed to load");
@@ -86,6 +88,7 @@ export function useTodayFeed({ enabled = true, debounceMs = 250 } = {}) {
     error,
     summary,
     items,
+    upcoming,
     date,
     load,
     refreshQuiet,

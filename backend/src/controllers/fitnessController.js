@@ -1,5 +1,9 @@
 const { mainPool } = require("../config/database");
-const { emitFitnessChanged } = require("../realtime/meetingsRealtime");
+const {
+  emitCalendarChanged,
+  emitFitnessChanged,
+  emitTasksChanged,
+} = require("../realtime/meetingsRealtime");
 const XLSX = require("xlsx");
 const path = require("path");
 const fs = require("fs");
@@ -89,6 +93,130 @@ function optionalNumber(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+const tableExistsCache = new Map();
+const tableColumnsCache = new Map();
+
+async function tableExists(tableName) {
+  if (tableExistsCache.has(tableName)) return tableExistsCache.get(tableName);
+  const [rows] = await mainPool.execute(
+    `SELECT 1 FROM information_schema.TABLES
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? LIMIT 1`,
+    [tableName]
+  );
+  const exists = rows.length > 0;
+  tableExistsCache.set(tableName, exists);
+  return exists;
+}
+
+async function tableColumns(tableName) {
+  if (tableColumnsCache.has(tableName)) return tableColumnsCache.get(tableName);
+  const [rows] = await mainPool.execute(
+    `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
+    [tableName]
+  );
+  const cols = new Set(rows.map((r) => r.COLUMN_NAME));
+  tableColumnsCache.set(tableName, cols);
+  return cols;
+}
+
+function normalizeDateOnly(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const s = String(value).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+
+function emitFitnessAndDueTaskChanged(reason = "client_due") {
+  emitFitnessChanged();
+  emitTasksChanged({ reason });
+  emitCalendarChanged({ reason });
+}
+
+async function syncClientDueTask(clientRow, actorUserId) {
+  if (!clientRow?.id || !(await tableExists("tasks"))) return false;
+  const cols = await tableColumns("tasks");
+  const required = ["title", "created_by", "due_date", "status", "client_id", "task_category", "task_type"];
+  if (!required.every((c) => cols.has(c))) return false;
+
+  const hasDescription = cols.has("description");
+  const hasAssignedTo = cols.has("assigned_to");
+  const hasPriority = cols.has("priority");
+  const hasUpdatedAt = cols.has("updated_at");
+  const clientDbId = Number(clientRow.id);
+  const dueDate = normalizeDateOnly(clientRow.next_due_date);
+  const isActive = String(clientRow.status || "Active") === "Active";
+
+  const [existing] = await mainPool.execute(
+    `SELECT id FROM tasks
+     WHERE client_id = ?
+       AND task_category = 'client_due'
+       AND task_type = 'client_due'
+     ORDER BY id DESC
+     LIMIT 1`,
+    [clientDbId]
+  );
+  const taskId = existing[0]?.id;
+
+  if (!dueDate || !isActive) {
+    if (!taskId) return false;
+    const updates = ["status = 'done'"];
+    if (hasUpdatedAt) updates.push("updated_at = NOW()");
+    await mainPool.execute(`UPDATE tasks SET ${updates.join(", ")} WHERE id = ?`, [taskId]);
+    return true;
+  }
+
+  const title = `Follow-up due: ${clientRow.full_name || clientRow.client_id}`;
+  const description = `Client ${clientRow.client_id} needs attention on ${dueDate}.`;
+
+  if (taskId) {
+    const updates = ["title = ?", "due_date = ?", "status = 'new'"];
+    const params = [title, dueDate];
+    if (hasDescription) {
+      updates.push("description = ?");
+      params.push(description);
+    }
+    if (hasAssignedTo && actorUserId) {
+      updates.push("assigned_to = COALESCE(assigned_to, ?)");
+      params.push(Number(actorUserId));
+    }
+    if (hasPriority) updates.push("priority = 'medium'");
+    if (hasUpdatedAt) updates.push("updated_at = NOW()");
+    params.push(taskId);
+    await mainPool.execute(`UPDATE tasks SET ${updates.join(", ")} WHERE id = ?`, params);
+    return true;
+  }
+
+  const fields = ["title", "client_id", "created_by", "due_date", "status"];
+  const values = [title, clientDbId, Number(actorUserId) || null, dueDate, "new"];
+  if (hasDescription) {
+    fields.push("description");
+    values.push(description);
+  }
+  if (hasAssignedTo) {
+    fields.push("assigned_to");
+    values.push(Number(actorUserId) || null);
+  }
+  if (hasPriority) {
+    fields.push("priority");
+    values.push("medium");
+  }
+  fields.push("task_category");
+  values.push("client_due");
+  fields.push("task_type");
+  values.push("client_due");
+  if (cols.has("frequency")) {
+    fields.push("frequency");
+    values.push("once");
+  }
+
+  const placeholders = fields.map(() => "?").join(", ");
+  await mainPool.execute(
+    `INSERT INTO tasks (${fields.map((f) => `\`${f}\``).join(", ")}) VALUES (${placeholders})`,
+    values
+  );
+  return true;
+}
+
 // Helper to extract field-level errors from express-validator
 function extractValidationErrors(req) {
   const errors = validationResult(req);
@@ -167,11 +295,13 @@ async function updateFitnessSettings(req, res) {
 // ─────────────────────────────────────────────────────────────────
 async function getAllClients(req, res) {
   try {
-    const { status, search } = req.query;
+    const { status, search, sort } = req.query;
     const statusRaw = String(status || "").trim();
     const isOverdueView = statusRaw === "Overdue";
     const isHighRiskView = statusRaw === "High Risk";
-    const isSpecialView = isOverdueView || isHighRiskView;
+    const isNextDueView =
+      statusRaw === "Next Due" || String(sort || "").toLowerCase() === "next_due";
+    const isSpecialView = isOverdueView || isHighRiskView || isNextDueView;
 
     let query = "SELECT * FROM fitness_clients WHERE 1=1";
     const params = [];
@@ -186,6 +316,8 @@ async function getAllClients(req, res) {
       query += " AND status = 'Active'";
     } else if (isHighRiskView) {
       query += " AND status != 'Inactive'";
+    } else if (isNextDueView) {
+      query += " AND status != 'Inactive' AND next_due_date IS NOT NULL";
     }
 
     if (search) {
@@ -194,7 +326,11 @@ async function getAllClients(req, res) {
       params.push(searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
-    query += " ORDER BY created_at DESC";
+    if (isNextDueView) {
+      query += " ORDER BY next_due_date ASC, full_name ASC";
+    } else {
+      query += " ORDER BY created_at DESC";
+    }
     const [rows] = await mainPool.execute(query, params);
     let computed = rows.map(computeClientFields);
 
@@ -325,6 +461,7 @@ async function createClient(req, res) {
     const health_goal = emptyToNull(raw.health_goal);
     const plan_type = emptyToNull(raw.plan_type);
     const plan_start_date = emptyToNull(raw.plan_start_date);
+    const next_due_date = emptyToNull(raw.next_due_date);
     const follow_up_freq_days = optionalNumber(raw.follow_up_freq_days) ?? 14;
     const medical_conditions = emptyToNull(raw.medical_conditions);
     const allergies = emptyToNull(raw.allergies);
@@ -397,6 +534,10 @@ async function createClient(req, res) {
       const dateError = validateDate(plan_start_date, 'plan_start_date');
       if (dateError) return sendValidationError(res, dateError);
     }
+    if (next_due_date) {
+      const dateError = validateDate(next_due_date, "next_due_date");
+      if (dateError) return sendValidationError(res, dateError);
+    }
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return sendValidationError(res, 'Invalid email format');
     }
@@ -424,14 +565,14 @@ async function createClient(req, res) {
       `INSERT INTO fitness_clients (
         client_id, full_name, phone, email, age, city, address, occupation, emergency_contact,
         referred_by_client_id, referred_by_name, source, tier, health_goal, plan_type, plan_start_date,
-        plan_expiry_date, follow_up_freq_days, medical_conditions, allergies, activity_level,
+        plan_expiry_date, next_due_date, follow_up_freq_days, medical_conditions, allergies, activity_level,
         current_medications, height_cm, start_weight_kg, current_weight_kg, target_weight_kg, bmi,
         status, progress
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         clientId, full_name, phone, email, age, city, address, occupation, emergency_contact,
         referred_by_client_id || null, referred_by_name || null, source || "Walk-in", tier || 3,
-        health_goal, plan_type, plan_start_date, plan_expiry_date, follow_up_freq_days || 14,
+        health_goal, plan_type, plan_start_date, plan_expiry_date, next_due_date, follow_up_freq_days || 14,
         medical_conditions, allergies, activity_level, current_medications,
         height_cm, start_weight_kg, current_weight_kg, target_weight_kg, bmi,
         status || "Active", progress || "Neutral",
@@ -442,7 +583,9 @@ async function createClient(req, res) {
       "SELECT * FROM fitness_clients WHERE id = ?", [result.insertId]
     );
 
-    emitFitnessChanged();
+    const taskChanged = await syncClientDueTask(rows[0], req.user?.id);
+    if (taskChanged) emitFitnessAndDueTaskChanged("client_due_create");
+    else emitFitnessChanged();
     res.status(201).json({ success: true, data: computeClientFields(rows[0]) });
   } catch (error) {
     console.error("POST /api/fitness/clients createClient:", error.message);
@@ -504,6 +647,10 @@ async function updateClient(req, res) {
       const err = validateDate(fields.plan_start_date, 'plan_start_date');
       if (err) return sendValidationError(res, err);
     }
+    if (fields.next_due_date) {
+      const err = validateDate(fields.next_due_date, 'next_due_date');
+      if (err) return sendValidationError(res, err);
+    }
 
     // Build dynamic update
     const allowedFields = [
@@ -521,7 +668,7 @@ async function updateClient(req, res) {
     for (const [key, value] of Object.entries(fields)) {
       if (allowedFields.includes(key)) {
         updates.push(`\`${key}\` = ?`);
-        values.push(value);
+        values.push(emptyToNull(value));
       }
     }
 
@@ -559,7 +706,9 @@ async function updateClient(req, res) {
       return res.status(404).json({ success: false, message: "Client not found" });
     }
 
-    emitFitnessChanged();
+    const taskChanged = await syncClientDueTask(rows[0], req.user?.id);
+    if (taskChanged) emitFitnessAndDueTaskChanged("client_due_update");
+    else emitFitnessChanged();
     res.json({ success: true, data: computeClientFields(rows[0]) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -747,10 +896,19 @@ async function createConsultation(req, res) {
       }
     }
 
+    const [clientRows] = await mainPool.execute(
+      "SELECT * FROM fitness_clients WHERE client_id = ?",
+      [clientId]
+    );
+    const taskChanged = clientRows[0]
+      ? await syncClientDueTask(clientRows[0], req.user?.id)
+      : false;
+
     const [rows] = await mainPool.execute(
       "SELECT * FROM fitness_consultations WHERE id = ?", [result.insertId]
     );
-    emitFitnessChanged();
+    if (taskChanged) emitFitnessAndDueTaskChanged("client_due_consultation");
+    else emitFitnessChanged();
     res.status(201).json({ success: true, data: rows[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -2357,6 +2515,13 @@ const importClientsExcel = async (req, res) => {
             ]
           );
         }
+        const [syncedRows] = await mainPool.execute(
+          "SELECT * FROM fitness_clients WHERE client_id = ?",
+          [clientId]
+        );
+        if (syncedRows[0]) {
+          await syncClientDueTask(syncedRows[0], req.user?.id);
+        }
         importedClients.push(clientId);
       } catch (dbError) {
         console.error(`[Import] DB Error for ${clientId}:`, dbError.message);
@@ -2364,7 +2529,7 @@ const importClientsExcel = async (req, res) => {
       }
     }
 
-    emitFitnessChanged();
+    emitFitnessAndDueTaskChanged("client_due_import");
     res.json({ success: true, data: { importedCount: importedClients.length, errors } });
   } catch (err) {
     console.error('[Import] Fatal Error:', err);

@@ -66,6 +66,16 @@
   color: #f5c400;
 }
 
+.clientLink {
+  color: inherit;
+  text-decoration: none;
+}
+
+.clientLink:hover {
+  color: #f5c400;
+  text-decoration: underline;
+}
+
 .table {
   width: 100%;
   border-collapse: collapse;
