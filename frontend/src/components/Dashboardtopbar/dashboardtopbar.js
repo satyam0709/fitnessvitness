@@ -22,7 +22,6 @@ const QUICK_ACTIONS = [
   { key: "todo",     label: "To Do",    icon: "fa-clipboard-list" },
   { key: "collection", label: "Collection", icon: "fa-hand-holding-dollar" },
   { key: "note",     label: "Note",     icon: "fa-note-sticky" },
-  { key: "invoice",  label: "Invoice",  icon: "fa-file-invoice-dollar" },
 ];
 
 // sidebarCollapsed — tells topbar how far left to sit on desktop
@@ -171,37 +170,7 @@ export default function DashboardTopbar({ onMenuToggle, sidebarCollapsed }) {
           <i className="fas fa-bars" />
         </button>
 
-        <div className={styles.quickActions}>
-          {QUICK_ACTIONS.map((a, i) => (
-            <span key={a.key} className={styles.quickGroup}>
-              <button
-                type="button"
-                className={styles.quickBtn}
-                onClick={() => {
-                  if (a.key === "invoice") {
-                    router.push("/invoice/sales/new");
-                    return;
-                  }
-                  if (a.key === "prospect") {
-                    router.push("/opportunities?create=1");
-                    return;
-                  }
-                  if (a.key === "collection") {
-                    router.push("/collections?create=1");
-                    return;
-                  }
-                  openQuickCreate(a.key);
-                }}
-              >
-                <i className={`fas ${a.icon}`} />
-                <span>{a.label}</span>
-              </button>
-              {i < QUICK_ACTIONS.length - 1 && (
-                <span className={styles.pipe}>|</span>
-              )}
-            </span>
-          ))}
-        </div>
+       
       </div>
 
       {/* Right side */}

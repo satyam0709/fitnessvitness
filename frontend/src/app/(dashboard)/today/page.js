@@ -185,7 +185,7 @@ function TodayCard({ item, onDone, doing, showDoneButton = true }) {
 export default function TodayPage() {
   const { isLoaded } = useAuth();
   const { showToast } = useToast();
-  const { loading, error, summary, items, load } = useTodayFeed({ enabled: isLoaded });
+  const { loading, error, summary, items, upcoming, load } = useTodayFeed({ enabled: isLoaded });
   const [filter, setFilter] = useState("all");
   const [doneSession, setDoneSession] = useState([]);
   const [doneExpanded, setDoneExpanded] = useState(false);
@@ -216,6 +216,10 @@ export default function TodayPage() {
   const filteredDone = useMemo(
     () => doneSession.filter((it) => matchesFilter(it, filter)),
     [doneSession, filter]
+  );
+  const filteredUpcoming = useMemo(
+    () => (upcoming || []).filter((it) => !doneKeys.has(itemKey(it)) && matchesFilter(it, filter)),
+    [upcoming, doneKeys, filter]
   );
 
   const handleDone = async (item) => {
@@ -331,6 +335,24 @@ export default function TodayPage() {
               </div>
             )}
           </section>
+
+          {filteredUpcoming.length > 0 ? (
+            <section className={styles.section}>
+              <h2 className={`${styles.sectionHeader} ${styles.sectionUpcoming}`}>
+                Upcoming Tasks — {filteredUpcoming.length} next up
+              </h2>
+              <div className={styles.cardList}>
+                {filteredUpcoming.map((it) => (
+                  <TodayCard
+                    key={`upcoming-${itemKey(it)}`}
+                    item={it}
+                    onDone={handleDone}
+                    doing={doingKey === itemKey(it)}
+                  />
+                ))}
+              </div>
+            </section>
+          ) : null}
 
           {filteredDone.length > 0 ? (
             <section className={styles.section}>

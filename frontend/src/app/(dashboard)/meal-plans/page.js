@@ -199,7 +199,7 @@ export default function MealPlansPage() {
                   <td><span className={styles.planName}>{p.plan_name}</span></td>
                   <td>
                     <Link href={`/clients/${p.client_id}`} className={styles.clientLink}>
-                      {p.full_name || p.client_id}
+                      {p.full_name ? `${p.full_name} (${p.client_id})` : p.client_id}
                     </Link>
                   </td>
                   <td>

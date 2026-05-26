@@ -216,7 +216,7 @@ export default function ConsultationsPage() {
                   <td><strong>{formatDate(c.consult_date)}</strong></td>
                   <td>
                     <Link href={`/clients/${c.client_id}`} className={styles.clientLink}>
-                      {c.full_name || c.client_id}
+                      {c.full_name ? `${c.full_name} (${c.client_id})` : c.client_id}
                     </Link>
                   </td>
                   <td>

@@ -315,7 +315,7 @@ export default function BusinessTrackerPage() {
                 {transactions.map(t => (
                   <tr key={t.id}>
                     <td>{formatDate(t.transaction_date)}</td>
-                    <td><Link href={`/clients/${t.client_id}`} className={styles.clientLink}>{t.client_name || t.client_id}</Link></td>
+                    <td><Link href={`/clients/${t.client_id}`} className={styles.clientLink}>{t.client_name ? `${t.client_name} (${t.client_id})` : t.client_id}</Link></td>
                     <td>{t.product_plan}</td>
                     <td><span className={styles[`type_${t.type}`]}>{t.type}</span></td>
                     <td>₹{t.mrp_inr || "—"}</td>

@@ -190,6 +190,23 @@
 
 .clientLink:hover { text-decoration: underline; }
 
+.dueInput {
+  width: 138px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1.5px solid #e2e8f0;
+  background: #fff;
+  color: #1e293b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.dueInput:focus {
+  outline: none;
+  border-color: #f5c400;
+  box-shadow: 0 0 0 3px rgba(245, 196, 0, 0.12);
+}
+
 .badge {
   padding: 6px 12px;
   border-radius: 10px;

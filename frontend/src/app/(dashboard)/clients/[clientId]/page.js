@@ -11,7 +11,7 @@ import {
   createConsultation, deleteConsultation,
   createClientTask, updateClientTask, patchClientTaskStatus, deleteClientTask,
   createSupplement, updateSupplement, deleteSupplement,
-  createTransaction,
+  createTransaction, updateTransaction,
   createReferral, deleteReferral,
   searchClients
 } from "@/lib/fitnessApi";
@@ -120,6 +120,7 @@ export default function ClientDetailPage() {
   const [showAddTask, setShowAddTask] = useState(false);
   const [showAddSupplement, setShowAddSupplement] = useState(false);
   const [showAddTransaction, setShowAddTransaction] = useState(false);
+  const [showEditTransaction, setShowEditTransaction] = useState(false);
   const [showAddReferral, setShowAddReferral] = useState(false);
   
   // Search state for referrals
@@ -161,6 +162,7 @@ export default function ClientDetailPage() {
     pay_mode: "GPay",
     notes: "",
   });
+  const [editTransForm, setEditTransForm] = useState({ id: null });
   const [referralForm, setReferralForm] = useState({ referred_client_id: "" });
 
   const loadClient = useCallback(async (opts = {}) => {
@@ -372,6 +374,44 @@ export default function ClientDetailPage() {
     } catch (err) { alert(err.message); }
   };
 
+  const openEditTransaction = (tx) => {
+    setEditTransForm({
+      id: tx.id,
+      transaction_date: formatDateForInput(tx.transaction_date),
+      product_plan: tx.product_plan || "",
+      type: tx.type || "Membership",
+      mrp_inr: tx.mrp_inr ?? "",
+      rate_inr: tx.rate_inr ?? "",
+      received_inr: tx.received_inr ?? "",
+      pending_inr: tx.pending_inr ?? "",
+      cost_inr: tx.cost_inr ?? "",
+      pay_mode: tx.pay_mode || "GPay",
+      notes: tx.notes || "",
+    });
+    setShowEditTransaction(true);
+  };
+
+  const handleEditTransaction = async (e) => {
+    e.preventDefault();
+    if (!editTransForm.id) return;
+    try {
+      await updateTransaction(editTransForm.id, {
+        transaction_date: editTransForm.transaction_date,
+        product_plan: editTransForm.product_plan,
+        type: editTransForm.type,
+        mrp_inr: editTransForm.mrp_inr === "" ? null : Number(editTransForm.mrp_inr),
+        rate_inr: editTransForm.rate_inr === "" ? null : Number(editTransForm.rate_inr),
+        received_inr: editTransForm.received_inr === "" ? 0 : Number(editTransForm.received_inr),
+        pending_inr: editTransForm.pending_inr === "" ? 0 : Number(editTransForm.pending_inr),
+        cost_inr: editTransForm.cost_inr === "" ? 0 : Number(editTransForm.cost_inr),
+        pay_mode: editTransForm.pay_mode,
+        notes: editTransForm.notes || null,
+      });
+      setShowEditTransaction(false);
+      loadClient({ quiet: true });
+    } catch (err) { alert(err.message); }
+  };
+
   const handleSearchClients = async (query) => {
     setSearchQuery(query);
     if (query.length < 2) return setSearchResults([]);
@@ -499,83 +539,6 @@ export default function ClientDetailPage() {
           </div>
         </section>
 
-        <section className={`${styles.section} ${styles.dangerSection}`}>
-          <div className={styles.sectionHeader}>
-            <i className="fa-solid fa-triangle-exclamation"></i>
-            Danger zone
-          </div>
-          <div className={styles.dangerBody}>
-            <p>
-              Permanently removes this client and all related rows: consultations, transactions, supplements, body stats,
-              tasks, meal plans, and referral links. To keep the record but hide it from active work, set Status to
-              Inactive instead.
-            </p>
-            <button
-              type="button"
-              className={styles.dangerBtn}
-              aria-expanded={showDeleteConfirm}
-              onClick={() => {
-                if (showDeleteConfirm) {
-                  setShowDeleteConfirm(false);
-                  setDeleteConfirm("");
-                } else {
-                  setDeleteConfirm("");
-                  setShowDeleteConfirm(true);
-                }
-              }}
-            >
-              {showDeleteConfirm ? "Cancel delete" : "Delete client from database…"}
-            </button>
-            {showDeleteConfirm ? (
-              <div
-                ref={deletePanelRef}
-                className={styles.dangerConfirmPanel}
-                role="dialog"
-                aria-labelledby="delete-client-title"
-              >
-                <h3 id="delete-client-title" className={styles.dangerConfirmTitle}>
-                  Delete client permanently
-                </h3>
-                <p className={styles.dangerModalText}>
-                  This cannot be undone. Type <strong>{client.client_id}</strong> below, then confirm.
-                </p>
-                <div className={styles.formField}>
-                  <label htmlFor="delete-confirm-input">Client ID</label>
-                  <input
-                    id="delete-confirm-input"
-                    type="text"
-                    autoComplete="off"
-                    value={deleteConfirm}
-                    onChange={(e) => setDeleteConfirm(e.target.value)}
-                    placeholder={client.client_id}
-                  />
-                </div>
-                <div className={styles.dangerConfirmActions}>
-                  <button
-                    type="button"
-                    className={styles.cancelBtn}
-                    disabled={deleteBusy}
-                    onClick={() => {
-                      setShowDeleteConfirm(false);
-                      setDeleteConfirm("");
-                    }}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    className={styles.dangerConfirmBtn}
-                    disabled={deleteBusy || deleteConfirm.trim() !== client.client_id}
-                    onClick={handlePermanentDelete}
-                  >
-                    {deleteBusy ? "Removing…" : "Delete permanently"}
-                  </button>
-                </div>
-              </div>
-            ) : null}
-          </div>
-        </section>
-
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
           {/* 3. PERSONAL DETAILS */}
           <section className={styles.section}>
@@ -609,6 +572,7 @@ export default function ClientDetailPage() {
               <DetailField label="Plan Start Date" field="plan_start_date" value={formatDateForInput(client.plan_start_date)} type="date" />
               <DetailField label="Plan Duration" field="plan_duration" value={client.plan_type ? `${client.plan_type} (Auto)` : "—"} />
               <DetailField label="Plan Expiry" field="plan_expiry_date" value={formatDateForInput(client.plan_expiry_date)} type="date" />
+              <DetailField label="Next Due" field="next_due_date" value={formatDateForInput(client.next_due_date)} type="date" />
               <DetailField label="Days Remaining" field="days_remaining" value={client.days_remaining !== null ? `${client.days_remaining} days` : "—"} />
               <DetailField label="Medical Conditions" field="medical_conditions" value={client.medical_conditions} />
               <DetailField label="Allergies / Avoid" field="allergies" value={client.allergies} />
@@ -685,8 +649,16 @@ export default function ClientDetailPage() {
                 {client.referrals_given?.map((ref, idx) => (
                   <tr key={ref.id}>
                     <td>{idx + 1}</td>
-                    <td style={{ fontWeight: 700, color: '#10b981' }}>{ref.referred_name}</td>
-                    <td>{ref.referred_client_id}</td>
+                    <td style={{ fontWeight: 700, color: '#10b981' }}>
+                      <Link href={`/clients/${ref.referred_client_id}`} className={styles.profileLink}>
+                        {ref.referred_name}
+                      </Link>
+                    </td>
+                    <td>
+                      <Link href={`/clients/${ref.referred_client_id}`} className={styles.profileLink}>
+                        {ref.referred_client_id}
+                      </Link>
+                    </td>
                     <td>{formatDate(ref.referral_date)}</td>
                     <td>{ref.notes}</td>
                     <td>
@@ -813,6 +785,7 @@ export default function ClientDetailPage() {
                   <th>Pending (₹)</th>
                   <th>Profit (₹)</th>
                   <th>Mode</th>
+                  <th>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -827,10 +800,20 @@ export default function ClientDetailPage() {
                     <td style={{ color: tx.pending_inr > 0 ? '#ef4444' : '#64748b' }}>₹{tx.pending_inr}</td>
                     <td>₹{tx.profit_inr}</td>
                     <td>{tx.pay_mode}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className={styles.actionBtn}
+                        onClick={() => openEditTransaction(tx)}
+                        aria-label={`Edit payment ${tx.id}`}
+                      >
+                        <i className="fa-solid fa-pen"></i> Edit
+                      </button>
+                    </td>
                   </tr>
                 ))}
                 {(!client.transactions || client.transactions.length === 0) && (
-                  <tr><td colSpan="9" style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>No financial records</td></tr>
+                  <tr><td colSpan="10" style={{ textAlign: 'center', padding: '2rem', color: '#94a3b8' }}>No financial records</td></tr>
                 )}
               </tbody>
             </table>
@@ -901,6 +884,83 @@ export default function ClientDetailPage() {
               defaultValue={client.coach_notes}
               onBlur={(e) => handleFieldUpdate('coach_notes', e.target.value)}
             />
+          </div>
+        </section>
+
+        <section className={`${styles.section} ${styles.dangerSection}`}>
+          <div className={styles.sectionHeader}>
+            <i className="fa-solid fa-triangle-exclamation"></i>
+            Danger zone
+          </div>
+          <div className={styles.dangerBody}>
+            <p>
+              Permanently removes this client and all related rows: consultations, transactions, supplements, body stats,
+              tasks, meal plans, and referral links. To keep the record but hide it from active work, set Status to
+              Inactive instead.
+            </p>
+            <button
+              type="button"
+              className={styles.dangerBtn}
+              aria-expanded={showDeleteConfirm}
+              onClick={() => {
+                if (showDeleteConfirm) {
+                  setShowDeleteConfirm(false);
+                  setDeleteConfirm("");
+                } else {
+                  setDeleteConfirm("");
+                  setShowDeleteConfirm(true);
+                }
+              }}
+            >
+              {showDeleteConfirm ? "Cancel delete" : "Delete client from database..."}
+            </button>
+            {showDeleteConfirm ? (
+              <div
+                ref={deletePanelRef}
+                className={styles.dangerConfirmPanel}
+                role="dialog"
+                aria-labelledby="delete-client-title"
+              >
+                <h3 id="delete-client-title" className={styles.dangerConfirmTitle}>
+                  Delete client permanently
+                </h3>
+                <p className={styles.dangerModalText}>
+                  This cannot be undone. Type <strong>{client.client_id}</strong> below, then confirm.
+                </p>
+                <div className={styles.formField}>
+                  <label htmlFor="delete-confirm-input">Client ID</label>
+                  <input
+                    id="delete-confirm-input"
+                    type="text"
+                    autoComplete="off"
+                    value={deleteConfirm}
+                    onChange={(e) => setDeleteConfirm(e.target.value)}
+                    placeholder={client.client_id}
+                  />
+                </div>
+                <div className={styles.dangerConfirmActions}>
+                  <button
+                    type="button"
+                    className={styles.cancelBtn}
+                    disabled={deleteBusy}
+                    onClick={() => {
+                      setShowDeleteConfirm(false);
+                      setDeleteConfirm("");
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.dangerConfirmBtn}
+                    disabled={deleteBusy || deleteConfirm.trim() !== client.client_id}
+                    onClick={handlePermanentDelete}
+                  >
+                    {deleteBusy ? "Removing..." : "Delete permanently"}
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
         </section>
 
@@ -1060,6 +1120,67 @@ export default function ClientDetailPage() {
               <div className={styles.formActions}>
                 <button type="button" className={styles.cancelBtn} onClick={() => setShowAddTransaction(false)}>Cancel</button>
                 <button type="submit" className={styles.saveBtn}>Add Record</button>
+              </div>
+            </form>
+      </ClientPageModal>
+
+      {/* EDIT TRANSACTION MODAL */}
+      <ClientPageModal
+        open={showEditTransaction}
+        onClose={() => setShowEditTransaction(false)}
+        title="Edit Payment Record"
+        titleId="edit-transaction-modal-title"
+      >
+            <form onSubmit={handleEditTransaction} className={styles.formGrid}>
+              <div className={styles.formField}>
+                <label>Date</label>
+                <input type="date" required value={editTransForm.transaction_date || ""} onChange={e => setEditTransForm({...editTransForm, transaction_date: e.target.value})} />
+              </div>
+              <div className={styles.formField}>
+                <label>Product / Plan</label>
+                <input type="text" required value={editTransForm.product_plan || ""} onChange={e => setEditTransForm({...editTransForm, product_plan: e.target.value})} />
+              </div>
+              <div className={styles.formField}>
+                <label>Type</label>
+                <select value={editTransForm.type || "Membership"} onChange={e => setEditTransForm({...editTransForm, type: e.target.value})}>
+                  {TRANSACTION_TYPES.map((t) => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </select>
+              </div>
+              <div className={styles.formField}>
+                <label>MRP (₹)</label>
+                <input type="number" min="0" step="0.01" value={editTransForm.mrp_inr ?? ""} onChange={e => setEditTransForm({...editTransForm, mrp_inr: e.target.value})} />
+              </div>
+              <div className={styles.formField}>
+                <label>Rate (₹)</label>
+                <input type="number" min="0" step="0.01" required value={editTransForm.rate_inr ?? ""} onChange={e => setEditTransForm({...editTransForm, rate_inr: e.target.value})} />
+              </div>
+              <div className={styles.formField}>
+                <label>Received (₹)</label>
+                <input type="number" min="0" step="0.01" value={editTransForm.received_inr ?? ""} onChange={e => setEditTransForm({...editTransForm, received_inr: e.target.value})} />
+              </div>
+              <div className={styles.formField}>
+                <label>Pending (₹)</label>
+                <input type="number" min="0" step="0.01" value={editTransForm.pending_inr ?? ""} onChange={e => setEditTransForm({...editTransForm, pending_inr: e.target.value})} />
+              </div>
+              <div className={styles.formField}>
+                <label>Cost (₹)</label>
+                <input type="number" min="0" step="0.01" value={editTransForm.cost_inr ?? ""} onChange={e => setEditTransForm({...editTransForm, cost_inr: e.target.value})} />
+              </div>
+              <div className={styles.formField}>
+                <label>Payment Mode</label>
+                <select value={editTransForm.pay_mode || "GPay"} onChange={e => setEditTransForm({...editTransForm, pay_mode: e.target.value})}>
+                  {PAY_MODES.map(m => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </div>
+              <div className={styles.formField.full}>
+                <label>Notes</label>
+                <textarea value={editTransForm.notes || ""} onChange={e => setEditTransForm({...editTransForm, notes: e.target.value})} rows={2} />
+              </div>
+              <div className={styles.formActions}>
+                <button type="button" className={styles.cancelBtn} onClick={() => setShowEditTransaction(false)}>Cancel</button>
+                <button type="submit" className={styles.saveBtn}>Save Changes</button>
               </div>
             </form>
       </ClientPageModal>

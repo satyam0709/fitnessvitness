@@ -16,6 +16,8 @@ const { fetchGoogleEvents } = require("../services/googleCalendarService");
 
 const GOOGLE_FETCH_TIMEOUT_MS = 3000;
 const OVERDUE_LIMIT = 200;
+const UPCOMING_LIMIT = 10;
+const UPCOMING_DAYS = 7;
 
 let fitnessTableExists = null;
 
@@ -77,6 +79,12 @@ function dayStart(date) {
 
 function dayEndExclusive(date) {
   return `${date} 23:59:59`;
+}
+
+function addDaysYmd(date, days) {
+  const d = new Date(`${date}T00:00:00`);
+  d.setDate(d.getDate() + days);
+  return formatYmd(d);
 }
 
 function toIsoDateTime(v) {
@@ -336,8 +344,8 @@ async function fetchReminders(date, userId) {
        )
        AND (r.assigned_to_user_id = ? OR r.user_id = ?)
      ORDER BY r.remind_at ASC
-     LIMIT ?`,
-    [dayStart(date), dayEndExclusive(date), dayStart(date), userId, userId, OVERDUE_LIMIT]
+     LIMIT ${OVERDUE_LIMIT}`,
+    [dayStart(date), dayEndExclusive(date), dayStart(date), userId, userId]
   );
   return rows.map((r) => ({
     ...r,
@@ -380,8 +388,8 @@ async function fetchLeadFollowups(date, userId, tenantId) {
      FROM leads l
      WHERE ${where.join(" AND ")}
      ORDER BY l.follow_up_date ASC
-     LIMIT ?`,
-    [...params, date, OVERDUE_LIMIT]
+     LIMIT ${OVERDUE_LIMIT}`,
+    [date, ...params]
   );
   return rows;
 }
@@ -397,12 +405,17 @@ async function fitnessClientsTableExists() {
 }
 
 async function fetchTasks(date, userId, tenantId) {
+  const hasClientCol = await hasColumn("tasks", "client_id");
   const hasTenant = await hasColumn("tasks", "tenant_id");
   const hasCategory = await hasColumn("tasks", "task_category");
   const hasType = await hasColumn("tasks", "task_type");
   const hasIsDeleted = await hasColumn("tasks", "is_deleted");
   const categorySelect = hasCategory ? ", t.task_category" : ", NULL AS task_category";
   const typeSelect = hasType ? ", t.task_type" : ", NULL AS task_type";
+  const clientJoin = hasClientCol ? "LEFT JOIN fitness_clients fc ON fc.id = t.client_id" : "";
+  const clientSelect = hasClientCol
+    ? ", fc.client_id, fc.full_name AS client_name"
+    : ", NULL AS client_id, NULL AS client_name";
 
   const where = ["t.due_date IS NOT NULL", "t.status NOT IN ('done','completed')"];
   const params = [];
@@ -419,13 +432,14 @@ async function fetchTasks(date, userId, tenantId) {
             t.id AS source_id, 'task' AS source_type,
             CASE WHEN DATE(t.due_date) < ? THEN 1 ELSE 0 END AS is_overdue
             ${categorySelect}
-            ${typeSelect},
-            NULL AS client_id, NULL AS client_name
+            ${typeSelect}
+            ${clientSelect}
      FROM tasks t
+     ${clientJoin}
      WHERE ${where.join(" AND ")}
      ORDER BY t.due_date ASC
-     LIMIT ?`,
-    [date, ...params, OVERDUE_LIMIT]
+     LIMIT ${OVERDUE_LIMIT}`,
+    [date, ...params]
   );
   return rows;
 }
@@ -525,8 +539,8 @@ async function fetchOpportunityFollowups(date, userId) {
        AND o.stage NOT IN ('closed_won', 'closed_lost')
        AND (o.owner_user_id = ? OR o.created_by = ?)
      ORDER BY o.followup_at ASC
-     LIMIT ?`,
-    [dayStart(date), dayEndExclusive(date), userId, userId, OVERDUE_LIMIT]
+     LIMIT ${OVERDUE_LIMIT}`,
+    [dayStart(date), dayEndExclusive(date), userId, userId]
   );
   return rows.map((r) => ({
     ...r,
@@ -564,6 +578,142 @@ async function fetchClientFollowups(date) {
        AND fc.next_due_date IS NOT NULL
        AND fc.next_due_date <= ?`,
     [date]
+  );
+  return rows;
+}
+
+async function fetchUpcomingTasks(date, userId, tenantId) {
+  const until = addDaysYmd(date, UPCOMING_DAYS);
+  const hasClientCol = await hasColumn("tasks", "client_id");
+  const hasTenant = await hasColumn("tasks", "tenant_id");
+  const hasCategory = await hasColumn("tasks", "task_category");
+  const hasType = await hasColumn("tasks", "task_type");
+  const hasIsDeleted = await hasColumn("tasks", "is_deleted");
+  const categorySelect = hasCategory ? ", t.task_category" : ", NULL AS task_category";
+  const typeSelect = hasType ? ", t.task_type" : ", NULL AS task_type";
+  const clientJoin = hasClientCol ? "LEFT JOIN fitness_clients fc ON fc.id = t.client_id" : "";
+  const clientSelect = hasClientCol
+    ? ", fc.client_id, fc.full_name AS client_name"
+    : ", NULL AS client_id, NULL AS client_name";
+  const where = [
+    "t.due_date IS NOT NULL",
+    "DATE(t.due_date) >= ?",
+    "DATE(t.due_date) <= ?",
+    "t.status NOT IN ('done','completed')",
+    "(t.assigned_to = ? OR t.created_by = ?)",
+  ];
+  const params = [date, until, userId, userId];
+  if (hasIsDeleted) where.unshift("t.is_deleted = 0");
+  if (hasTenant) {
+    where.push("(? IS NULL OR t.tenant_id = ?)");
+    params.push(tenantId, tenantId);
+  }
+
+  const [rows] = await pool.execute(
+    `SELECT t.id, t.title, t.description, t.due_date, t.priority, t.status, t.lead_id,
+            t.id AS source_id, 'task' AS source_type,
+            0 AS is_overdue
+            ${categorySelect}
+            ${typeSelect}
+            ${clientSelect}
+     FROM tasks t
+     ${clientJoin}
+     WHERE ${where.join(" AND ")}
+     ORDER BY t.due_date ASC
+     LIMIT ${UPCOMING_LIMIT}`,
+    params
+  );
+  return rows;
+}
+
+async function fetchUpcomingMeetings(date, userId) {
+  const until = addDaysYmd(date, UPCOMING_DAYS);
+  const hasClientCol = await hasColumn("meetings", "client_id");
+  const hasIsDeleted = await hasColumn("meetings", "is_deleted");
+  const clientJoin = hasClientCol
+    ? "LEFT JOIN fitness_clients fc ON fc.client_id = m.client_id"
+    : "";
+  const clientSelect = hasClientCol
+    ? ", m.client_id, fc.full_name AS client_name"
+    : ", NULL AS client_id, NULL AS client_name";
+  const where = [
+    "m.start_time >= ?",
+    "m.start_time <= ?",
+    "m.status = 'scheduled'",
+    "(m.assigned_to_user_id = ? OR m.organizer_id = ?)",
+  ];
+  if (hasIsDeleted) where.unshift("m.is_deleted = 0");
+  const [rows] = await pool.execute(
+    `SELECT m.id, m.title, m.description, m.start_time, m.end_time,
+            m.start_time AS due_date, m.status, m.meeting_type,
+            m.id AS source_id, 'meeting' AS source_type,
+            0 AS is_overdue, NULL AS priority
+            ${clientSelect}
+     FROM meetings m
+     ${clientJoin}
+     WHERE ${where.join(" AND ")}
+     ORDER BY m.start_time ASC
+     LIMIT ${UPCOMING_LIMIT}`,
+    [dayStart(date), dayEndExclusive(until), userId, userId]
+  );
+  return rows;
+}
+
+async function fetchUpcomingReminders(date, userId) {
+  const until = addDaysYmd(date, UPCOMING_DAYS);
+  const hasClientCol = await hasColumn("reminders", "client_id");
+  const hasCategoryCol = await hasColumn("reminders", "reminder_category");
+  const clientJoin = hasClientCol
+    ? "LEFT JOIN fitness_clients fc ON fc.client_id = r.client_id"
+    : "";
+  const clientSelect = hasClientCol
+    ? ", r.client_id, fc.full_name AS client_name"
+    : ", NULL AS client_id, NULL AS client_name";
+  const categorySelect = hasCategoryCol
+    ? ", r.reminder_category"
+    : ", r.reminder_type AS reminder_category";
+
+  const [rows] = await pool.execute(
+    `SELECT r.id, r.title, r.note, r.remind_at AS due_date, r.remind_at,
+            r.reminder_type, r.lead_id, l.name AS lead_name, r.is_done AS status,
+            r.id AS source_id, 'reminder' AS source_type, NULL AS priority,
+            0 AS is_overdue
+            ${categorySelect}
+            ${clientSelect}
+     FROM reminders r
+     LEFT JOIN leads l ON l.id = r.lead_id
+     ${clientJoin}
+     WHERE r.is_deleted = 0
+       AND r.is_done = 0
+       AND r.remind_at >= ?
+       AND r.remind_at <= ?
+       AND (r.assigned_to_user_id = ? OR r.user_id = ?)
+     ORDER BY r.remind_at ASC
+     LIMIT ${UPCOMING_LIMIT}`,
+    [dayStart(date), dayEndExclusive(until), userId, userId]
+  );
+  return rows.map((r) => ({ ...r, status: "pending" }));
+}
+
+async function fetchUpcomingClientFollowups(date) {
+  if (!(await fitnessClientsTableExists())) return [];
+  const until = addDaysYmd(date, UPCOMING_DAYS);
+  const [rows] = await pool.execute(
+    `SELECT fc.client_id AS id,
+            CONCAT('Follow-up due: ', fc.full_name) AS title,
+            fc.next_due_date AS due_date, fc.phone, fc.email,
+            fc.health_goal, fc.plan_type, fc.progress,
+            fc.client_id, fc.full_name AS client_name,
+            'client_followup' AS source_type, 0 AS is_overdue,
+            fc.client_id AS source_id, fc.status, NULL AS priority
+     FROM fitness_clients fc
+     WHERE fc.status = 'Active'
+       AND fc.next_due_date IS NOT NULL
+       AND fc.next_due_date >= ?
+       AND fc.next_due_date <= ?
+     ORDER BY fc.next_due_date ASC
+     LIMIT ${UPCOMING_LIMIT}`,
+    [date, until]
   );
   return rows;
 }
@@ -630,8 +780,17 @@ router.get("/", async (req, res) => {
     ];
     const items = sortItems(raw.map(normalizeItem));
     const summary = buildSummary(items);
+    const upcomingRaw = (
+      await Promise.all([
+        safeFetch("upcoming_tasks", () => fetchUpcomingTasks(date, userId, tenantId)),
+        safeFetch("upcoming_meetings", () => fetchUpcomingMeetings(date, userId)),
+        safeFetch("upcoming_reminders", () => fetchUpcomingReminders(date, userId)),
+        safeFetch("upcoming_client_followups", () => fetchUpcomingClientFollowups(date)),
+      ])
+    ).flat();
+    const upcoming = sortItems(upcomingRaw.map(normalizeItem)).slice(0, UPCOMING_LIMIT);
 
-    res.json({ success: true, date, summary, items });
+    res.json({ success: true, date, summary, items, upcoming });
   } catch (err) {
     console.error("GET /today:", err);
     res.status(500).json({ success: false, message: err.message });

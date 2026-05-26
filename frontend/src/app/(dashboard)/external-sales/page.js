@@ -356,7 +356,9 @@ export default function ExternalSalesPage() {
                     <td>
                       {b.referred_by_client_id ? (
                         <Link href={`/clients/${b.referred_by_client_id}`} className={styles.clientLink}>
-                          {b.referred_by_client_name || b.referred_by_client_id}
+                          {b.referred_by_client_name
+                            ? `${b.referred_by_client_name} (${b.referred_by_client_id})`
+                            : b.referred_by_client_id}
                         </Link>
                       ) : (
                         "—"

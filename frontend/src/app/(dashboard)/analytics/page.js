@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { getAllAnalytics } from "@/lib/fitnessApi";
 import styles from "./analytics.module.css";
 
@@ -169,7 +170,12 @@ export default function AnalyticsPage() {
               <tbody>
                 {referrers.map(r => (
                   <tr key={r.client_id}>
-                    <td><strong>{r.full_name}</strong> <span style={{fontSize: '11px', color: '#94a3b8'}}>{r.client_id}</span></td>
+                    <td>
+                      <Link href={`/clients/${r.client_id}`} className={styles.clientLink}>
+                        <strong>{r.full_name}</strong>{" "}
+                        <span style={{fontSize: '11px', color: '#94a3b8'}}>{r.client_id}</span>
+                      </Link>
+                    </td>
                     <td>
                       <span style={{color: '#f5c400'}}>
                         {[...Array(r.tier)].map((_, i) => <i key={i} className="fa-solid fa-star" style={{fontSize: '10px'}}></i>)}

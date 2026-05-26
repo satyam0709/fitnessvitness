@@ -259,6 +259,35 @@
   transform: translateY(-1px);
 }
 
+.actionBtn {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #004d7a;
+  padding: 0.4rem 0.75rem;
+  border-radius: 8px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.actionBtn:hover {
+  border-color: #3a86ff;
+  background: #eff6ff;
+}
+
+.profileLink {
+  color: inherit;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.profileLink:hover {
+  color: #3a86ff;
+  text-decoration: underline;
+}
+
 /* Notes Textarea */
 .notesArea {
   width: 100%;
