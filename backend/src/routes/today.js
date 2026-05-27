@@ -13,11 +13,12 @@ const {
   emitOpportunitiesChanged,
 } = require("../realtime/meetingsRealtime");
 const { fetchGoogleEvents } = require("../services/googleCalendarService");
+const { fetchAppleEvents, isConnected: isAppleCalendarConnected, getAppleCalendarSettings } = require("../services/appleCalendarService");
 
 const GOOGLE_FETCH_TIMEOUT_MS = 3000;
 const OVERDUE_LIMIT = 200;
-const UPCOMING_LIMIT = 10;
-const UPCOMING_DAYS = 7;
+const UPCOMING_LIMIT = 50;
+const UPCOMING_DAYS = 14;
 
 let fitnessTableExists = null;
 
@@ -186,6 +187,16 @@ function normalizeItem(row) {
         readOnly: true,
       };
       break;
+    case "apple_event":
+      item.meta = {
+        start_at: toIsoDateTime(row.start_at || row.due_date),
+        end_at: toIsoDateTime(row.end_at),
+        all_day: !!row.all_day,
+        apple_uid: row.apple_uid ?? row.source_id,
+        location: row.location ?? null,
+        readOnly: true,
+      };
+      break;
     case "opportunity_followup":
       item.meta = {
         followup_type: row.followup_type ?? null,
@@ -209,6 +220,14 @@ function normalizeItem(row) {
         transaction_type: row.transaction_type ?? row.type ?? null,
         transaction_date: toIsoDateTime(row.transaction_date),
         pay_mode: row.pay_mode ?? null,
+        received_inr: row.received_inr ?? null,
+      };
+      break;
+    case "fitness_client_task":
+      item.meta = {
+        task_description: row.task_description ?? row.title,
+        period: row.period ?? null,
+        notes: row.notes ?? null,
       };
       break;
     default:
@@ -240,9 +259,11 @@ function buildSummary(items) {
     task: 0,
     calendar_event: 0,
     google_event: 0,
+    apple_event: 0,
     opportunity_followup: 0,
     collection_followup: 0,
     fitness_payment_due: 0,
+    fitness_client_task: 0,
   };
   let overdue = 0;
   for (const it of items) {
@@ -475,6 +496,30 @@ async function fetchCalendarEvents(date, userId) {
   return rows;
 }
 
+async function fetchUpcomingCalendarEvents(date, userId) {
+  const [tables] = await pool.execute(
+    `SELECT 1 FROM information_schema.TABLES
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'crm_calendar_events' LIMIT 1`
+  );
+  if (!tables.length) return [];
+
+  const until = addDaysYmd(date, UPCOMING_DAYS);
+  const [rows] = await pool.execute(
+    `SELECT e.id, e.title, e.start_at, e.end_at, e.all_day, e.category,
+            e.start_at AS due_date, e.id AS source_id, 'calendar_event' AS source_type,
+            0 AS is_overdue, NULL AS priority, NULL AS client_id, NULL AS client_name,
+            'scheduled' AS status
+     FROM crm_calendar_events e
+     WHERE e.user_id = ?
+       AND e.start_at > ?
+       AND e.start_at <= ?
+     ORDER BY e.start_at ASC
+     LIMIT ${UPCOMING_LIMIT}`,
+    [userId, dayEndExclusive(date), dayEndExclusive(until)]
+  );
+  return rows;
+}
+
 async function getGoogleTokenForUser() {
   return null;
 }
@@ -515,6 +560,116 @@ async function fetchGoogleEventsForToday(date) {
     });
   } catch (err) {
     console.warn("GET /today google:", err.message);
+    return [];
+  }
+}
+
+async function fetchAppleEventsForToday(date, userId) {
+  try {
+    const settings = await getAppleCalendarSettings(userId);
+    if (!isAppleCalendarConnected(settings)) return [];
+    const events = await fetchAppleEvents(userId, date, date);
+    if (!Array.isArray(events)) return [];
+    return events.map((e) => {
+      const rawId = String(e.id || "").replace(/^apple(-caldav)?-/, "");
+      return {
+        id: rawId,
+        source_id: rawId,
+        title: e.title || "Apple Calendar event",
+        due_date: e.start,
+        start_at: e.start,
+        end_at: e.end,
+        all_day: e.allDay ? 1 : 0,
+        apple_uid: e.meta?.appleUid || rawId,
+        location: e.meta?.location || null,
+        source_type: "apple_event",
+        is_overdue: 0,
+        priority: null,
+        client_id: null,
+        client_name: null,
+        status: "scheduled",
+      };
+    });
+  } catch (err) {
+    console.warn("GET /today apple:", err.message);
+    return [];
+  }
+}
+
+async function fetchGoogleEventsUpcoming(date) {
+  const token = await getGoogleTokenForUser();
+  if (!token) return [];
+  const until = addDaysYmd(date, UPCOMING_DAYS);
+
+  const from = `${date}T23:59:59.999Z`;
+  const to = `${until}T23:59:59.999Z`;
+  const fetchPromise = fetchGoogleEvents(token, from, to);
+  const timeoutPromise = new Promise((resolve) => {
+    setTimeout(() => resolve([]), GOOGLE_FETCH_TIMEOUT_MS);
+  });
+
+  try {
+    const events = await Promise.race([fetchPromise, timeoutPromise]);
+    if (!Array.isArray(events)) return [];
+    return events.map((e) => {
+      const rawId = String(e.id || "").replace(/^google-/, "");
+      return {
+        id: rawId,
+        source_id: rawId,
+        title: e.title || "Google event",
+        due_date: e.start,
+        start_at: e.start,
+        end_at: e.end,
+        all_day: e.allDay ? 1 : 0,
+        google_event_id: rawId,
+        source_type: "google_event",
+        is_overdue: 0,
+        priority: null,
+        client_id: null,
+        client_name: null,
+        status: "scheduled",
+      };
+    });
+  } catch (err) {
+    console.warn("GET /today upcoming google:", err.message);
+    return [];
+  }
+}
+
+async function fetchAppleEventsUpcoming(date, userId) {
+  try {
+    const settings = await getAppleCalendarSettings(userId);
+    if (!isAppleCalendarConnected(settings)) return [];
+    const until = addDaysYmd(date, UPCOMING_DAYS);
+    const events = await fetchAppleEvents(userId, date, until);
+    if (!Array.isArray(events)) return [];
+    return events
+      .filter((e) => {
+        const s = new Date(e.start);
+        return !Number.isNaN(s.getTime()) && s > new Date(`${date}T23:59:59`);
+      })
+      .map((e) => {
+        const rawId = String(e.id || "").replace(/^apple(-caldav)?-/, "");
+        return {
+          id: rawId,
+          source_id: rawId,
+          title: e.title || "Apple Calendar event",
+          due_date: e.start,
+          start_at: e.start,
+          end_at: e.end,
+          all_day: e.allDay ? 1 : 0,
+          apple_uid: e.meta?.appleUid || rawId,
+          location: e.meta?.location || null,
+          source_type: "apple_event",
+          is_overdue: 0,
+          priority: null,
+          client_id: null,
+          client_name: null,
+          status: "scheduled",
+        };
+      });
+  } catch (err) {
+    console.warn("GET /today upcoming apple:", err.message);
     return [];
   }
 }
@@ -592,6 +747,42 @@ async function fetchClientFollowups(date) {
   return rows;
 }
 
+async function fitnessClientTasksTableExists() {
+  const [rows] = await pool.execute(
+    `SELECT 1 FROM information_schema.TABLES
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fitness_client_tasks' LIMIT 1`
+  );
+  return rows.length > 0;
+}
+
+async function fetchFitnessClientTasks(date) {
+  if (!(await fitnessClientTasksTableExists())) return [];
+
+  const [rows] = await pool.execute(
+    `SELECT t.id,
+            COALESCE(NULLIF(TRIM(t.task_description), ''), 'Client task') AS title,
+            t.task_description, t.due_date, t.priority, t.status, t.period, t.notes,
+            t.client_id, fc.full_name AS client_name,
+            t.id AS source_id, 'fitness_client_task' AS source_type,
+            CASE WHEN t.due_date < ? THEN 1 ELSE 0 END AS is_overdue,
+            CASE LOWER(TRIM(t.priority))
+              WHEN 'high' THEN 'high'
+              WHEN 'medium' THEN 'medium'
+              WHEN 'low' THEN 'low'
+              ELSE NULL
+            END AS priority_norm
+     FROM fitness_client_tasks t
+     LEFT JOIN fitness_clients fc ON fc.client_id = t.client_id
+     WHERE t.due_date IS NOT NULL
+       AND t.due_date <= ?
+       AND t.status NOT IN ('Done', 'Carried Forward')
+     ORDER BY t.due_date ASC
+     LIMIT ${OVERDUE_LIMIT}`,
+    [date, date]
+  );
+  return rows.map((r) => ({ ...r, priority: r.priority_norm || null }));
+}
+
 async function fetchPaymentDues(date) {
   if (!(await hasColumn("fitness_transactions", "payment_due_date"))) return [];
 
@@ -599,7 +790,7 @@ async function fetchPaymentDues(date) {
     `SELECT ft.id,
             CONCAT('Payment due: ', COALESCE(fc.full_name, ft.product_plan)) AS title,
             ft.payment_due_date AS due_date,
-            ft.pending_inr, ft.product_plan, ft.type AS transaction_type,
+            ft.pending_inr, ft.received_inr, ft.product_plan, ft.type AS transaction_type,
             ft.transaction_date, ft.pay_mode,
             ft.client_id, fc.full_name AS client_name,
             'fitness_payment_due' AS source_type,
@@ -608,6 +799,7 @@ async function fetchPaymentDues(date) {
      FROM fitness_transactions ft
      LEFT JOIN fitness_clients fc ON fc.client_id = ft.client_id
      WHERE ft.payment_due_date IS NOT NULL
+       AND COALESCE(ft.pending_inr, 0) > 0
        AND DATE(ft.payment_due_date) <= ?
      ORDER BY ft.payment_due_date ASC
      LIMIT ${OVERDUE_LIMIT}`,
@@ -631,7 +823,7 @@ async function fetchUpcomingTasks(date, userId, tenantId) {
     : ", NULL AS client_id, NULL AS client_name";
   const where = [
     "t.due_date IS NOT NULL",
-    "DATE(t.due_date) >= ?",
+    "DATE(t.due_date) > ?",
     "DATE(t.due_date) <= ?",
     "t.status NOT IN ('done','completed')",
     "(t.assigned_to = ? OR t.created_by = ?)",
@@ -671,7 +863,7 @@ async function fetchUpcomingMeetings(date, userId) {
     ? ", m.client_id, fc.full_name AS client_name"
     : ", NULL AS client_id, NULL AS client_name";
   const where = [
-    "m.start_time >= ?",
+    "m.start_time > ?",
     "m.start_time <= ?",
     "m.status = 'scheduled'",
     "(m.assigned_to_user_id = ? OR m.organizer_id = ?)",
@@ -688,7 +880,7 @@ async function fetchUpcomingMeetings(date, userId) {
      WHERE ${where.join(" AND ")}
      ORDER BY m.start_time ASC
      LIMIT ${UPCOMING_LIMIT}`,
-    [dayStart(date), dayEndExclusive(until), userId, userId]
+    [dayEndExclusive(date), dayEndExclusive(until), userId, userId]
   );
   return rows;
 }
@@ -719,12 +911,105 @@ async function fetchUpcomingReminders(date, userId) {
      ${clientJoin}
      WHERE r.is_deleted = 0
        AND r.is_done = 0
-       AND r.remind_at >= ?
+       AND r.remind_at > ?
        AND r.remind_at <= ?
        AND (r.assigned_to_user_id = ? OR r.user_id = ?)
      ORDER BY r.remind_at ASC
      LIMIT ${UPCOMING_LIMIT}`,
-    [dayStart(date), dayEndExclusive(until), userId, userId]
+    [dayEndExclusive(date), dayEndExclusive(until), userId, userId]
+  );
+  return rows.map((r) => ({ ...r, status: "pending" }));
+}
+
+async function fetchUpcomingTodos(date, userId, tenantId) {
+  const until = addDaysYmd(date, UPCOMING_DAYS);
+  const hasClientCol = await hasColumn("crm_todos", "client_id");
+  const hasCategoryCol = await hasColumn("crm_todos", "todo_category");
+  const clientJoin = hasClientCol
+    ? "LEFT JOIN fitness_clients fc ON fc.client_id = t.client_id"
+    : "";
+  const clientSelect = hasClientCol
+    ? ", t.client_id, fc.full_name AS client_name"
+    : ", NULL AS client_id, NULL AS client_name";
+  const categorySelect = hasCategoryCol ? ", t.todo_category" : ", NULL AS todo_category";
+
+  const [rows] = await pool.execute(
+    `SELECT t.id, t.body, t.body AS title, t.todo_date AS due_date, t.priority, t.status,
+            t.frequency, t.id AS source_id, 'todo' AS source_type, 0 AS is_overdue
+            ${categorySelect}
+            ${clientSelect}
+     FROM crm_todos t
+     ${clientJoin}
+     WHERE t.is_deleted = 0
+       AND t.status = 'pending'
+       AND (? IS NULL OR t.tenant_id = ?)
+       AND t.todo_date > ?
+       AND t.todo_date <= ?
+       AND (
+         t.created_by = ?
+         OR EXISTS (SELECT 1 FROM crm_todo_assignees a WHERE a.todo_id = t.id AND a.user_id = ?)
+       )
+     ORDER BY t.todo_date ASC
+     LIMIT ${UPCOMING_LIMIT}`,
+    [tenantId, tenantId, date, until, userId, userId]
+  );
+  return rows;
+}
+
+async function fetchUpcomingOpportunityFollowups(date, userId) {
+  if (!(await opportunitiesTableExists())) return [];
+  const until = addDaysYmd(date, UPCOMING_DAYS);
+  const hasVisitPurpose = await hasColumn("opportunities", "visit_purpose");
+  const hasPhone = await hasColumn("opportunities", "phone");
+  const visitSelect = hasVisitPurpose ? ", o.visit_purpose" : ", NULL AS visit_purpose";
+  const phoneSelect = hasPhone ? ", o.phone" : ", NULL AS phone";
+
+  const [rows] = await pool.execute(
+    `SELECT o.id, o.title, o.followup_at AS due_date, o.followup_type, o.stage AS status,
+            o.product_category, o.id AS source_id, 'opportunity_followup' AS source_type,
+            NULL AS priority, NULL AS client_id, NULL AS client_name
+            ${visitSelect}
+            ${phoneSelect},
+            0 AS is_overdue
+     FROM opportunities o
+     WHERE o.is_deleted = 0
+       AND o.followup_at IS NOT NULL
+       AND o.followup_at > ?
+       AND o.followup_at <= ?
+       AND o.stage NOT IN ('closed_won', 'closed_lost')
+       AND (o.owner_user_id = ? OR o.created_by = ?)
+     ORDER BY o.followup_at ASC
+     LIMIT ${UPCOMING_LIMIT}`,
+    [dayEndExclusive(date), dayEndExclusive(until), userId, userId]
+  );
+  return rows.map((r) => ({ ...r, status: "pending" }));
+}
+
+async function fetchUpcomingCollectionFollowups(date, userId, role) {
+  if (!(await collectionsTableExists())) return [];
+  const until = addDaysYmd(date, UPCOMING_DAYS);
+  const scope = canViewAll(role)
+    ? ""
+    : "AND (c.assigned_to = ? OR c.created_by = ?)";
+  const scopeParams = canViewAll(role) ? [] : [userId, userId];
+
+  const [rows] = await pool.execute(
+    `SELECT c.id, c.title, c.next_followup_date AS due_date, c.pending_inr, c.collection_type,
+            c.client_id, c.status, c.id AS source_id, 'collection_followup' AS source_type,
+            'high' AS priority, 0 AS is_overdue,
+            COALESCE(fc.full_name, eb.full_name) AS client_name
+     FROM fitness_collections c
+     LEFT JOIN fitness_clients fc ON fc.client_id = c.client_id
+     LEFT JOIN fitness_external_buyers eb ON eb.id = c.external_buyer_id
+     WHERE c.status IN ('open','partial')
+       AND c.pending_inr > 0
+       AND c.next_followup_date IS NOT NULL
+       AND c.next_followup_date > ?
+       AND c.next_followup_date <= ?
+       ${scope}
+     ORDER BY c.next_followup_date ASC
+     LIMIT ${UPCOMING_LIMIT}`,
+    [date, until, ...scopeParams]
   );
   return rows.map((r) => ({ ...r, status: "pending" }));
 }
@@ -743,13 +1028,42 @@ async function fetchUpcomingClientFollowups(date) {
      FROM fitness_clients fc
      WHERE fc.status = 'Active'
        AND fc.next_due_date IS NOT NULL
-       AND fc.next_due_date >= ?
+       AND fc.next_due_date > ?
        AND fc.next_due_date <= ?
      ORDER BY fc.next_due_date ASC
      LIMIT ${UPCOMING_LIMIT}`,
     [date, until]
   );
   return rows;
+}
+
+async function fetchUpcomingFitnessClientTasks(date) {
+  if (!(await fitnessClientTasksTableExists())) return [];
+  const until = addDaysYmd(date, UPCOMING_DAYS);
+  const [rows] = await pool.execute(
+    `SELECT t.id,
+            COALESCE(NULLIF(TRIM(t.task_description), ''), 'Client task') AS title,
+            t.task_description, t.due_date, t.priority, t.status, t.period, t.notes,
+            t.client_id, fc.full_name AS client_name,
+            t.id AS source_id, 'fitness_client_task' AS source_type,
+            0 AS is_overdue,
+            CASE LOWER(TRIM(t.priority))
+              WHEN 'high' THEN 'high'
+              WHEN 'medium' THEN 'medium'
+              WHEN 'low' THEN 'low'
+              ELSE NULL
+            END AS priority_norm
+     FROM fitness_client_tasks t
+     LEFT JOIN fitness_clients fc ON fc.client_id = t.client_id
+     WHERE t.due_date IS NOT NULL
+       AND t.due_date > ?
+       AND t.due_date <= ?
+       AND t.status NOT IN ('Done', 'Carried Forward')
+     ORDER BY t.due_date ASC
+     LIMIT ${UPCOMING_LIMIT}`,
+    [date, until]
+  );
+  return rows.map((r) => ({ ...r, priority: r.priority_norm || null }));
 }
 
 async function fetchUpcomingPaymentDues(date) {
@@ -759,7 +1073,7 @@ async function fetchUpcomingPaymentDues(date) {
     `SELECT ft.id,
             CONCAT('Payment due: ', COALESCE(fc.full_name, ft.product_plan)) AS title,
             ft.payment_due_date AS due_date,
-            ft.pending_inr, ft.product_plan, ft.type AS transaction_type,
+            ft.pending_inr, ft.received_inr, ft.product_plan, ft.type AS transaction_type,
             ft.transaction_date, ft.pay_mode,
             ft.client_id, fc.full_name AS client_name,
             'fitness_payment_due' AS source_type,
@@ -768,7 +1082,8 @@ async function fetchUpcomingPaymentDues(date) {
      FROM fitness_transactions ft
      LEFT JOIN fitness_clients fc ON fc.client_id = ft.client_id
      WHERE ft.payment_due_date IS NOT NULL
-       AND DATE(ft.payment_due_date) >= ?
+       AND COALESCE(ft.pending_inr, 0) > 0
+       AND DATE(ft.payment_due_date) > ?
        AND DATE(ft.payment_due_date) <= ?
      ORDER BY ft.payment_due_date ASC
      LIMIT ${UPCOMING_LIMIT}`,
@@ -806,9 +1121,11 @@ router.get("/", async (req, res) => {
       tasks,
       calendarEvents,
       googleEvents,
+      appleEvents,
       opportunityFollowups,
       collectionFollowups,
       paymentDues,
+      fitnessClientTasks,
     ] = await Promise.all([
       safeFetch("todos", () => fetchTodos(date, userId, tenantId)),
       safeFetch("meetings", () => fetchMeetings(date, userId)),
@@ -820,11 +1137,13 @@ router.get("/", async (req, res) => {
       includeGoogle
         ? safeFetch("google_events", () => fetchGoogleEventsForToday(date))
         : Promise.resolve([]),
+      safeFetch("apple_events", () => fetchAppleEventsForToday(date, userId)),
       safeFetch("opportunity_followup", () => fetchOpportunityFollowups(date, userId)),
       safeFetch("collection_followup", () =>
         fetchCollectionFollowups(date, userId, req.user?.role)
       ),
       safeFetch("fitness_payment_due", () => fetchPaymentDues(date)),
+      safeFetch("fitness_client_task", () => fetchFitnessClientTasks(date)),
     ]);
 
     const raw = [
@@ -836,18 +1155,33 @@ router.get("/", async (req, res) => {
       ...tasks,
       ...calendarEvents,
       ...googleEvents,
+      ...appleEvents,
       ...opportunityFollowups,
       ...collectionFollowups,
       ...paymentDues,
+      ...fitnessClientTasks,
     ];
     const items = sortItems(raw.map(normalizeItem));
     const summary = buildSummary(items);
     const upcomingRaw = (
       await Promise.all([
+        safeFetch("upcoming_todos", () => fetchUpcomingTodos(date, userId, tenantId)),
         safeFetch("upcoming_tasks", () => fetchUpcomingTasks(date, userId, tenantId)),
         safeFetch("upcoming_meetings", () => fetchUpcomingMeetings(date, userId)),
         safeFetch("upcoming_reminders", () => fetchUpcomingReminders(date, userId)),
+        safeFetch("upcoming_calendar_events", () => fetchUpcomingCalendarEvents(date, userId)),
+        includeGoogle
+          ? safeFetch("upcoming_google_events", () => fetchGoogleEventsUpcoming(date))
+          : Promise.resolve([]),
+        safeFetch("upcoming_apple_events", () => fetchAppleEventsUpcoming(date, userId)),
         safeFetch("upcoming_client_followups", () => fetchUpcomingClientFollowups(date)),
+        safeFetch("upcoming_opportunity_followups", () =>
+          fetchUpcomingOpportunityFollowups(date, userId)
+        ),
+        safeFetch("upcoming_collection_followups", () =>
+          fetchUpcomingCollectionFollowups(date, userId, req.user?.role)
+        ),
+        safeFetch("upcoming_fitness_client_tasks", () => fetchUpcomingFitnessClientTasks(date)),
         safeFetch("upcoming_payment_dues", () => fetchUpcomingPaymentDues(date)),
       ])
     ).flat();
@@ -1021,6 +1355,32 @@ async function markOpportunityFollowupDone(id, userId) {
   return { ok: true };
 }
 
+async function syncFitnessClientNextDueAfterTaskDone(taskId) {
+  const hasClientCol = await hasColumn("tasks", "client_id");
+  if (!hasClientCol || !(await fitnessClientsTableExists())) return false;
+
+  const [taskRows] = await pool.execute(
+    `SELECT t.client_id FROM tasks t WHERE t.id = ?`,
+    [taskId]
+  );
+  const fcInternalId = taskRows[0]?.client_id;
+  if (!fcInternalId) return false;
+
+  const [clients] = await pool.execute(
+    `SELECT client_id, follow_up_freq_days FROM fitness_clients WHERE id = ? AND status = 'Active'`,
+    [fcInternalId]
+  );
+  if (!clients[0]) return false;
+
+  const days = Number(clients[0].follow_up_freq_days) || 14;
+  await pool.execute(
+    `UPDATE fitness_clients SET next_due_date = DATE_ADD(CURDATE(), INTERVAL ? DAY), updated_at = NOW()
+     WHERE client_id = ?`,
+    [days, clients[0].client_id]
+  );
+  return true;
+}
+
 async function markTaskDone(id, userId, tenantId) {
   const hasTenant = await hasColumn("tasks", "tenant_id");
   const hasIsDeleted = await hasColumn("tasks", "is_deleted");
@@ -1045,7 +1405,43 @@ async function markTaskDone(id, userId, tenantId) {
     `UPDATE tasks SET status = 'done', updated_at = NOW() WHERE id = ?`,
     [id]
   );
-  return { ok: true };
+  const fitnessSynced = await syncFitnessClientNextDueAfterTaskDone(id);
+  return { ok: true, fitnessSynced };
+}
+
+async function markFitnessClientTaskDone(id) {
+  if (!(await fitnessClientTasksTableExists())) {
+    return { ok: false, status: 404 };
+  }
+  const today = formatYmd(new Date());
+  const [rows] = await pool.execute(
+    `SELECT id, client_id FROM fitness_client_tasks
+     WHERE id = ? AND status NOT IN ('Done', 'Carried Forward')`,
+    [id]
+  );
+  if (!rows[0]) return { ok: false, status: 404 };
+
+  await pool.execute(
+    `UPDATE fitness_client_tasks SET status = 'Done', completed_on = ? WHERE id = ?`,
+    [today, id]
+  );
+
+  const clientId = rows[0].client_id;
+  if (clientId) {
+    const [clients] = await pool.execute(
+      `SELECT follow_up_freq_days FROM fitness_clients WHERE client_id = ?`,
+      [clientId]
+    );
+    if (clients[0]) {
+      const days = Number(clients[0].follow_up_freq_days) || 14;
+      await pool.execute(
+        `UPDATE fitness_clients SET next_due_date = DATE_ADD(?, INTERVAL ? DAY), updated_at = NOW()
+         WHERE client_id = ?`,
+        [today, days, clientId]
+      );
+    }
+  }
+  return { ok: true, fitnessSynced: Boolean(clientId) };
 }
 
 const VALID_SOURCE_TYPES = new Set([
@@ -1058,6 +1454,7 @@ const VALID_SOURCE_TYPES = new Set([
   "opportunity_followup",
   "collection_followup",
   "fitness_payment_due",
+  "fitness_client_task",
 ]);
 
 router.patch("/:sourceType/:id/done", async (req, res) => {
@@ -1103,6 +1500,9 @@ router.patch("/:sourceType/:id/done", async (req, res) => {
       case "fitness_payment_due":
         result = await markPaymentDueDone(id);
         break;
+      case "fitness_client_task":
+        result = await markFitnessClientTaskDone(id);
+        break;
       default:
         result = { ok: false, status: 400 };
     }
@@ -1130,6 +1530,9 @@ router.patch("/:sourceType/:id/done", async (req, res) => {
     } else if (sourceType === "task") {
       emitCalendarChanged({ reason: "task_done", tenantId: tenantId || undefined });
       emitTasksChanged({ reason: "today_done", id, tenantId: tenantId || undefined });
+      if (result.fitnessSynced) {
+        emitFitnessChanged();
+      }
     } else if (sourceType === "opportunity_followup") {
       emitOpportunitiesChanged({ reason: "today_done", id });
     } else if (sourceType === "collection_followup") {
@@ -1137,6 +1540,12 @@ router.patch("/:sourceType/:id/done", async (req, res) => {
       emitCollectionsChanged({ reason: "today_done", id });
     } else if (sourceType === "fitness_payment_due") {
       emitFitnessChanged();
+    } else if (sourceType === "fitness_client_task") {
+      emitFitnessChanged();
+      if (result.fitnessSynced) {
+        emitTasksChanged({ reason: "client_task_done", id });
+        emitCalendarChanged({ reason: "client_task_done" });
+      }
     }
 
     res.json({ success: true, source_type: sourceType, id });

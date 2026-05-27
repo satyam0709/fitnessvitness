@@ -10,10 +10,11 @@ import styles from "./calendar.module.css";
 
 const HOUR_H = 64;
 
-const TYPE_ORDER = ["event", "lead", "reminder", "meeting", "holiday", "service", "task", "todo", "fitness"];
+const TYPE_ORDER = ["event", "apple", "lead", "reminder", "meeting", "holiday", "service", "task", "todo", "fitness"];
 
 const TYPE_STYLE = {
   event:    { label: "Event",    color: "#f97316" },
+  apple:    { label: "Apple",    color: "#007aff" },
   lead:     { label: "Lead",     color: "#22c55e" },
   reminder: { label: "Reminder", color: "#8b5cf6" },
   meeting:  { label: "Meeting",  color: "#ef4444" },
@@ -117,6 +118,13 @@ export default function CalendarPage() {
   const { isLoaded } = useAuth();
   const { showToast } = useToast();
   const [googleConnected, setGoogleConnected] = useState(false);
+  const [appleConnected, setAppleConnected] = useState(false);
+  const [appleModalOpen, setAppleModalOpen] = useState(false);
+  const [appleSaving, setAppleSaving] = useState(false);
+  const [appleCaldavEmail, setAppleCaldavEmail] = useState("");
+  const [appleCaldavPassword, setAppleCaldavPassword] = useState("");
+  const [appleIcalUrl, setAppleIcalUrl] = useState("");
+  const [appleLastError, setAppleLastError] = useState("");
 
   const [anchor, setAnchor] = useState(() => {
     const n = new Date();
@@ -186,10 +194,29 @@ export default function CalendarPage() {
     }
   }, [isLoaded]);
 
+  const loadAppleStatus = useCallback(async () => {
+    if (!isLoaded) return;
+    try {
+      const res = await apiFetch("/calendar/apple/status");
+      const json = await res.json().catch(() => ({}));
+      if (res.ok && json.success) {
+        setAppleConnected(!!json.connected);
+        setAppleCaldavEmail(json.caldav_username || "");
+        setAppleIcalUrl(json.ical_url || "");
+        setAppleLastError(json.last_error || "");
+      } else {
+        setAppleConnected(false);
+      }
+    } catch {
+      setAppleConnected(false);
+    }
+  }, [isLoaded]);
+
   useEffect(() => {
     void load();
     void loadGoogleStatus();
-  }, [load, loadGoogleStatus]);
+    void loadAppleStatus();
+  }, [load, loadGoogleStatus, loadAppleStatus]);
 
   useEffect(() => {
     if (!isLoaded) return undefined;
@@ -445,6 +472,79 @@ export default function CalendarPage() {
     }
   }
 
+  async function onConnectApple(e) {
+    e?.preventDefault?.();
+    const hasCaldav = Boolean(appleCaldavEmail.trim()) && Boolean(appleCaldavPassword.trim());
+    const hasIcal = Boolean(appleIcalUrl.trim());
+    if (!hasCaldav && !hasIcal) {
+      showToast("Enter iCloud email + app password, or a calendar subscription URL", "error");
+      return;
+    }
+    setAppleSaving(true);
+    try {
+      const res = await apiFetch("/calendar/apple/settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          caldav_username: appleCaldavEmail.trim() || undefined,
+          caldav_password: appleCaldavPassword.trim() || undefined,
+          ical_url: appleIcalUrl.trim() || undefined,
+          from,
+          to,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) {
+        throw new Error(json.message || "Could not connect Apple Calendar");
+      }
+      setAppleConnected(true);
+      setAppleCaldavPassword("");
+      setAppleLastError("");
+      setAppleModalOpen(false);
+      showToast(json.message || "Apple Calendar connected");
+      void load();
+      void loadAppleStatus();
+    } catch (err) {
+      showToast(err.message || "Apple Calendar connection failed", "error");
+    } finally {
+      setAppleSaving(false);
+    }
+  }
+
+  async function onSyncApple() {
+    try {
+      const res = await apiFetch("/calendar/apple/sync", {
+        method: "POST",
+        body: JSON.stringify({ from, to }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) {
+        throw new Error(json.message || "Apple sync failed");
+      }
+      showToast(json.message || "Apple Calendar synced");
+      void load();
+      void loadAppleStatus();
+    } catch (err) {
+      showToast(err.message || "Apple sync failed", "error");
+    }
+  }
+
+  async function onDisconnectApple() {
+    if (!window.confirm("Disconnect Apple Calendar from this CRM?")) return;
+    try {
+      const res = await apiFetch("/calendar/apple/disconnect", { method: "DELETE" });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) throw new Error(json.message || "Disconnect failed");
+      setAppleConnected(false);
+      setAppleCaldavEmail("");
+      setAppleIcalUrl("");
+      setAppleLastError("");
+      showToast("Apple Calendar disconnected");
+      void load();
+    } catch (err) {
+      showToast(err.message || "Disconnect failed", "error");
+    }
+  }
+
   async function deleteCustomEvent(meta) {
     const id = meta?.eventId;
     if (!id) return;
@@ -535,11 +635,35 @@ export default function CalendarPage() {
         </div>
       </div>
 
-      <div className={styles.actions} style={{ marginBottom: 16 }}>
+      <div className={styles.actions} style={{ marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
         <button type="button" className={styles.btnPrimary} onClick={() => void onSyncGoogle()}>
           <i className="fas fa-calendar-alt" style={{ marginRight: 8 }} />
           {googleConnected ? "Resync Google Calendar" : "Sync Google Calendar"}
         </button>
+        {appleConnected ? (
+          <>
+            <button type="button" className={styles.btnPrimary} onClick={() => void onSyncApple()}>
+              <i className="fab fa-apple" style={{ marginRight: 8 }} />
+              Resync Apple Calendar
+            </button>
+            <button
+              type="button"
+              className={styles.btnGhost}
+              onClick={() => setAppleModalOpen(true)}
+            >
+              Apple settings
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            className={styles.btnPrimary}
+            onClick={() => setAppleModalOpen(true)}
+          >
+            <i className="fab fa-apple" style={{ marginRight: 8 }} />
+            Connect Apple Calendar
+          </button>
+        )}
         <button
           type="button"
           className={styles.btnPrimary}
@@ -549,6 +673,11 @@ export default function CalendarPage() {
           Add Event
         </button>
       </div>
+      {appleLastError && appleConnected ? (
+        <p className={styles.err} style={{ marginTop: -8, marginBottom: 12 }}>
+          Last Apple sync issue: {appleLastError}
+        </p>
+      ) : null}
 
       {err ? <p className={styles.err}>{err}</p> : null}
 
@@ -995,6 +1124,104 @@ export default function CalendarPage() {
               </div>
             </form>
           </aside>
+        </div>
+      ) : null}
+
+      {appleModalOpen ? (
+        <div
+          className={styles.monthModalOverlay}
+          role="presentation"
+          onClick={(e) => e.target === e.currentTarget && setAppleModalOpen(false)}
+        >
+          <div className={styles.monthModal} role="dialog" aria-labelledby="apple-modal-title">
+            <div className={styles.monthModalHead}>
+              <h2 id="apple-modal-title">Apple Calendar</h2>
+              <button
+                type="button"
+                className={styles.iconBtn}
+                aria-label="Close"
+                onClick={() => setAppleModalOpen(false)}
+              >
+                <i className="fas fa-times" />
+              </button>
+            </div>
+            <form className={styles.monthModalBody} onSubmit={(e) => void onConnectApple(e)}>
+              <p className={styles.drawerHint}>
+                Events from your Apple / iCloud calendar appear in this CRM calendar automatically
+                (read-only). Use <strong>iCloud CalDAV</strong> for your full private calendar, or a
+                <strong> subscription URL</strong> if you share a calendar publicly from iCloud.
+              </p>
+
+              <h3 className={styles.appleSectionTitle}>Option A — iCloud (recommended)</h3>
+              <ol className={styles.appleSteps}>
+                <li>
+                  Open{" "}
+                  <a href="https://appleid.apple.com" target="_blank" rel="noreferrer">
+                    appleid.apple.com
+                  </a>{" "}
+                  → Sign-In and Security → <strong>App-Specific Passwords</strong> → generate one
+                  for this CRM.
+                </li>
+                <li>Enter your Apple ID email and that password below.</li>
+              </ol>
+              <div className={styles.field}>
+                <label htmlFor="apple-email">Apple ID (email)</label>
+                <input
+                  id="apple-email"
+                  type="email"
+                  autoComplete="username"
+                  value={appleCaldavEmail}
+                  onChange={(e) => setAppleCaldavEmail(e.target.value)}
+                  placeholder="you@icloud.com"
+                />
+              </div>
+              <div className={styles.field}>
+                <label htmlFor="apple-pass">App-specific password</label>
+                <input
+                  id="apple-pass"
+                  type="password"
+                  autoComplete="new-password"
+                  value={appleCaldavPassword}
+                  onChange={(e) => setAppleCaldavPassword(e.target.value)}
+                  placeholder={appleConnected ? "Leave blank to keep existing" : "xxxx-xxxx-xxxx-xxxx"}
+                />
+              </div>
+
+              <h3 className={styles.appleSectionTitle}>Option B — Subscription URL (optional)</h3>
+              <p className={styles.drawerHint}>
+                On iCloud.com → Calendar → select a calendar → Share → Public Calendar → copy the
+                link (often starts with <code>webcal://</code>).
+              </p>
+              <div className={styles.field}>
+                <label htmlFor="apple-ical">Calendar subscription URL</label>
+                <input
+                  id="apple-ical"
+                  type="url"
+                  value={appleIcalUrl}
+                  onChange={(e) => setAppleIcalUrl(e.target.value)}
+                  placeholder="webcal://pXX-caldav.icloud.com/..."
+                />
+              </div>
+
+              <div className={styles.drawerActions}>
+                {appleConnected ? (
+                  <button
+                    type="button"
+                    className={styles.btnGhost}
+                    onClick={() => void onDisconnectApple()}
+                  >
+                    Disconnect
+                  </button>
+                ) : null}
+                <button type="button" className={styles.btnGhost} onClick={() => setAppleModalOpen(false)}>
+                  Cancel
+                </button>
+                <button type="submit" className={styles.btnPrimary} disabled={appleSaving}>
+                  {appleSaving ? "Connecting…" : appleConnected ? "Save & resync" : "Connect"}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       ) : null}
 

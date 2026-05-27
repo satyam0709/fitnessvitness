@@ -33,9 +33,11 @@ const SOURCE_META = {
   opportunity_followup: { icon: "🎯", label: "Prospect", border: styles.borderProspect },
   collection_followup: { icon: "💰", label: "Payment due", border: styles.borderPayment },
   fitness_payment_due: { icon: "💰", label: "Payment due", border: styles.borderPayment },
+  fitness_client_task: { icon: "📋", label: "Client task", border: styles.borderTask },
+  apple_event: { icon: "🍎", label: "Apple Calendar", border: styles.borderEvent },
 };
 
-const READ_ONLY_TYPES = new Set(["calendar_event", "google_event"]);
+const READ_ONLY_TYPES = new Set(["calendar_event", "google_event", "apple_event"]);
 
 function formatHeaderDate() {
   return new Date().toLocaleDateString("en-GB", {
@@ -64,6 +66,7 @@ function formatDueTime(item) {
     "meeting",
     "calendar_event",
     "google_event",
+    "apple_event",
     "task",
     "opportunity_followup",
   ]);
@@ -103,8 +106,11 @@ function getViewHref(item) {
       return `/collections?highlight=${id}`;
     case "fitness_payment_due":
       return item.client_id ? `/clients/${item.client_id}` : `/business-tracker?highlight=${id}`;
+    case "fitness_client_task":
+      return item.client_id ? `/clients/${item.client_id}` : "/clients";
     case "calendar_event":
-    case "google_event": {
+    case "google_event":
+    case "apple_event": {
       const d = item.due_date ? String(item.due_date).slice(0, 10) : "";
       return d ? `/calendar?date=${d}` : "/calendar";
     }
@@ -118,11 +124,17 @@ function matchesFilter(item, filterId) {
   if (filterId === "calls") {
     return item.source_type === "lead_followup" || item.source_type === "client_followup";
   }
-  if (filterId === "tasks") return item.source_type === "task";
+  if (filterId === "tasks") {
+    return item.source_type === "task" || item.source_type === "fitness_client_task";
+  }
   if (filterId === "meetings") return item.source_type === "meeting";
   if (filterId === "reminders") return item.source_type === "reminder";
   if (filterId === "events") {
-    return item.source_type === "calendar_event" || item.source_type === "google_event";
+    return (
+      item.source_type === "calendar_event" ||
+      item.source_type === "google_event" ||
+      item.source_type === "apple_event"
+    );
   }
   if (filterId === "checkins") return item.source_type === "client_followup";
   if (filterId === "plans") {

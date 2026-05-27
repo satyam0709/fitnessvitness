@@ -1,4 +1,6 @@
 const { pool } = require("../config/database");
+const { tableExists } = require("../utils/schemaHelpers");
+const { ensureCalendarCrmTables } = require("../utils/ensureCalendarCrmTables");
 const {
   emitCalendarChanged,
   emitTodosChanged,
@@ -13,6 +15,14 @@ const {
   updateGoogleEvent,
   deleteGoogleEvent,
 } = require("../services/googleCalendarService");
+const {
+  fetchAppleEvents,
+  getAppleCalendarSettings,
+  saveAppleCalendarSettings,
+  disconnectAppleCalendar,
+  testAppleConnection,
+  isConnected: isAppleCalendarConnected,
+} = require("../services/appleCalendarService");
 
 const ALLOWED_CATEGORY = new Set(["event", "holiday", "service"]);
 
@@ -105,26 +115,62 @@ async function countUserScheduledItemsOnDate(uid, ymd) {
      WHERE user_id = ? AND start_at <= ? AND COALESCE(end_at, start_at) >= ?`,
     [uid, re, rs]
   );
-  const [[b]] = await pool.query(
-    `SELECT COUNT(*) AS c FROM meetings m
-     WHERE m.is_deleted = 0
-       AND (m.organizer_id = ? OR EXISTS (SELECT 1 FROM meeting_attendees ma WHERE ma.meeting_id = m.id AND ma.user_id = ?))
-       AND m.start_time >= ? AND m.start_time <= ?`,
-    [uid, uid, rs, re]
-  );
-  const [[c]] = await pool.query(
-    `SELECT COUNT(*) AS c FROM reminders r
-     WHERE r.is_deleted = 0 AND (r.user_id = ? OR r.assigned_to_user_id = ?)
-       AND r.remind_at >= ? AND r.remind_at <= ? AND r.is_done = 0`,
-    [uid, uid, rs, re]
-  );
-  const [[d]] = await pool.query(
-    `SELECT COUNT(*) AS c FROM tasks t
-     WHERE (t.assigned_to = ? OR t.created_by = ?)
-       AND t.due_date IS NOT NULL AND DATE(t.due_date) = ?
-       AND t.status NOT IN ('done','completed')`,
-    [uid, uid, ymd]
-  );
+  let b = 0;
+  if (await tableExists("meetings")) {
+    try {
+      const [[row]] = await pool.query(
+        `SELECT COUNT(*) AS c FROM meetings m
+         WHERE m.is_deleted = 0
+           AND (m.organizer_id = ? OR EXISTS (SELECT 1 FROM meeting_attendees ma WHERE ma.meeting_id = m.id AND ma.user_id = ?))
+           AND m.start_time >= ? AND m.start_time <= ?`,
+        [uid, uid, rs, re]
+      );
+      b = Number(row?.c || 0);
+    } catch (e) {
+      const msg = String(e?.message || "");
+      if (!/Unknown column ['`]?is_deleted/i.test(msg)) throw e;
+      const [[row]] = await pool.query(
+        `SELECT COUNT(*) AS c FROM meetings m
+         WHERE (m.organizer_id = ? OR EXISTS (SELECT 1 FROM meeting_attendees ma WHERE ma.meeting_id = m.id AND ma.user_id = ?))
+           AND m.start_time >= ? AND m.start_time <= ?`,
+        [uid, uid, rs, re]
+      );
+      b = Number(row?.c || 0);
+    }
+  }
+  let c = 0;
+  if (await tableExists("reminders")) {
+    try {
+      const [[row]] = await pool.query(
+        `SELECT COUNT(*) AS c FROM reminders r
+         WHERE r.is_deleted = 0 AND (r.user_id = ? OR r.assigned_to_user_id = ?)
+           AND r.remind_at >= ? AND r.remind_at <= ? AND r.is_done = 0`,
+        [uid, uid, rs, re]
+      );
+      c = Number(row?.c || 0);
+    } catch (e) {
+      const msg = String(e?.message || "");
+      if (!/Unknown column ['`]?is_deleted/i.test(msg)) throw e;
+      const [[row]] = await pool.query(
+        `SELECT COUNT(*) AS c FROM reminders r
+         WHERE (r.user_id = ? OR r.assigned_to_user_id = ?)
+           AND r.remind_at >= ? AND r.remind_at <= ? AND r.is_done = 0`,
+        [uid, uid, rs, re]
+      );
+      c = Number(row?.c || 0);
+    }
+  }
+  let d = 0;
+  if (await tableExists("tasks")) {
+    const [[row]] = await pool.query(
+      `SELECT COUNT(*) AS c FROM tasks t
+       WHERE (t.assigned_to = ? OR t.created_by = ?)
+         AND t.due_date IS NOT NULL AND DATE(t.due_date) = ?
+         AND t.status NOT IN ('done','completed')`,
+      [uid, uid, ymd]
+    );
+    d = Number(row?.c || 0);
+  }
   const [[e]] = await pool.query(
     `SELECT COUNT(*) AS c FROM crm_todos t
      WHERE t.is_deleted = 0
@@ -132,18 +178,22 @@ async function countUserScheduledItemsOnDate(uid, ymd) {
        AND t.todo_date = ? AND t.status = 'pending'`,
     [uid, uid, ymd]
   );
-  const [[f]] = await pool.query(
-    `SELECT COUNT(*) AS c FROM leads l
-     WHERE (l.created_by = ? OR l.assigned_to = ?) AND l.follow_up_date = ?`,
-    [uid, uid, ymd]
-  );
+  let f = 0;
+  if (await tableExists("leads")) {
+    const [[row]] = await pool.query(
+      `SELECT COUNT(*) AS c FROM leads l
+       WHERE (l.created_by = ? OR l.assigned_to = ?) AND l.follow_up_date = ?`,
+      [uid, uid, ymd]
+    );
+    f = Number(row?.c || 0);
+  }
   return (
     Number(a?.c || 0) +
-    Number(b?.c || 0) +
-    Number(c?.c || 0) +
-    Number(d?.c || 0) +
+    b +
+    c +
+    d +
     Number(e?.c || 0) +
-    Number(f?.c || 0)
+    f
   );
 }
 
@@ -213,76 +263,135 @@ async function getCalendarFeed(req, res) {
       });
     });
 
-    const [meetRows] = await pool.query(
-      `SELECT m.id, m.title, m.start_time, m.end_time, m.status, m.lead_id, l.name AS lead_name
-       FROM meetings m
-       LEFT JOIN leads l ON l.id = m.lead_id
-       WHERE (m.organizer_id = ? OR EXISTS (
-         SELECT 1 FROM meeting_attendees ma WHERE ma.meeting_id = m.id AND ma.user_id = ?
-       ))
-       AND m.start_time >= ? AND m.start_time <= ?`,
-      [uid, uid, rs, re]
-    );
-    meetRows.forEach((m) => {
-      items.push({
-        id: `meeting-${m.id}`,
-        source: "meeting",
-        type: "meeting",
-        title: m.title || "Meeting",
-        description: m.lead_name ? `Lead: ${m.lead_name}` : null,
-        start: m.start_time,
-        end: m.end_time || m.start_time,
-        allDay: false,
-        meta: { meetingId: m.id, status: m.status, leadId: m.lead_id },
+    if (await tableExists("meetings")) {
+      const meetSqlWithLeads = `SELECT m.id, m.title, m.start_time, m.end_time, m.status, m.lead_id, l.name AS lead_name
+           FROM meetings m
+           LEFT JOIN leads l ON l.id = m.lead_id
+           WHERE (m.organizer_id = ? OR EXISTS (
+             SELECT 1 FROM meeting_attendees ma WHERE ma.meeting_id = m.id AND ma.user_id = ?
+           ))
+           AND m.start_time >= ? AND m.start_time <= ?`;
+      const meetSqlNoLeads = `SELECT m.id, m.title, m.start_time, m.end_time, m.status, m.lead_id, NULL AS lead_name
+           FROM meetings m
+           WHERE (m.organizer_id = ? OR EXISTS (
+             SELECT 1 FROM meeting_attendees ma WHERE ma.meeting_id = m.id AND ma.user_id = ?
+           ))
+           AND m.start_time >= ? AND m.start_time <= ?`;
+      const params = [uid, uid, rs, re];
+      let meetRows;
+      try {
+        if (await tableExists("leads")) {
+          const [rows] = await pool.query(meetSqlWithLeads, params);
+          meetRows = rows;
+        } else {
+          const [rows] = await pool.query(meetSqlNoLeads, params);
+          meetRows = rows;
+        }
+      } catch (e) {
+        const msg = String(e?.message || "");
+        const code = e?.code;
+        if (
+          code === "ER_NO_SUCH_TABLE" ||
+          /Table ['`]?[^' ]*\.?['`]?leads['`]? doesn't exist/i.test(msg) ||
+          /doesn't exist.*\bleads\b/i.test(msg)
+        ) {
+          const [rows] = await pool.query(meetSqlNoLeads, params);
+          meetRows = rows;
+        } else {
+          throw e;
+        }
+      }
+      meetRows.forEach((m) => {
+        items.push({
+          id: `meeting-${m.id}`,
+          source: "meeting",
+          type: "meeting",
+          title: m.title || "Meeting",
+          description: m.lead_name ? `Lead: ${m.lead_name}` : null,
+          start: m.start_time,
+          end: m.end_time || m.start_time,
+          allDay: false,
+          meta: { meetingId: m.id, status: m.status, leadId: m.lead_id },
+        });
       });
-    });
+    }
 
-    const [remRows] = await pool.query(
-      `SELECT r.id, r.title, r.note, r.remind_at, r.lead_id, l.name AS lead_name
-       FROM reminders r
-       LEFT JOIN leads l ON l.id = r.lead_id
-       WHERE (r.user_id = ? OR r.assigned_to_user_id = ?)
-         AND r.remind_at >= ? AND r.remind_at <= ?
-         AND r.is_done = 0`,
-      [uid, uid, rs, re]
-    );
-    remRows.forEach((r) => {
-      items.push({
-        id: `reminder-${r.id}`,
-        source: "reminder",
-        type: "reminder",
-        title: r.title || "Reminder",
-        description: r.note || (r.lead_name ? `Lead: ${r.lead_name}` : null),
-        start: r.remind_at,
-        end: r.remind_at,
-        allDay: false,
-        meta: { reminderId: r.id, leadId: r.lead_id },
+    if (await tableExists("reminders")) {
+      const remSqlWithLeads = `SELECT r.id, r.title, r.note, r.remind_at, r.lead_id, l.name AS lead_name
+           FROM reminders r
+           LEFT JOIN leads l ON l.id = r.lead_id
+           WHERE (r.user_id = ? OR r.assigned_to_user_id = ?)
+             AND r.remind_at >= ? AND r.remind_at <= ?
+             AND r.is_done = 0`;
+      const remSqlNoLeads = `SELECT r.id, r.title, r.note, r.remind_at, r.lead_id, NULL AS lead_name
+           FROM reminders r
+           WHERE (r.user_id = ? OR r.assigned_to_user_id = ?)
+             AND r.remind_at >= ? AND r.remind_at <= ?
+             AND r.is_done = 0`;
+      const remParams = [uid, uid, rs, re];
+      let remRows;
+      try {
+        if (await tableExists("leads")) {
+          const [rows] = await pool.query(remSqlWithLeads, remParams);
+          remRows = rows;
+        } else {
+          const [rows] = await pool.query(remSqlNoLeads, remParams);
+          remRows = rows;
+        }
+      } catch (e) {
+        const msg = String(e?.message || "");
+        const code = e?.code;
+        if (
+          code === "ER_NO_SUCH_TABLE" ||
+          /Table ['`]?[^' ]*\.?['`]?leads['`]? doesn't exist/i.test(msg) ||
+          /doesn't exist.*\bleads\b/i.test(msg)
+        ) {
+          const [rows] = await pool.query(remSqlNoLeads, remParams);
+          remRows = rows;
+        } else {
+          throw e;
+        }
+      }
+      remRows.forEach((r) => {
+        items.push({
+          id: `reminder-${r.id}`,
+          source: "reminder",
+          type: "reminder",
+          title: r.title || "Reminder",
+          description: r.note || (r.lead_name ? `Lead: ${r.lead_name}` : null),
+          start: r.remind_at,
+          end: r.remind_at,
+          allDay: false,
+          meta: { reminderId: r.id, leadId: r.lead_id },
+        });
       });
-    });
+    }
 
-    const [taskRows] = await pool.query(
-      `SELECT t.id, t.title, t.due_date, t.status, t.priority
-       FROM tasks t
-       WHERE (t.assigned_to = ? OR t.created_by = ?)
-         AND t.due_date IS NOT NULL
-         AND DATE(t.due_date) >= ? AND DATE(t.due_date) <= ?
-         AND t.status NOT IN ('done','completed')`,
-      [uid, uid, from, to]
-    );
-    taskRows.forEach((t) => {
-      const d = String(t.due_date).slice(0, 10);
-      items.push({
-        id: `task-${t.id}`,
-        source: "task",
-        type: "task",
-        title: t.title || "Task",
-        description: t.priority ? `Priority: ${t.priority}` : null,
-        start: `${d}T09:00:00`,
-        end: `${d}T09:30:00`,
-        allDay: true,
-        meta: { taskId: t.id, status: t.status },
+    if (await tableExists("tasks")) {
+      const [taskRows] = await pool.query(
+        `SELECT t.id, t.title, t.due_date, t.status, t.priority
+         FROM tasks t
+         WHERE (t.assigned_to = ? OR t.created_by = ?)
+           AND t.due_date IS NOT NULL
+           AND DATE(t.due_date) >= ? AND DATE(t.due_date) <= ?
+           AND t.status NOT IN ('done','completed')`,
+        [uid, uid, from, to]
+      );
+      taskRows.forEach((t) => {
+        const d = String(t.due_date).slice(0, 10);
+        items.push({
+          id: `task-${t.id}`,
+          source: "task",
+          type: "task",
+          title: t.title || "Task",
+          description: t.priority ? `Priority: ${t.priority}` : null,
+          start: `${d}T09:00:00`,
+          end: `${d}T09:30:00`,
+          allDay: true,
+          meta: { taskId: t.id, status: t.status },
+        });
       });
-    });
+    }
 
     const [todoRows] = await pool.query(
       `SELECT t.id, t.body, t.todo_date, t.status, t.priority
@@ -443,29 +552,31 @@ async function getCalendarFeed(req, res) {
       });
     });
 
-    const [leadRows] = await pool.query(
-      `SELECT l.id, l.name, l.follow_up_date, l.status
-       FROM leads l
-       WHERE (l.created_by = ? OR l.assigned_to = ?)
-         AND l.follow_up_date IS NOT NULL
-         AND l.follow_up_date >= ? AND l.follow_up_date <= ?
-       LIMIT 500`,
-      [uid, uid, from, to]
-    );
-    leadRows.forEach((l) => {
-      const d = String(l.follow_up_date).slice(0, 10);
-      items.push({
-        id: `lead-${l.id}`,
-        source: "lead",
-        type: "lead",
-        title: l.name ? `Follow-up: ${l.name}` : "Lead follow-up",
-        description: l.status ? `Status: ${l.status}` : null,
-        start: `${d}T00:00:00`,
-        end: `${d}T23:59:59`,
-        allDay: true,
-        meta: { leadId: l.id },
+    if (await tableExists("leads")) {
+      const [leadRows] = await pool.query(
+        `SELECT l.id, l.name, l.follow_up_date, l.status
+         FROM leads l
+         WHERE (l.created_by = ? OR l.assigned_to = ?)
+           AND l.follow_up_date IS NOT NULL
+           AND l.follow_up_date >= ? AND l.follow_up_date <= ?
+         LIMIT 500`,
+        [uid, uid, from, to]
+      );
+      leadRows.forEach((l) => {
+        const d = String(l.follow_up_date).slice(0, 10);
+        items.push({
+          id: `lead-${l.id}`,
+          source: "lead",
+          type: "lead",
+          title: l.name ? `Follow-up: ${l.name}` : "Lead follow-up",
+          description: l.status ? `Status: ${l.status}` : null,
+          start: `${d}T00:00:00`,
+          end: `${d}T23:59:59`,
+          allDay: true,
+          meta: { leadId: l.id },
+        });
       });
-    });
+    }
 
     items.push(...staticHolidaysInRange(from, to));
 
@@ -478,6 +589,13 @@ async function getCalendarFeed(req, res) {
     } catch (e) {
       // Keep CRM feed functional even if Google integration is unavailable.
       console.warn("calendar google fetch:", e.message);
+    }
+
+    try {
+      const appleEvents = await fetchAppleEvents(uid, from, to);
+      items.push(...appleEvents);
+    } catch (e) {
+      console.warn("calendar apple fetch:", e.message);
     }
 
     items.sort((a, b) => new Date(a.start) - new Date(b.start));
@@ -709,6 +827,123 @@ async function postGoogleCalendarSync(req, res) {
   }
 }
 
+async function getAppleCalendarStatus(req, res) {
+  try {
+    const uid = Number(req.user?.id);
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+
+    const settings = await getAppleCalendarSettings(uid);
+    const connected = isAppleCalendarConnected(settings);
+    return res.json({
+      success: true,
+      connected,
+      has_ical: Boolean(String(settings?.ical_url || "").trim()),
+      has_caldav: Boolean(String(settings?.caldav_username || "").trim()),
+      caldav_username: settings?.caldav_username || null,
+      ical_url: settings?.ical_url || null,
+      last_sync_at: settings?.last_sync_at || null,
+      last_error: settings?.last_error || null,
+      message: connected
+        ? "Apple Calendar is connected. Events load automatically with your calendar."
+        : "Connect Apple Calendar with iCloud (recommended) or a subscription URL.",
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+async function putAppleCalendarSettings(req, res) {
+  try {
+    const uid = Number(req.user?.id);
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+
+    const body = req.body || {};
+    const hasIcal = Boolean(String(body.ical_url || "").trim());
+    const hasCaldav =
+      Boolean(String(body.caldav_username || "").trim()) &&
+      Boolean(String(body.caldav_password || "").trim());
+
+    const existing = await getAppleCalendarSettings(uid);
+    const keepCaldav =
+      Boolean(String(body.caldav_username || "").trim()) &&
+      !String(body.caldav_password || "").trim() &&
+      Boolean(String(existing?.caldav_password || "").trim());
+
+    if (!hasIcal && !hasCaldav && !keepCaldav) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Provide iCloud Apple ID + app-specific password, or a calendar subscription (webcal) URL.",
+      });
+    }
+
+    await saveAppleCalendarSettings(uid, body);
+
+    const from = parseYmd(body.from) || new Date().toISOString().slice(0, 10);
+    const d = new Date(`${from}T00:00:00`);
+    d.setDate(d.getDate() + 30);
+    const to =
+      parseYmd(body.to) ||
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+    const test = await testAppleConnection(uid, {
+      ...body,
+      caldav_password: body.caldav_password || existing?.caldav_password,
+      from,
+      to,
+    });
+
+    emitCalendarChanged({ reason: "apple_connected", userId: uid });
+    return res.json({
+      success: true,
+      connected: true,
+      count: test.count,
+      message: `Apple Calendar connected. Found ${test.count} event(s) in the next 30 days.`,
+    });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+}
+
+async function deleteAppleCalendarDisconnect(req, res) {
+  try {
+    const uid = Number(req.user?.id);
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+    await disconnectAppleCalendar(uid);
+    emitCalendarChanged({ reason: "apple_disconnected", userId: uid });
+    return res.json({ success: true, message: "Apple Calendar disconnected." });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+async function postAppleCalendarSync(req, res) {
+  try {
+    const uid = Number(req.user?.id);
+    if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
+
+    const settings = await getAppleCalendarSettings(uid);
+    if (!isAppleCalendarConnected(settings)) {
+      return res.status(400).json({
+        success: false,
+        message: "Apple Calendar is not connected. Add iCloud or subscription URL first.",
+      });
+    }
+
+    const from = parseYmd(req.body?.from || req.query?.from) || new Date().toISOString().slice(0, 10);
+    const to = parseYmd(req.body?.to || req.query?.to) || from;
+    const events = await fetchAppleEvents(uid, from, to);
+    emitCalendarChanged({ reason: "apple_sync", userId: uid });
+    return res.json({
+      success: true,
+      count: Array.isArray(events) ? events.length : 0,
+      message: `Synced ${events.length} Apple Calendar event(s) for this range.`,
+    });
+  } catch (err) {
+    return res.status(400).json({ success: false, message: err.message });
+  }
+}
+
 let calendarMeetingRecurrenceChecked = false;
 async function ensureMeetingsRecurrenceColumnCal() {
   if (calendarMeetingRecurrenceChecked) return;
@@ -742,6 +977,8 @@ async function quickAddFromCalendar(req, res) {
     const tenantId = req.user?.tenantId ?? null;
     const b = req.body || {};
     const kind = String(b.kind || "").toLowerCase().trim();
+
+    await ensureCalendarCrmTables(pool);
 
     if (kind === "calendar_event" || kind === "event") {
       req.body = {
@@ -848,6 +1085,13 @@ async function quickAddFromCalendar(req, res) {
     }
 
     if (kind === "todo") {
+      if (!(await tableExists("crm_todos"))) {
+        return res.status(503).json({
+          success: false,
+          message:
+            "To-dos storage is not ready yet. Restart the server so the database schema can finish, then try again.",
+        });
+      }
       const body = String(b.body || b.title || "").trim();
       if (!body) return res.status(400).json({ success: false, message: "body or title is required" });
       let todoDate = b.todo_date ? String(b.todo_date).slice(0, 10) : null;
@@ -894,6 +1138,13 @@ async function quickAddFromCalendar(req, res) {
     }
 
     if (kind === "lead_followup") {
+      if (!(await tableExists("leads"))) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Leads are not enabled in this database. Use Tasks, Reminders, or Meetings instead, or run full CRM database setup.",
+        });
+      }
       const leadId = Number(b.lead_id);
       if (!Number.isFinite(leadId) || leadId <= 0) {
         return res.status(400).json({ success: false, message: "lead_id is required" });
@@ -922,6 +1173,16 @@ async function quickAddFromCalendar(req, res) {
         "Invalid kind. Use: event, task, reminder, meeting, todo, lead_followup",
     });
   } catch (err) {
+    const code = err?.code;
+    const msg = String(err?.message || "");
+    if (code === "ER_NO_SUCH_TABLE" || /doesn't exist/i.test(msg)) {
+      console.error("quickAddFromCalendar (missing table):", msg);
+      return res.status(503).json({
+        success: false,
+        message:
+          "A required database table is missing. Restart the backend once so migrations can run, then try again.",
+      });
+    }
     console.error("quickAddFromCalendar", err);
     return res.status(500).json({ success: false, message: err.message });
   }
@@ -934,5 +1195,9 @@ module.exports = {
   deleteCalendarEvent,
   getGoogleCalendarStatus,
   postGoogleCalendarSync,
+  getAppleCalendarStatus,
+  putAppleCalendarSettings,
+  deleteAppleCalendarDisconnect,
+  postAppleCalendarSync,
   quickAddFromCalendar,
 };

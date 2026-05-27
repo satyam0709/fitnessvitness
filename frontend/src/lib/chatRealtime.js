@@ -120,6 +120,7 @@ async function ensureSocket(getTokenFn) {
     s.on("notes:changed", (payload) => safeNotifyCrm("notes:changed", payload));
     s.on("opportunities:changed", (payload) => safeNotifyCrm("opportunities:changed", payload));
     s.on("collections:changed", (payload) => safeNotifyCrm("collections:changed", payload));
+    s.on("invoices:changed", (payload) => safeNotifyCrm("invoices:changed", payload));
 
     s.io.on("reconnect_attempt", async () => {
       try {

@@ -1,4 +1,5 @@
 const { pool } = require("../config/database");
+const { tableExists } = require("../utils/schemaHelpers");
 
 function monthKey(dateLike) {
   const d = new Date(dateLike);
@@ -49,15 +50,52 @@ async function getPipelineReport(req, res) {
       params.push(to);
     }
 
-    const [rows] = await pool.query(
-      `SELECT status, COUNT(*) AS count, COALESCE(SUM(0), 0) AS total_value
-       FROM leads
-       WHERE ${where.join(" AND ")}
-       GROUP BY status
-       ORDER BY count DESC`,
-      params
-    );
-    res.json({ success: true, data: rows });
+    if (await tableExists("leads")) {
+      const [rows] = await pool.query(
+        `SELECT status, COUNT(*) AS count, COALESCE(SUM(0), 0) AS total_value
+         FROM leads
+         WHERE ${where.join(" AND ")}
+         GROUP BY status
+         ORDER BY count DESC`,
+        params
+      );
+      return res.json({ success: true, data: rows });
+    }
+
+    if (await tableExists("opportunities")) {
+      try {
+        const oppWhere = [];
+        const oppParams = [];
+        const [colRows] = await pool.execute(
+          `SELECT 1 FROM information_schema.COLUMNS
+           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'opportunities' AND COLUMN_NAME = 'is_deleted'
+           LIMIT 1`
+        );
+        if (colRows.length) oppWhere.push("is_deleted = 0");
+        if (from) {
+          oppWhere.push("created_at >= ?");
+          oppParams.push(from);
+        }
+        if (to) {
+          oppWhere.push("created_at <= ?");
+          oppParams.push(to);
+        }
+        const whereSql = oppWhere.length ? oppWhere.join(" AND ") : "1=1";
+        const [rows] = await pool.query(
+          `SELECT stage AS status, COUNT(*) AS count, 0 AS total_value
+           FROM opportunities
+           WHERE ${whereSql}
+           GROUP BY stage
+           ORDER BY count DESC`,
+          oppParams
+        );
+        return res.json({ success: true, data: rows });
+      } catch (oppErr) {
+        console.warn("getPipelineReport opportunities:", oppErr.message);
+      }
+    }
+
+    return res.json({ success: true, data: [] });
   } catch (err) {
     console.error("getPipelineReport", err);
     res.status(500).json({ success: false, message: err.message });

@@ -29,7 +29,7 @@ export default function Footer() {
           <div>
             <div className={styles.logoRow}>
               <Image
-                src="/assets/logo.png"
+                src="/assets/logo.svg"
                 alt="RND CRM Logo"
                 width={150}
                 height={60}

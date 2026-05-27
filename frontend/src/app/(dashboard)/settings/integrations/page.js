@@ -70,8 +70,8 @@ export default function SettingsIntegrationsPage() {
           <h1 className={styles.title}>Integrations</h1>
           <p className={styles.sub}>Toggle inbound sources stored in your workspace (API: GET/POST /v2/integrations).</p>
         </div>
-        <Link href="/settings/web?tab=integrations" className={styles.btnGhost}>
-          Web settings
+        <Link href="/invoice/sales" className={styles.btnGhost}>
+          Invoices
         </Link>
       </div>
 

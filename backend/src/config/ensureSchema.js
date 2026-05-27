@@ -6,6 +6,8 @@ let fitnessClientPatchesDone = false;
 let collectionsPatchesDone = false;
 let tasksClientDuePatchesDone = false;
 let fitnessTransactionPaymentDuePatchesDone = false;
+let invoicesTablePatchesDone = false;
+let companySettingsPatchesDone = false;
 const CURRENT_SCHEMA_VERSION = 10;
 
 /** Lightweight patches that must run even when schema version is current. */
@@ -225,6 +227,161 @@ async function ensureUsersRoleOwnerPatch() {
   }
 }
 
+/** Runs every startup and on-demand from invoice APIs — not gated by schema v10. */
+async function ensureInvoicesTable() {
+  const [had] = await pool.execute(
+    `SELECT 1 FROM information_schema.tables
+     WHERE table_schema = DATABASE() AND table_name = 'invoices' LIMIT 1`
+  );
+  if (had.length && invoicesTablePatchesDone) return;
+
+  try {
+    if (!had.length) {
+      await pool.execute(`
+        CREATE TABLE IF NOT EXISTS invoices (
+          id             INT UNSIGNED NOT NULL AUTO_INCREMENT,
+          invoice_number VARCHAR(50)  NOT NULL,
+          type           ENUM('sales','purchase','proforma') NOT NULL DEFAULT 'sales',
+          customer_name  VARCHAR(150) DEFAULT NULL,
+          customer_email VARCHAR(150) DEFAULT NULL,
+          customer_phone VARCHAR(32)  DEFAULT NULL,
+          vendor_name    VARCHAR(150) DEFAULT NULL,
+          invoice_date   DATE         NOT NULL,
+          due_date       DATE         DEFAULT NULL,
+          subtotal       DECIMAL(12,2) DEFAULT 0,
+          tax            DECIMAL(12,2) DEFAULT 0,
+          total          DECIMAL(12,2) DEFAULT 0,
+          status         ENUM('draft','sent','paid','cancelled') NOT NULL DEFAULT 'draft',
+          notes          TEXT         DEFAULT NULL,
+          gst_mode       VARCHAR(20)  NOT NULL DEFAULT 'none',
+          currency       VARCHAR(10)  NOT NULL DEFAULT 'INR',
+          customer_id    INT UNSIGNED DEFAULT NULL,
+          line_items_json LONGTEXT DEFAULT NULL,
+          source_type    VARCHAR(50)  DEFAULT NULL,
+          source_id      INT UNSIGNED DEFAULT NULL,
+          payment_meta_json LONGTEXT DEFAULT NULL,
+          is_deleted     TINYINT(1)   NOT NULL DEFAULT 0,
+          deleted_at     DATETIME     DEFAULT NULL,
+          created_by     INT UNSIGNED DEFAULT NULL,
+          created_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          UNIQUE KEY uk_invoice_number (invoice_number),
+          KEY idx_type (type),
+          KEY idx_status (status),
+          KEY idx_invoices_is_deleted (is_deleted),
+          KEY idx_invoices_created_by (created_by)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+      `);
+      console.log("Migration: created invoices table");
+    }
+
+    const invCols = [
+      { column: "gst_mode", definition: "VARCHAR(20) NOT NULL DEFAULT 'none'" },
+      { column: "currency", definition: "VARCHAR(10) NOT NULL DEFAULT 'INR'" },
+      { column: "customer_id", definition: "INT UNSIGNED DEFAULT NULL" },
+      { column: "line_items_json", definition: "LONGTEXT DEFAULT NULL" },
+      { column: "source_type", definition: "VARCHAR(50) DEFAULT NULL" },
+      { column: "source_id", definition: "INT UNSIGNED DEFAULT NULL" },
+      { column: "customer_phone", definition: "VARCHAR(32) DEFAULT NULL" },
+      { column: "payment_meta_json", definition: "LONGTEXT DEFAULT NULL" },
+      { column: "is_deleted", definition: "TINYINT(1) NOT NULL DEFAULT 0" },
+      { column: "deleted_at", definition: "DATETIME DEFAULT NULL" },
+    ];
+    for (const { column, definition } of invCols) {
+      const [c] = await pool.execute(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'invoices' AND COLUMN_NAME = ?`,
+        [column]
+      );
+      if (c.length === 0) {
+        await pool.execute(`ALTER TABLE invoices ADD COLUMN \`${column}\` ${definition}`);
+        console.log(`Migration: added invoices.${column}`);
+      }
+    }
+
+    const [check] = await pool.execute(
+      `SELECT 1 FROM information_schema.tables
+       WHERE table_schema = DATABASE() AND table_name = 'invoices' LIMIT 1`
+    );
+    if (!check.length) {
+      throw new Error("invoices table missing after migration");
+    }
+    invoicesTablePatchesDone = true;
+  } catch (e) {
+    invoicesTablePatchesDone = false;
+    console.error("ensureInvoicesTable:", e.message);
+    throw e;
+  }
+}
+
+/** Runs every startup — company_settings lives in the v10-skipped migration block. */
+async function ensureCompanySettingsTable() {
+  if (companySettingsPatchesDone) return;
+  companySettingsPatchesDone = true;
+
+  try {
+    const [had] = await pool.execute(
+      `SELECT 1 FROM information_schema.tables
+       WHERE table_schema = DATABASE() AND table_name = 'company_settings' LIMIT 1`
+    );
+
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS company_settings (
+        id                 INT UNSIGNED NOT NULL DEFAULT 1,
+        company_name       VARCHAR(200) DEFAULT NULL,
+        website            VARCHAR(300) DEFAULT NULL,
+        phone              VARCHAR(20)  DEFAULT NULL,
+        email              VARCHAR(150) DEFAULT NULL,
+        address            TEXT         DEFAULT NULL,
+        city               VARCHAR(100) DEFAULT NULL,
+        state              VARCHAR(100) DEFAULT NULL,
+        country            VARCHAR(100) DEFAULT 'India',
+        gst_number         VARCHAR(50)  DEFAULT NULL,
+        pan_number         VARCHAR(50)  DEFAULT NULL,
+        invoice_bank_name  VARCHAR(200) DEFAULT NULL,
+        invoice_account_no VARCHAR(64)  DEFAULT NULL,
+        invoice_ifsc       VARCHAR(20)  DEFAULT NULL,
+        invoice_currency   VARCHAR(10)  NOT NULL DEFAULT 'INR',
+        invoice_gst_mode   VARCHAR(20)  NOT NULL DEFAULT 'none',
+        updated_at         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+
+    if (!had.length) {
+      console.log("Migration: created company_settings table");
+      await pool.execute(
+        `INSERT INTO company_settings (id, country, invoice_currency, invoice_gst_mode)
+         VALUES (1, 'India', 'INR', 'none')
+         ON DUPLICATE KEY UPDATE id = id`
+      );
+    }
+
+    const csCols = [
+      { column: "invoice_bank_name", definition: "VARCHAR(200) DEFAULT NULL" },
+      { column: "invoice_account_no", definition: "VARCHAR(64) DEFAULT NULL" },
+      { column: "invoice_ifsc", definition: "VARCHAR(20) DEFAULT NULL" },
+      { column: "invoice_currency", definition: "VARCHAR(10) NOT NULL DEFAULT 'INR'" },
+      { column: "invoice_gst_mode", definition: "VARCHAR(20) NOT NULL DEFAULT 'none'" },
+    ];
+    for (const { column, definition } of csCols) {
+      const [c] = await pool.execute(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'company_settings' AND COLUMN_NAME = ?`,
+        [column]
+      );
+      if (c.length === 0) {
+        await pool.execute(`ALTER TABLE company_settings ADD COLUMN \`${column}\` ${definition}`);
+        console.log(`Migration: added company_settings.${column}`);
+      }
+    }
+  } catch (e) {
+    companySettingsPatchesDone = false;
+    console.warn("ensureCompanySettingsTable:", e.message);
+  }
+}
+
 async function ensureSchema() {
   await ensureFitnessClientPatches();
   await ensureCollectionsPatches();
@@ -232,6 +389,8 @@ async function ensureSchema() {
   await ensureUsersRoleOwnerPatch();
   await ensureTasksClientDuePatches();
   await ensureFitnessTransactionPaymentDuePatches();
+  await ensureInvoicesTable();
+  await ensureCompanySettingsTable();
   if (schemaEnsured) return;
   // FIXED: 5 schema version gate to skip expensive startup checks
   await pool.execute(`
@@ -781,9 +940,6 @@ async function ensureSchema() {
   const [[{ ucnt }]] = await pool.execute(
     "SELECT COUNT(*) AS ucnt FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'users'"
   );
-  const [[{ lcnt }]] = await pool.execute(
-    "SELECT COUNT(*) AS lcnt FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'leads'"
-  );
   // ── chat (requires users) ───────────────────────────────────────────────────
   if (Number(ucnt) > 0) {
     await pool.execute(`
@@ -840,159 +996,11 @@ async function ensureSchema() {
     } catch (_) {}
   }
 
-  if (Number(ucnt) > 0 && Number(lcnt) > 0) {
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS reminders (
-      id                    INT UNSIGNED NOT NULL AUTO_INCREMENT,
-      user_id               INT UNSIGNED NOT NULL,
-      title                 VARCHAR(200) NOT NULL,
-      note                  TEXT         DEFAULT NULL,
-      remind_at             DATETIME     NOT NULL,
-      lead_id               INT UNSIGNED DEFAULT NULL,
-      assigned_to_user_id   INT UNSIGNED DEFAULT NULL,
-      reminder_type         VARCHAR(50)  NOT NULL DEFAULT 'general',
-      is_done               TINYINT(1)   NOT NULL DEFAULT 0,
-      created_at            DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      KEY idx_user_id (user_id),
-      KEY idx_remind_at (remind_at),
-      KEY idx_assigned_to (assigned_to_user_id),
-      KEY idx_reminder_type (reminder_type),
-      CONSTRAINT fk_reminder_user FOREIGN KEY (user_id)  REFERENCES users(id),
-      CONSTRAINT fk_reminder_lead FOREIGN KEY (lead_id)  REFERENCES leads(id) ON DELETE SET NULL,
-      CONSTRAINT fk_reminder_assignee FOREIGN KEY (assigned_to_user_id) REFERENCES users(id) ON DELETE SET NULL
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-
-  const [reminderTable] = await pool.execute("SHOW TABLES LIKE 'reminders'");
-  if (reminderTable.length > 0) {
-    const reminderCols = [
-      { column: "assigned_to_user_id", definition: "INT UNSIGNED DEFAULT NULL" },
-      { column: "reminder_type", definition: "VARCHAR(50) NOT NULL DEFAULT 'general'" },
-    ];
-    for (const { column, definition } of reminderCols) {
-      const [c] = await pool.execute(
-        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'reminders' AND COLUMN_NAME = ?`,
-        [column]
-      );
-      if (c.length === 0) {
-        await pool.execute(`ALTER TABLE reminders ADD COLUMN \`${column}\` ${definition}`);
-        console.log(`Migration: added reminders.${column}`);
-      }
-    }
-    const [fkRem] = await pool.execute(
-      `SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS
-       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'reminders' AND CONSTRAINT_NAME = 'fk_reminder_assignee'`
-    );
-    if (fkRem.length === 0) {
-      try {
-        await pool.execute(
-          "ALTER TABLE reminders ADD INDEX idx_assigned_to (assigned_to_user_id)"
-        );
-      } catch {
-        /* index may already exist */
-      }
-      try {
-        await pool.execute(
-          `ALTER TABLE reminders ADD CONSTRAINT fk_reminder_assignee
-           FOREIGN KEY (assigned_to_user_id) REFERENCES users(id) ON DELETE SET NULL`
-        );
-        console.log("Migration: added reminders.fk_reminder_assignee");
-      } catch (e) {
-        console.warn("Migration: could not add fk_reminder_assignee:", e.message);
-      }
-    }
-  }
-
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS meetings (
-      id                    INT UNSIGNED NOT NULL AUTO_INCREMENT,
-      title                 VARCHAR(200) NOT NULL,
-      description           TEXT         DEFAULT NULL,
-      start_time            DATETIME     NOT NULL,
-      end_time              DATETIME     DEFAULT NULL,
-      location              VARCHAR(300) DEFAULT NULL,
-      meet_link             VARCHAR(500) DEFAULT NULL,
-      meeting_type          VARCHAR(50)  NOT NULL DEFAULT 'virtual',
-      status                VARCHAR(50)  NOT NULL DEFAULT 'scheduled',
-      organizer_id          INT UNSIGNED NOT NULL,
-      assigned_to_user_id   INT UNSIGNED DEFAULT NULL,
-      lead_id               INT UNSIGNED DEFAULT NULL,
-      recurrence            VARCHAR(50)  NOT NULL DEFAULT 'once',
-      created_at            DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (id),
-      KEY idx_organizer (organizer_id),
-      KEY idx_meeting_assignee (assigned_to_user_id),
-      KEY idx_start_time (start_time),
-      KEY idx_meeting_type (meeting_type),
-      KEY idx_meeting_status (status),
-      KEY idx_meeting_recurrence (recurrence),
-      CONSTRAINT fk_meeting_organizer FOREIGN KEY (organizer_id) REFERENCES users(id),
-      CONSTRAINT fk_meeting_assignee FOREIGN KEY (assigned_to_user_id) REFERENCES users(id) ON DELETE SET NULL,
-      CONSTRAINT fk_meeting_lead      FOREIGN KEY (lead_id)      REFERENCES leads(id) ON DELETE SET NULL
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS meeting_attendees (
-      meeting_id INT UNSIGNED NOT NULL,
-      user_id    INT UNSIGNED NOT NULL,
-      PRIMARY KEY (meeting_id, user_id),
-      CONSTRAINT fk_ma_meeting FOREIGN KEY (meeting_id) REFERENCES meetings(id) ON DELETE CASCADE,
-      CONSTRAINT fk_ma_user    FOREIGN KEY (user_id)    REFERENCES users(id)    ON DELETE CASCADE
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-
-  const [meetTbl] = await pool.execute("SHOW TABLES LIKE 'meetings'");
-  if (meetTbl.length > 0) {
-    const meetingCols = [
-      { column: "meeting_type", definition: "VARCHAR(50) NOT NULL DEFAULT 'virtual'" },
-      { column: "status", definition: "VARCHAR(50) NOT NULL DEFAULT 'scheduled'" },
-      { column: "assigned_to_user_id", definition: "INT UNSIGNED DEFAULT NULL" },
-      { column: "recurrence", definition: "VARCHAR(50) NOT NULL DEFAULT 'once'" },
-    ];
-    for (const { column, definition } of meetingCols) {
-      const [c] = await pool.execute(
-        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'meetings' AND COLUMN_NAME = ?`,
-        [column]
-      );
-      if (c.length === 0) {
-        await pool.execute(`ALTER TABLE meetings ADD COLUMN \`${column}\` ${definition}`);
-        console.log(`Migration: added meetings.${column}`);
-      }
-    }
-    try {
-      await pool.execute("ALTER TABLE meetings ADD INDEX idx_meeting_assignee (assigned_to_user_id)");
-    } catch {
-      /* index may exist */
-    }
-    const [fkMa] = await pool.execute(
-      `SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS
-       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'meetings' AND CONSTRAINT_NAME = 'fk_meeting_assignee'`
-    );
-    if (fkMa.length === 0) {
-      try {
-        await pool.execute(
-          `ALTER TABLE meetings ADD CONSTRAINT fk_meeting_assignee
-           FOREIGN KEY (assigned_to_user_id) REFERENCES users(id) ON DELETE SET NULL`
-        );
-        console.log("Migration: added meetings.fk_meeting_assignee");
-      } catch (e) {
-        console.warn("Migration: could not add fk_meeting_assignee:", e.message);
-      }
-    }
-    try {
-      await pool.execute("ALTER TABLE meetings ADD INDEX idx_meeting_recurrence (recurrence)");
-    } catch {
-      /* index may exist */
-    }
-  }
+  if (Number(ucnt) > 0) {
+    const { ensureCalendarCrmTables } = require("../utils/ensureCalendarCrmTables");
+    await ensureCalendarCrmTables(pool);
   } else {
-    console.warn(
-      "ensureSchema: skipped reminders/meetings tables (users or leads table missing — run full DB setup)."
-    );
+    console.warn("ensureSchema: skipped calendar CRM tables (users table missing).");
   }
 
   // ── company_settings: invoice payment fields ─────────────────────────────
@@ -1020,7 +1028,44 @@ async function ensureSchema() {
     }
   }
 
-  // ── invoices: line items + GST + customer link ────────────────────────────
+  // ── invoices: core table + line items + GST + customer link ───────────────
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS invoices (
+      id             INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      invoice_number VARCHAR(50)  NOT NULL,
+      type           ENUM('sales','purchase','proforma') NOT NULL DEFAULT 'sales',
+      customer_name  VARCHAR(150) DEFAULT NULL,
+      customer_email VARCHAR(150) DEFAULT NULL,
+      customer_phone VARCHAR(32)  DEFAULT NULL,
+      vendor_name    VARCHAR(150) DEFAULT NULL,
+      invoice_date   DATE         NOT NULL,
+      due_date       DATE         DEFAULT NULL,
+      subtotal       DECIMAL(12,2) DEFAULT 0,
+      tax            DECIMAL(12,2) DEFAULT 0,
+      total          DECIMAL(12,2) DEFAULT 0,
+      status         ENUM('draft','sent','paid','cancelled') NOT NULL DEFAULT 'draft',
+      notes          TEXT         DEFAULT NULL,
+      gst_mode       VARCHAR(20)  NOT NULL DEFAULT 'none',
+      currency       VARCHAR(10)  NOT NULL DEFAULT 'INR',
+      customer_id    INT UNSIGNED DEFAULT NULL,
+      line_items_json JSON DEFAULT NULL,
+      source_type    VARCHAR(50)  DEFAULT NULL,
+      source_id      INT UNSIGNED DEFAULT NULL,
+      payment_meta_json JSON DEFAULT NULL,
+      is_deleted     TINYINT(1)   NOT NULL DEFAULT 0,
+      deleted_at     DATETIME     DEFAULT NULL,
+      created_by     INT UNSIGNED DEFAULT NULL,
+      created_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uk_invoice_number (invoice_number),
+      KEY idx_type (type),
+      KEY idx_status (status),
+      KEY idx_invoices_is_deleted (is_deleted),
+      KEY idx_invoices_created_by (created_by)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+
   const [invTables] = await pool.execute(
     "SELECT TABLE_NAME FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'invoices'"
   );
@@ -1030,6 +1075,10 @@ async function ensureSchema() {
       { column: "currency", definition: "VARCHAR(10) NOT NULL DEFAULT 'INR'" },
       { column: "customer_id", definition: "INT UNSIGNED DEFAULT NULL" },
       { column: "line_items_json", definition: "JSON DEFAULT NULL" },
+      { column: "source_type", definition: "VARCHAR(50) DEFAULT NULL" },
+      { column: "source_id", definition: "INT UNSIGNED DEFAULT NULL" },
+      { column: "customer_phone", definition: "VARCHAR(32) DEFAULT NULL" },
+      { column: "payment_meta_json", definition: "JSON DEFAULT NULL" },
     ];
     for (const { column, definition } of invCols) {
       const [c] = await pool.execute(
@@ -1827,6 +1876,13 @@ async function ensureSchema() {
     );
   }
 
+  try {
+    const { ensureAppleCalendarTable } = require("../services/appleCalendarService");
+    await ensureAppleCalendarTable();
+  } catch (e) {
+    console.warn("ensureAppleCalendarTable:", e.message);
+  }
+
   await pool.execute(
     `INSERT INTO _schema_meta (\`key\`, value) VALUES ('version', ?)
      ON DUPLICATE KEY UPDATE value = ?`,
@@ -1837,4 +1893,4 @@ async function ensureSchema() {
 }
 
 
-module.exports = { ensureSchema };
+module.exports = { ensureSchema, ensureInvoicesTable };

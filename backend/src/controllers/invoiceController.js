@@ -1,4 +1,23 @@
 const { pool } = require("../config/database");
+const { getReceiptPayload } = require("../services/paymentReceiptService");
+const { emitInvoicesChanged } = require("../realtime/meetingsRealtime");
+const { getUsersColumns, userNameSelectSql } = require("../utils/userSchema");
+const { ensureInvoicesTable } = require("../config/ensureSchema");
+
+async function requireInvoicesTable(res) {
+  try {
+    await ensureInvoicesTable();
+    return true;
+  } catch (err) {
+    console.error("requireInvoicesTable", err.message);
+    res.status(503).json({
+      success: false,
+      message:
+        "Invoices database table is not ready. Restart the API server or run: node scripts/ensure-invoices-table.js",
+    });
+    return false;
+  }
+}
 
 /** Integers for LIMIT/OFFSET — NaN/Infinity breaks mysqld_stmt_execute on some MySQL builds. */
 function safePageLimit(page, limit) {
@@ -39,6 +58,7 @@ async function getInvoices(req, res) {
     if (!req.user?.id) {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
+    if (!(await requireInvoicesTable(res))) return;
 
     const typeRaw = (queryScalar(req.query.type, "sales") || "sales").toLowerCase();
     const type = ["sales", "purchase", "proforma"].includes(typeRaw) ? typeRaw : "sales";
@@ -56,9 +76,18 @@ async function getInvoices(req, res) {
     const dateFrom = queryDate(req.query.date_from);
     const dateTo = queryDate(req.query.date_to);
     const gstBucket = (queryScalar(req.query.gst_bucket, "all") || "all").toLowerCase();
+    const kind = (queryScalar(req.query.kind, "all") || "all").toLowerCase();
 
     const conditions = ["i.type = ?", "i.is_deleted = 0"];
     const params = [type];
+
+    if (kind === "receipt") {
+      conditions.push("i.source_type IN ('collection_payment', 'fitness_transaction')");
+    } else if (kind === "manual") {
+      conditions.push(
+        "(i.source_type IS NULL OR i.source_type NOT IN ('collection_payment', 'fitness_transaction'))"
+      );
+    }
 
     if (status) {
       conditions.push("i.status = ?");
@@ -103,9 +132,15 @@ async function getInvoices(req, res) {
     const rawTotal = countRows?.[0]?.total;
     const total = rawTotal != null ? Number(rawTotal) : 0;
 
+    const userCols = await getUsersColumns();
+    const creatorNameSql = userNameSelectSql(userCols, "u").replace(
+      / AS full_name$/i,
+      " AS creator_name"
+    );
+
     const [rows] = await pool.query(
       `SELECT i.*,
-              u.full_name AS creator_name,
+              ${creatorNameSql},
               u.email AS creator_email
        FROM invoices i
        LEFT JOIN users u ON u.id = i.created_by
@@ -142,6 +177,26 @@ function parseLineItemsJson(raw) {
   return [];
 }
 
+function parseJsonObject(raw) {
+  if (raw == null || raw === "") return null;
+  if (typeof raw === "object" && !Array.isArray(raw)) return raw;
+  if (Buffer.isBuffer(raw)) {
+    try {
+      return JSON.parse(raw.toString("utf8"));
+    } catch {
+      return null;
+    }
+  }
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 async function getInvoiceById(req, res) {
   try {
     if (!req.user?.id) {
@@ -151,10 +206,17 @@ async function getInvoiceById(req, res) {
     if (!Number.isFinite(id) || id < 1) {
       return res.status(400).json({ success: false, message: "Invalid id" });
     }
+    if (!(await requireInvoicesTable(res))) return;
+
+    const userCols = await getUsersColumns();
+    const creatorNameSql = userNameSelectSql(userCols, "u").replace(
+      / AS full_name$/i,
+      " AS creator_name"
+    );
 
     const [rows] = await pool.query(
       `SELECT i.*,
-              u.full_name AS creator_name,
+              ${creatorNameSql},
               u.email AS creator_email
        FROM invoices i
        LEFT JOIN users u ON u.id = i.created_by
@@ -172,10 +234,43 @@ async function getInvoiceById(req, res) {
 
     const invoice = { ...row, line_items: parseLineItemsJson(row.line_items_json) };
     delete invoice.line_items_json;
+    invoice.payment_meta = parseJsonObject(row.payment_meta_json);
+    delete invoice.payment_meta_json;
+    invoice.is_payment_receipt = Boolean(
+      row.source_type === "collection_payment" || row.source_type === "fitness_transaction"
+    );
 
     res.json({ success: true, invoice });
   } catch (err) {
     console.error("getInvoiceById", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+async function getInvoiceReceipt(req, res) {
+  try {
+    if (!req.user?.id) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id < 1) {
+      return res.status(400).json({ success: false, message: "Invalid id" });
+    }
+    if (!(await requireInvoicesTable(res))) return;
+    const payload = await getReceiptPayload(id, req.user);
+    if (!payload) {
+      return res.status(404).json({ success: false, message: "Not found" });
+    }
+    if (payload.forbidden) {
+      return res.status(403).json({ success: false, message: "Not allowed" });
+    }
+    res.json({
+      success: true,
+      invoice: payload.invoice,
+      company: payload.company,
+    });
+  } catch (err) {
+    console.error("getInvoiceReceipt", err);
     res.status(500).json({ success: false, message: err.message });
   }
 }
@@ -185,6 +280,7 @@ async function createInvoice(req, res) {
     if (!req.user?.id) {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
+    if (!(await requireInvoicesTable(res))) return;
 
     const {
       type = "sales",
@@ -201,6 +297,7 @@ async function createInvoice(req, res) {
       gst_mode = "none",
       currency = "INR",
       customer_id,
+      customer_phone,
       line_items_json,
     } = req.body;
 
@@ -223,15 +320,16 @@ async function createInvoice(req, res) {
 
     const [result] = await pool.execute(
       `INSERT INTO invoices
-         (invoice_number, type, customer_name, customer_email, vendor_name,
+         (invoice_number, type, customer_name, customer_email, customer_phone, vendor_name,
           invoice_date, due_date, subtotal, tax, total, status, notes, created_by,
           gst_mode, currency, customer_id, line_items_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         invoiceNumber,
         n(type, "sales"),
         customer_name || null,
         customer_email || null,
+        customer_phone ? String(customer_phone).trim() : null,
         vendor_name || null,
         String(invoice_date).trim(),
         due_date || null,
@@ -247,6 +345,7 @@ async function createInvoice(req, res) {
         lineJson,
       ]
     );
+    emitInvoicesChanged({ action: "created", id: result.insertId });
     res.json({ success: true, id: result.insertId, invoice_number: invoiceNumber });
   } catch (err) {
     console.error("createInvoice", err);
@@ -257,6 +356,7 @@ async function createInvoice(req, res) {
 async function updateInvoiceStatus(req, res) {
   try {
     if (!req.user?.id) return res.status(401).json({ success: false, message: "Unauthorized" });
+    if (!(await requireInvoicesTable(res))) return;
     const { status } = req.body;
     const allowed = ["draft", "sent", "paid", "cancelled"];
     if (!status || !allowed.includes(String(status))) {
@@ -287,6 +387,7 @@ async function updateInvoiceStatus(req, res) {
 async function deleteInvoice(req, res) {
   try {
     if (!req.user?.id) return res.status(401).json({ success: false, message: "Unauthorized" });
+    if (!(await requireInvoicesTable(res))) return;
     const id = Number.parseInt(String(req.params.id), 10);
     if (!Number.isFinite(id) || id < 1) {
       return res.status(400).json({ success: false, message: "Invalid id" });
@@ -311,4 +412,11 @@ async function deleteInvoice(req, res) {
   }
 }
 
-module.exports = { getInvoices, getInvoiceById, createInvoice, updateInvoiceStatus, deleteInvoice };
+module.exports = {
+  getInvoices,
+  getInvoiceById,
+  getInvoiceReceipt,
+  createInvoice,
+  updateInvoiceStatus,
+  deleteInvoice,
+};

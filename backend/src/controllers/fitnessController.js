@@ -132,6 +132,29 @@ function emitFitnessAndDueTaskChanged(reason = "client_due") {
   emitCalendarChanged({ reason });
 }
 
+/** Set or clear next_due_date from task completion + follow_up_freq_days. */
+async function syncClientNextDueFromCompleted(clientId, completedOn) {
+  if (!clientId) return;
+  const completedDate = normalizeDateOnly(completedOn);
+  if (completedDate) {
+    const [clients] = await mainPool.execute(
+      `SELECT follow_up_freq_days FROM fitness_clients WHERE client_id = ?`,
+      [clientId]
+    );
+    if (!clients.length) return;
+    const days = Number(clients[0].follow_up_freq_days) || 14;
+    await mainPool.execute(
+      `UPDATE fitness_clients SET next_due_date = DATE_ADD(?, INTERVAL ? DAY), updated_at = NOW() WHERE client_id = ?`,
+      [completedDate, days, clientId]
+    );
+  } else {
+    await mainPool.execute(
+      `UPDATE fitness_clients SET next_due_date = NULL, updated_at = NOW() WHERE client_id = ?`,
+      [clientId]
+    );
+  }
+}
+
 async function syncClientDueTask(clientRow, actorUserId) {
   if (!clientRow?.id || !(await tableExists("tasks"))) return false;
   const cols = await tableColumns("tasks");
@@ -1423,7 +1446,25 @@ async function createTransaction(req, res) {
       ]);
       await conn.commit();
       emitFitnessChanged();
-      res.status(201).json({ success: true, data: rows[0] });
+
+      let receipt_invoice_id = null;
+      if (Number(received_inr) > 0) {
+        try {
+          const { createReceiptForFitnessTransaction } = require("../services/paymentReceiptService");
+          const receipt = await createReceiptForFitnessTransaction(
+            insertId,
+            Number(req.user?.id)
+          );
+          receipt_invoice_id = receipt?.id || null;
+        } catch (receiptErr) {
+          console.warn("payment receipt (transaction):", receiptErr.message);
+        }
+      }
+
+      res.status(201).json({
+        success: true,
+        data: { ...rows[0], receipt_invoice_id },
+      });
     } catch (err) {
       try {
         await conn.rollback();
@@ -2167,6 +2208,7 @@ async function patchClientTaskStatus(req, res) {
     if (!rows.length) {
       return res.status(404).json({ success: false, message: "Task not found" });
     }
+    await syncClientNextDueFromCompleted(rows[0].client_id, rows[0].completed_on);
     emitFitnessChanged();
     res.json({ success: true, data: rows[0] });
   } catch (error) {

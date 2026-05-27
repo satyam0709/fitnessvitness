@@ -50,6 +50,13 @@ const NAV = [
         bg: "rgba(5,150,105,0.15)",
         collectionsBadge: true,
       },
+      {
+        label: "Invoices",
+        icon: "fa-file-invoice-dollar",
+        href: "/invoice/sales",
+        color: "#ca8a04",
+        bg: "rgba(234,179,8,0.15)",
+      },
     ],
   },
   {
@@ -72,21 +79,6 @@ const NAV = [
       { label: "Contacts", icon: "fa-address-book",   href: "/contacts",  color: "#0ea5e9", bg: "rgba(14,165,233,0.15)"  },
       { label: "Storage",  icon: "fa-hard-drive",     href: "/storage",   color: "#14b8a6", bg: "rgba(20,184,166,0.15)"  },
       { label: "Reports",  icon: "fa-chart-bar",      href: "/reports",   color: "#6366f1", bg: "rgba(99,102,241,0.15)"  },
-    ],
-  },
-  {
-    section: "System",
-    items: [
-      {
-        label: "General Settings", icon: "fa-gear", color: "#64748b", bg: "rgba(100,116,139,0.15)",
-        children: [
-          { label: "Profile",           href: "/settings/profile"      },
-          { label: "Company",           href: "/settings/company"      },
-          { label: "Web settings",      href: "/settings/web"          },
-          { label: "Invoice settings",  href: "/settings/invoice"      },
-          { label: "Integrations",      href: "/settings/integrations" },
-        ],
-      },
     ],
   },
 ];

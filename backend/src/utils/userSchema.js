@@ -78,4 +78,5 @@ module.exports = {
   fetchUserRowById,
   mapUserRowToProfile,
   isAdminRole,
+  userNameSelectSql,
 };

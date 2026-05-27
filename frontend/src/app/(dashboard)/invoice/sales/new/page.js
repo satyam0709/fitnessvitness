@@ -1,10 +1,12 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/contexts/AuthContext";
-import { apiFetch } from "@/lib/api";
+import { searchClients } from "@/lib/fitnessApi";
+import { createInvoice, fetchCompanySettings, fetchCustomers } from "@/lib/invoicesApi";
+import { useToast } from "@/components/Toast/ToastContext";
 import styles from "../../invoicePages.module.css";
 
 const emptyLine = () => ({
@@ -31,6 +33,7 @@ function NewSalesInvoiceForm() {
   const { isLoaded } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { showToast } = useToast();
   const leadId = searchParams.get("lead_id");
 
   const [settingsLoading, setSettingsLoading] = useState(true);
@@ -40,6 +43,11 @@ function NewSalesInvoiceForm() {
   const [customerId, setCustomerId] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [customerEmail, setCustomerEmail] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
+
+  const [clientSearch, setClientSearch] = useState("");
+  const [clientResults, setClientResults] = useState([]);
+  const searchTimer = useRef(null);
 
   const [invoiceDate, setInvoiceDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [dueDate, setDueDate] = useState("");
@@ -51,39 +59,29 @@ function NewSalesInvoiceForm() {
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
 
-  const loadSettings = useCallback(async () => {
+  const loadAll = useCallback(async () => {
     if (!isLoaded) return;
     setSettingsLoading(true);
     try {
-      const res = await apiFetch("/v2/settings/company");
-      const d = await res.json().catch(() => ({}));
-      if (res.ok) {
-        setCompanySettings(d.data || null);
-        setInvoiceSettingsComplete(!!d.invoiceSettingsComplete);
-        if (d.data?.invoice_currency) setCurrency(d.data.invoice_currency);
-        if (d.data?.invoice_gst_mode) setGstMode(d.data.invoice_gst_mode);
-      }
+      const [settings, cust] = await Promise.all([
+        fetchCompanySettings(),
+        fetchCustomers(200).catch(() => []),
+      ]);
+      setCompanySettings(settings.company);
+      setInvoiceSettingsComplete(settings.invoiceSettingsComplete);
+      setCustomers(cust);
+      if (settings.company?.invoice_currency) setCurrency(settings.company.invoice_currency);
+      if (settings.company?.invoice_gst_mode) setGstMode(settings.company.invoice_gst_mode);
+    } catch (e) {
+      showToast(e.message || "Could not load settings", "error");
     } finally {
       setSettingsLoading(false);
     }
-  }, [isLoaded]);
-
-  const loadCustomers = useCallback(async () => {
-    if (!isLoaded) return;
-    try {
-      const res = await apiFetch("/v2/customers?limit=200");
-      if (!res.ok) return;
-      const d = await res.json();
-      setCustomers(d.customers || []);
-    } catch {
-      setCustomers([]);
-    }
-  }, [isLoaded]);
+  }, [isLoaded, showToast]);
 
   useEffect(() => {
-    loadSettings();
-    loadCustomers();
-  }, [loadSettings, loadCustomers]);
+    loadAll();
+  }, [loadAll]);
 
   useEffect(() => {
     if (!leadId || !customers.length) return;
@@ -92,8 +90,26 @@ function NewSalesInvoiceForm() {
       setCustomerId(String(leadCustomer.id));
       setCustomerName(leadCustomer.name || "");
       setCustomerEmail(leadCustomer.email || "");
+      setCustomerPhone(leadCustomer.phone || "");
     }
   }, [leadId, customers]);
+
+  useEffect(() => {
+    if (!clientSearch.trim()) {
+      setClientResults([]);
+      return undefined;
+    }
+    clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(async () => {
+      try {
+        const list = await searchClients(clientSearch.trim());
+        setClientResults(Array.isArray(list) ? list.slice(0, 8) : []);
+      } catch {
+        setClientResults([]);
+      }
+    }, 280);
+    return () => clearTimeout(searchTimer.current);
+  }, [clientSearch]);
 
   const subtotal = useMemo(
     () => lines.reduce((s, row) => s + lineSubtotal(row), 0),
@@ -117,15 +133,24 @@ function NewSalesInvoiceForm() {
     setLines((prev) => (prev.length <= 1 ? prev : prev.filter((r) => r.uid !== uid)));
   }
 
+  function pickFitnessClient(c) {
+    setCustomerId("");
+    setCustomerName(c.full_name || c.client_id || "");
+    setCustomerEmail(c.email || "");
+    setCustomerPhone(c.phone || "");
+    setClientSearch(`${c.full_name} (${c.client_id})`);
+    setClientResults([]);
+  }
+
   async function onSubmit(e) {
     e.preventDefault();
     setErr(null);
     if (!customerName.trim()) {
-      setErr("Invoice To (customer name) is required.");
+      setErr("Customer name is required.");
       return;
     }
     if (lines.every((l) => !String(l.product_name).trim())) {
-      setErr("Add at least one line item with a product name.");
+      setErr("Add at least one line item.");
       return;
     }
 
@@ -142,99 +167,97 @@ function NewSalesInvoiceForm() {
 
     setSaving(true);
     try {
-      const res = await apiFetch("/v2/invoices", {
-        method: "POST",
-        body: JSON.stringify({
-          type: "sales",
-          customer_name: customerName.trim(),
-          customer_email: customerEmail.trim() || null,
-          customer_id: customerId ? Number(customerId) : null,
-          invoice_date: invoiceDate,
-          due_date: dueDate || null,
-          subtotal,
-          tax,
-          total,
-          gst_mode: gstMode,
-          currency,
-          line_items_json: payloadLines,
-          notes: notes.trim() || null,
-          status: "draft",
-        }),
+      const json = await createInvoice({
+        type: "sales",
+        customer_name: customerName.trim(),
+        customer_email: customerEmail.trim() || null,
+        customer_phone: customerPhone.trim() || null,
+        customer_id: customerId ? Number(customerId) : null,
+        invoice_date: invoiceDate,
+        due_date: dueDate || null,
+        subtotal,
+        tax,
+        total,
+        gst_mode: gstMode,
+        currency,
+        line_items_json: payloadLines,
+        notes: notes.trim() || null,
+        status: "sent",
       });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok || !json.success) {
-        setErr(json.message || "Could not create invoice");
-        return;
-      }
-      window.location.href = "/invoice/sales";
-    } catch {
-      setErr("Network error");
+      showToast("Invoice created", "success");
+      const newId = json.id;
+      if (newId) router.push(`/invoice/sales/${newId}`);
+      else router.push("/invoice/sales");
+    } catch (e) {
+      setErr(e.message || "Could not create invoice");
     } finally {
       setSaving(false);
     }
   }
 
-  const showModal = !settingsLoading && !invoiceSettingsComplete;
+  if (settingsLoading) {
+    return (
+      <div className={styles.page}>
+        <p className={styles.sub}>Loading…</p>
+      </div>
+    );
+  }
 
   return (
     <div className={styles.page}>
-      {showModal && (
-        <div className={styles.modalOverlay}>
-          <div className={styles.modal}>
-            <div className={styles.modalIcon}>
-              <i className="fas fa-exclamation" />
-            </div>
-            <h2 className={styles.modalTitle}>Please fill out the Invoice Setting first before you generate an invoice.</h2>
-            <p className={styles.modalText}>Follow the steps below to set up Invoice Settings.</p>
-            <ol className={styles.modalSteps}>
-              <li>
-                Navigate to <strong>General Settings</strong> → <strong>Web settings</strong>, then open the{" "}
-                <strong>Invoice settings</strong> tab.
-              </li>
-              <li>
-                Choose <strong>Invoice settings</strong>, fill in all required information (company, bank, account, IFSC),
-                and save.
-              </li>
-            </ol>
-            <div className={styles.modalActions}>
-              <Link href="/settings/web?tab=invoice" className={styles.btnModalPrimary}>
-                Redirect Invoice Setting
-              </Link>
-              <button
-                type="button"
-                className={styles.btnModalNo}
-                onClick={() => router.push("/invoice/sales")}
-              >
-                NO
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className={showModal ? styles.pageBehindBlocker : undefined}>
       <div className={styles.pageHead}>
         <div>
-          <h1 className={styles.title}>Add invoice</h1>
-          <p className={styles.sub}>Sales invoice with line items, GST mode, and payment details from workspace settings.</p>
+          <h1 className={styles.title}>New sales invoice</h1>
+          <p className={styles.sub}>Create a manual invoice — payment receipts from Collections are generated automatically.</p>
         </div>
         <Link href="/invoice/sales" className={styles.btnGhost}>
-          Invoice list
+          Back to list
         </Link>
       </div>
+
+      {!invoiceSettingsComplete ? (
+        <div className={styles.settingsBanner}>
+          <div className={styles.settingsBannerBody}>
+            <i className="fas fa-circle-info" aria-hidden="true" />
+            <div>
+              <strong>Company details recommended</strong>
+              <p>
+                Add your company name and bank details so printed invoices and WhatsApp receipts show
+                your branding. You can still save this invoice now.
+              </p>
+            </div>
+          </div>
+          <Link href="/settings/invoice" className={styles.settingsBannerBtn}>
+            Invoice settings
+          </Link>
+        </div>
+      ) : null}
 
       <form className={styles.formGrid} onSubmit={onSubmit}>
         {err ? <p className={styles.err}>{err}</p> : null}
 
         <div className={styles.card}>
-          <h2 className={styles.cardTitle}>Company &amp; payment (from settings)</h2>
-          <p className={styles.sub} style={{ marginBottom: 12 }}>
-            {companySettings?.company_name || "—"} · Bank: {companySettings?.invoice_bank_name || "—"} · A/C:{" "}
-            {companySettings?.invoice_account_no || "—"} · IFSC: {companySettings?.invoice_ifsc || "—"}
-          </p>
-          <div className={styles.row2}>
+          <div className={styles.companyStrip}>
+            <div>
+              <span className={styles.detailLabel}>From</span>
+              <p className={styles.companyName}>{companySettings?.company_name || "Your company"}</p>
+              {companySettings?.gst_number ? (
+                <p className={styles.companyMeta}>GSTIN {companySettings.gst_number}</p>
+              ) : null}
+            </div>
+            {companySettings?.invoice_bank_name ? (
+              <div className={styles.bankMini}>
+                <span className={styles.detailLabel}>Bank</span>
+                <p className={styles.companyMeta}>
+                  {companySettings.invoice_bank_name} · {companySettings.invoice_account_no} ·{" "}
+                  {companySettings.invoice_ifsc}
+                </p>
+              </div>
+            ) : null}
+          </div>
+          <div className={styles.row2} style={{ marginTop: 14 }}>
             <div className={styles.field}>
-              <label className={styles.label}>Date</label>
+              <label className={styles.label}>Invoice date</label>
               <input
                 type="date"
                 className={styles.input}
@@ -245,16 +268,42 @@ function NewSalesInvoiceForm() {
             </div>
             <div className={styles.field}>
               <label className={styles.label}>Due date</label>
-              <input type="date" className={styles.input} value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+              <input
+                type="date"
+                className={styles.input}
+                value={dueDate}
+                onChange={(e) => setDueDate(e.target.value)}
+              />
             </div>
           </div>
         </div>
 
         <div className={styles.card}>
-          <h2 className={styles.cardTitle}>Invoice to</h2>
-          <div className={styles.row2}>
+          <h2 className={styles.cardTitle}>Bill to</h2>
+          <div className={styles.field}>
+            <label className={styles.label}>Search fitness client</label>
+            <input
+              className={styles.input}
+              value={clientSearch}
+              onChange={(e) => setClientSearch(e.target.value)}
+              placeholder="Name or client ID…"
+              autoComplete="off"
+            />
+            {clientResults.length > 0 ? (
+              <ul className={styles.clientDropdown}>
+                {clientResults.map((c) => (
+                  <li key={c.client_id}>
+                    <button type="button" onClick={() => pickFitnessClient(c)}>
+                      {c.full_name} <span className={styles.clientIdTag}>{c.client_id}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+          <div className={styles.row2} style={{ marginTop: 12 }}>
             <div className={styles.field}>
-              <label className={styles.label}>Customer (saved)</label>
+              <label className={styles.label}>CRM customer (optional)</label>
               <select
                 className={styles.select}
                 value={customerId}
@@ -265,10 +314,11 @@ function NewSalesInvoiceForm() {
                   if (c) {
                     setCustomerName(c.name || "");
                     setCustomerEmail(c.email || "");
+                    setCustomerPhone(c.phone || "");
                   }
                 }}
               >
-                <option value="">— Select customer —</option>
+                <option value="">— None —</option>
                 {customers.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}
@@ -289,49 +339,55 @@ function NewSalesInvoiceForm() {
               />
             </div>
           </div>
-          <div className={styles.field} style={{ marginTop: 12 }}>
-            <label className={styles.label}>Email</label>
-            <input
-              type="email"
-              className={styles.input}
-              value={customerEmail}
-              onChange={(e) => setCustomerEmail(e.target.value)}
-            />
+          <div className={styles.row2} style={{ marginTop: 12 }}>
+            <div className={styles.field}>
+              <label className={styles.label}>Email</label>
+              <input
+                type="email"
+                className={styles.input}
+                value={customerEmail}
+                onChange={(e) => setCustomerEmail(e.target.value)}
+              />
+            </div>
+            <div className={styles.field}>
+              <label className={styles.label}>Phone (for WhatsApp receipt)</label>
+              <input
+                className={styles.input}
+                value={customerPhone}
+                onChange={(e) => setCustomerPhone(e.target.value)}
+                placeholder="+91…"
+              />
+            </div>
           </div>
         </div>
 
         <div className={styles.card}>
-          <h2 className={styles.cardTitle}>GST type</h2>
-          <div className={styles.radioRow}>
-            <label>
-              <input type="radio" name="gst" checked={gstMode === "none"} onChange={() => setGstMode("none")} />
-              Non GST
-            </label>
-            <label>
-              <input type="radio" name="gst" checked={gstMode === "igst"} onChange={() => setGstMode("igst")} />
-              IGST
-            </label>
-            <label>
-              <input type="radio" name="gst" checked={gstMode === "sgst_cgst"} onChange={() => setGstMode("sgst_cgst")} />
-              SGST / CGST
-            </label>
+          <div className={styles.cardHeadRow}>
+            <h2 className={styles.cardTitle} style={{ margin: 0 }}>
+              Line items
+            </h2>
+            <div className={styles.gstInline}>
+              <label className={styles.label}>GST</label>
+              <select
+                className={styles.select}
+                value={gstMode}
+                onChange={(e) => setGstMode(e.target.value)}
+              >
+                <option value="none">Non GST</option>
+                <option value="igst">IGST (18%)</option>
+                <option value="sgst_cgst">SGST + CGST (18%)</option>
+              </select>
+            </div>
           </div>
-          <p className={styles.sub} style={{ marginTop: 8 }}>
-            Tax is calculated at 18% on the subtotal when GST applies (simplified).
-          </p>
-        </div>
-
-        <div className={styles.card}>
-          <h2 className={styles.cardTitle}>Line items</h2>
-          <div style={{ overflowX: "auto" }}>
+          <div className={styles.tableScroll}>
             <table className={styles.lineTable}>
               <thead>
                 <tr>
-                  <th>Product</th>
-                  <th>Cost</th>
+                  <th>Item</th>
+                  <th>Rate</th>
                   <th>Qty</th>
-                  <th>Discount</th>
-                  <th>Type</th>
+                  <th>Disc.</th>
+                  <th />
                   <th>Sub</th>
                   <th />
                 </tr>
@@ -343,7 +399,7 @@ function NewSalesInvoiceForm() {
                       <input
                         value={row.product_name}
                         onChange={(e) => updateLine(row.uid, { product_name: e.target.value })}
-                        placeholder="Product name"
+                        placeholder="Description"
                       />
                     </td>
                     <td>
@@ -379,17 +435,22 @@ function NewSalesInvoiceForm() {
                     <td>
                       <select
                         className={styles.select}
-                        style={{ minWidth: 90 }}
+                        style={{ minWidth: 72 }}
                         value={row.discount_type}
                         onChange={(e) => updateLine(row.uid, { discount_type: e.target.value })}
                       >
                         <option value="percent">%</option>
-                        <option value="amount">Amt</option>
+                        <option value="amount">₹</option>
                       </select>
                     </td>
-                    <td>{lineSubtotal(row).toFixed(2)}</td>
+                    <td className={styles.subCell}>{lineSubtotal(row).toFixed(2)}</td>
                     <td>
-                      <button type="button" className={styles.danger} onClick={() => removeLine(row.uid)}>
+                      <button
+                        type="button"
+                        className={styles.iconBtnSmall}
+                        onClick={() => removeLine(row.uid)}
+                        aria-label="Remove line"
+                      >
                         ×
                       </button>
                     </td>
@@ -398,42 +459,40 @@ function NewSalesInvoiceForm() {
               </tbody>
             </table>
           </div>
-          <button type="button" className={styles.btnPrimary} style={{ marginTop: 12 }} onClick={addLine}>
+          <button type="button" className={styles.btnGhost} style={{ marginTop: 10 }} onClick={addLine}>
             + Add line
           </button>
           <div className={styles.totals}>
-            Currency:{" "}
-            <select className={styles.select} style={{ display: "inline-block", minWidth: 80 }} value={currency} onChange={(e) => setCurrency(e.target.value)}>
-              <option value="INR">INR</option>
-              <option value="USD">USD</option>
-              <option value="EUR">EUR</option>
-            </select>
-            <br />
-            <br />
             Subtotal: {subtotal.toFixed(2)} {currency}
             <br />
             Tax: {tax.toFixed(2)} {currency}
             <br />
-            Total: {total.toFixed(2)} {currency}
+            <strong>
+              Total: {total.toFixed(2)} {currency}
+            </strong>
           </div>
         </div>
 
         <div className={styles.card}>
           <h2 className={styles.cardTitle}>Notes</h2>
           <textarea
-            className={styles.input}
-            style={{ minHeight: 100, width: "100%" }}
+            className={styles.textarea}
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            placeholder="Terms, reference, line item notes…"
+            placeholder="Payment terms, reference…"
+            rows={3}
           />
         </div>
 
-        <button type="submit" className={styles.btnSubmit} disabled={saving}>
-          {saving ? "Saving…" : "Create invoice"}
-        </button>
+        <div className={styles.formActions}>
+          <button type="submit" className={styles.btnSubmit} disabled={saving}>
+            {saving ? "Saving…" : "Create invoice"}
+          </button>
+          <Link href="/collections" className={styles.btnGhost}>
+            Record payment in Collections
+          </Link>
+        </div>
       </form>
-      </div>
     </div>
   );
 }
