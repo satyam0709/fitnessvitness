@@ -7,11 +7,13 @@ import { searchClients } from "@/lib/fitnessApi";
 import {
   getCollections,
   getCollectionSummary,
+  getCollection,
   createCollection,
   addCollectionPayment,
   updateCollection,
   markCollectionPaid,
 } from "@/lib/collectionsApi";
+import { apiFetch } from "@/lib/api";
 import { subscribeCrmLive } from "@/lib/chatRealtime";
 import { useListHighlight, itemHighlightClass } from "@/lib/useListHighlight";
 import { useToast } from "@/components/Toast/ToastContext";
@@ -197,10 +199,17 @@ function CollectionsPageInner() {
         payload.client_id = selectedClient.client_id;
       }
 
-      await createCollection(payload);
+      const created = await createCollection(payload);
       showToast("Collection recorded", "success");
       setShowCreate(false);
-      router.replace("/collections");
+      const withReceipt = Array.isArray(created)
+        ? created.find((c) => c?.receipt_invoice_id)
+        : null;
+      if (withReceipt?.receipt_invoice_id) {
+        router.push(`/invoice/receipt/${withReceipt.receipt_invoice_id}`);
+      } else {
+        router.replace("/collections");
+      }
       void load();
     } catch (err) {
       showToast(err.message || "Could not save", "error");
@@ -209,20 +218,32 @@ function CollectionsPageInner() {
     }
   }
 
+  function openReceiptIfAny(data) {
+    const receiptId = data?.receipt_invoice_id;
+    if (receiptId) {
+      router.push(`/invoice/receipt/${receiptId}`);
+      return true;
+    }
+    return false;
+  }
+
   async function submitPayment(e) {
     e.preventDefault();
     if (!showPay) return;
     setSaving(true);
     try {
-      await addCollectionPayment(showPay.id, {
+      const data = await addCollectionPayment(showPay.id, {
         amount_inr: Number(payForm.amount_inr),
         pay_mode: payForm.pay_mode,
         paid_at: payForm.paid_at,
         notes: payForm.notes || null,
       });
-      showToast("Payment recorded", "success");
+      showToast("Payment recorded — opening receipt", "success");
       setShowPay(null);
       void load();
+      if (!openReceiptIfAny(data)) {
+        showToast("Payment saved (receipt will appear in Invoices)", "success");
+      }
     } catch (err) {
       showToast(err.message || "Payment failed", "error");
     } finally {
@@ -251,9 +272,10 @@ function CollectionsPageInner() {
   async function handleMarkPaid(row) {
     if (!confirm(`Mark "${row.title}" as fully paid?`)) return;
     try {
-      await markCollectionPaid(row.id);
+      const data = await markCollectionPaid(row.id);
       showToast("Marked as paid", "success");
       void load();
+      openReceiptIfAny(data);
     } catch (err) {
       showToast(err.message || "Failed", "error");
     }
@@ -385,6 +407,14 @@ function CollectionsPageInner() {
                   </td>
                   <td>
                     <div className={styles.actions}>
+                      {row.status === "paid" && row.latest_receipt_invoice_id ? (
+                        <Link
+                          href={`/invoice/receipt/${row.latest_receipt_invoice_id}`}
+                          className={`${styles.actionBtn} ${styles.actionBtnPrimary}`}
+                        >
+                          <i className="fas fa-file-invoice" /> Receipt
+                        </Link>
+                      ) : null}
                       {row.status !== "paid" && row.status !== "cancelled" && (
                         <>
                           <button

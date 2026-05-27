@@ -211,6 +211,11 @@ function emitCollectionsChanged(payload) {
   ioRef.emit("collections:changed", payload || {});
 }
 
+function emitInvoicesChanged(payload) {
+  if (!ioRef) return;
+  ioRef.emit("invoices:changed", payload || {});
+}
+
 /** Broadcast CRM opportunity list changes to connected clients (same pattern as fitness). */
 function emitOpportunitiesChanged(payload) {
   if (!ioRef) return;
@@ -276,6 +281,7 @@ module.exports = {
   emitNotificationReadState,
   emitFitnessChanged,
   emitCollectionsChanged,
+  emitInvoicesChanged,
   emitOpportunitiesChanged,
   emitRemindersChanged,
   emitLeadsChanged,

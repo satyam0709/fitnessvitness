@@ -14,6 +14,27 @@ const {
   getNotes, createNote, updateNote, deleteNote,
 } = require("../controllers/noteController");
 
+const {
+  getInvoices,
+  getInvoiceById,
+  getInvoiceReceipt,
+  createInvoice,
+  updateInvoiceStatus,
+  deleteInvoice,
+} = require("../controllers/invoiceController");
+
+const {
+  getCompanySettings,
+  updateCompanySettings,
+} = require("../controllers/settingsController");
+
+const { getCustomers } = require("../controllers/customerController");
+
+const {
+  getIntegrations,
+  toggleIntegration,
+} = require("../controllers/settingsController");
+
 const router = express.Router();
 router.use(verifyToken);
 
@@ -32,5 +53,20 @@ router.get("/notes", getNotes);
 router.post("/notes", createNote);
 router.put("/notes/:id", updateNote);
 router.delete("/notes/:id", deleteNote);
+
+router.get("/invoices", getInvoices);
+router.get("/invoices/:id/receipt", getInvoiceReceipt);
+router.get("/invoices/:id", getInvoiceById);
+router.post("/invoices", createInvoice);
+router.patch("/invoices/:id/status", updateInvoiceStatus);
+router.delete("/invoices/:id", deleteInvoice);
+
+router.get("/settings/company", getCompanySettings);
+router.put("/settings/company", updateCompanySettings);
+
+router.get("/customers", getCustomers);
+
+router.get("/integrations", getIntegrations);
+router.post("/integrations/:key/toggle", toggleIntegration);
 
 module.exports = router;

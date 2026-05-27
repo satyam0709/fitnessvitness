@@ -24,6 +24,22 @@ const QUICK_ACTIONS = [
   { key: "note",     label: "Note",     icon: "fa-note-sticky" },
 ];
 
+const INVOICE_MENU = [
+  { label: "Record payment", icon: "fa-hand-holding-dollar", href: "/collections?create=1" },
+  { label: "All invoices & receipts", icon: "fa-list", href: "/invoice/sales" },
+  { label: "New sales invoice", icon: "fa-plus", href: "/invoice/sales/new" },
+  { label: "Invoice settings", icon: "fa-gear", href: "/settings/invoice" },
+];
+
+const QUICK_CREATE_KEYS = new Set([
+  "lead",
+  "task",
+  "reminder",
+  "meeting",
+  "todo",
+  "note",
+]);
+
 // sidebarCollapsed — tells topbar how far left to sit on desktop
 // onMenuToggle    — only used on mobile to open the sidebar drawer
 export default function DashboardTopbar({ onMenuToggle, sidebarCollapsed }) {
@@ -31,6 +47,8 @@ export default function DashboardTopbar({ onMenuToggle, sidebarCollapsed }) {
   const [searchVal,  setSearchVal]  = useState("");
   const searchRef = useRef(null);
   const notifRef = useRef(null);
+  const invoiceRef = useRef(null);
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
   const router    = useRouter();
   const { user }  = useUser();
   useAuth();
@@ -94,6 +112,7 @@ export default function DashboardTopbar({ onMenuToggle, sidebarCollapsed }) {
   useEffect(() => {
     function onDocClick(e) {
       if (!notifRef.current?.contains(e.target)) setNotifOpen(false);
+      if (!invoiceRef.current?.contains(e.target)) setInvoiceOpen(false);
     }
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
@@ -136,6 +155,25 @@ export default function DashboardTopbar({ onMenuToggle, sidebarCollapsed }) {
     }
   };
 
+  const handleQuickAction = (key) => {
+    if (QUICK_CREATE_KEYS.has(key)) {
+      openQuickCreate(key);
+      return;
+    }
+    if (key === "prospect") {
+      router.push("/opportunities");
+      return;
+    }
+    if (key === "collection") {
+      router.push("/collections");
+    }
+  };
+
+  function goInvoice(href) {
+    setInvoiceOpen(false);
+    router.push(href);
+  }
+
   const cf = user?.firstName?.trim() || "";
   const cl = user?.lastName?.trim() || "";
   const clerkHasName = !!(cf || cl);
@@ -170,7 +208,55 @@ export default function DashboardTopbar({ onMenuToggle, sidebarCollapsed }) {
           <i className="fas fa-bars" />
         </button>
 
-       
+        <div className={styles.quickActions}>
+          <div className={styles.quickGroup}>
+            {QUICK_ACTIONS.map((action, index) => (
+              <span key={action.key} className={styles.quickItem}>
+                {index > 0 ? <span className={styles.pipe} aria-hidden="true">|</span> : null}
+                <button
+                  type="button"
+                  className={styles.quickBtn}
+                  onClick={() => handleQuickAction(action.key)}
+                >
+                  <i className={`fas ${action.icon}`} aria-hidden="true" />
+                  {action.label}
+                </button>
+              </span>
+            ))}
+            <span className={styles.quickItem}>
+              <span className={styles.pipe} aria-hidden="true">|</span>
+              <div className={styles.invoiceWrap} ref={invoiceRef}>
+                <button
+                  type="button"
+                  className={`${styles.quickBtn} ${styles.invoiceTrigger} ${invoiceOpen ? styles.invoiceTriggerOpen : ""}`}
+                  onClick={() => setInvoiceOpen((v) => !v)}
+                  aria-expanded={invoiceOpen}
+                  aria-haspopup="menu"
+                >
+                  <i className="fas fa-file-invoice-dollar" aria-hidden="true" />
+                  Invoice
+                  <i className={`fas fa-chevron-down ${styles.invoiceChevron}`} aria-hidden="true" />
+                </button>
+                {invoiceOpen ? (
+                  <div className={styles.invoiceMenu} role="menu">
+                    {INVOICE_MENU.map((item) => (
+                      <button
+                        key={item.href}
+                        type="button"
+                        role="menuitem"
+                        className={styles.invoiceMenuItem}
+                        onClick={() => goInvoice(item.href)}
+                      >
+                        <i className={`fas ${item.icon}`} aria-hidden="true" />
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </span>
+          </div>
+        </div>
       </div>
 
       {/* Right side */}

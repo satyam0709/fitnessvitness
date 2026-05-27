@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@/contexts/AuthContext";
+import { fetchCompanySettings } from "@/lib/invoicesApi";
 import { apiFetch } from "@/lib/api";
 import styles from "../../invoice/invoicePages.module.css";
 
@@ -14,6 +15,11 @@ export default function InvoiceSettingsPage() {
   const [ok, setOk] = useState(false);
 
   const [company_name, setCompanyName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [address, setAddress] = useState("");
+  const [city, setCity] = useState("");
+  const [state, setState] = useState("");
   const [gst_number, setGstNumber] = useState("");
   const [invoice_bank_name, setBank] = useState("");
   const [invoice_account_no, setAcc] = useState("");
@@ -21,21 +27,19 @@ export default function InvoiceSettingsPage() {
   const [invoice_currency, setCur] = useState("INR");
   const [invoice_gst_mode, setGstMode] = useState("none");
 
-  /** Full row from API so PUT does not wipe website/address/etc. */
-  const [baseRow, setBaseRow] = useState(null);
-
   const load = useCallback(async () => {
     if (!isLoaded) return;
     setLoading(true);
     setErr(null);
     try {
-      const res = await apiFetch("/v2/settings/company");
-      const d = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(d.message || "Failed to load settings");
-      const row = d.data;
-      setBaseRow(row || null);
+      const { company: row } = await fetchCompanySettings();
       if (row) {
         setCompanyName(row.company_name || "");
+        setPhone(row.phone || "");
+        setEmail(row.email || "");
+        setAddress(row.address || "");
+        setCity(row.city || "");
+        setState(row.state || "");
         setGstNumber(row.gst_number || "");
         setBank(row.invoice_bank_name || "");
         setAcc(row.invoice_account_no || "");
@@ -62,17 +66,16 @@ export default function InvoiceSettingsPage() {
     try {
       const res = await apiFetch("/v2/settings/company", {
         method: "PUT",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           company_name: company_name.trim() || null,
-          website: baseRow?.website ?? null,
-          phone: baseRow?.phone ?? null,
-          email: baseRow?.email ?? null,
-          address: baseRow?.address ?? null,
-          city: baseRow?.city ?? null,
-          state: baseRow?.state ?? null,
-          country: baseRow?.country ?? "India",
+          phone: phone.trim() || null,
+          email: email.trim() || null,
+          address: address.trim() || null,
+          city: city.trim() || null,
+          state: state.trim() || null,
+          country: "India",
           gst_number: gst_number.trim() || null,
-          pan_number: baseRow?.pan_number ?? null,
           invoice_bank_name: invoice_bank_name.trim() || null,
           invoice_account_no: invoice_account_no.trim() || null,
           invoice_ifsc: invoice_ifsc.trim().toUpperCase() || null,
@@ -82,18 +85,9 @@ export default function InvoiceSettingsPage() {
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(d.message || "Save failed");
-      setBaseRow((prev) => ({
-        ...prev,
-        company_name: company_name.trim() || null,
-        gst_number: gst_number.trim() || null,
-        invoice_bank_name: invoice_bank_name.trim() || null,
-        invoice_account_no: invoice_account_no.trim() || null,
-        invoice_ifsc: invoice_ifsc.trim().toUpperCase() || null,
-        invoice_currency: invoice_currency || "INR",
-        invoice_gst_mode: invoice_gst_mode || "none",
-      }));
       setOk(true);
       setTimeout(() => setOk(false), 4000);
+      await load();
     } catch (e) {
       setErr(e.message || "Error");
     } finally {
@@ -115,17 +109,12 @@ export default function InvoiceSettingsPage() {
         <div>
           <h1 className={styles.title}>Invoice settings</h1>
           <p className={styles.sub}>
-            Company and bank details appear on invoices. Required before generating PDFs in production.
+            Company and bank details used on payment receipts and sales invoices. Saved to your workspace instantly.
           </p>
         </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-          <Link href="/settings/web?tab=invoice" className={styles.btnGhost}>
-            Web settings
-          </Link>
-          <Link href="/invoice/sales/new" className={styles.btnPrimary}>
-            Back to add invoice
-          </Link>
-        </div>
+        <Link href="/invoice/sales" className={styles.btnGhost}>
+          All invoices
+        </Link>
       </div>
 
       {err ? <p className={styles.err}>{err}</p> : null}
@@ -133,7 +122,7 @@ export default function InvoiceSettingsPage() {
 
       <form className={styles.formGrid} onSubmit={onSubmit}>
         <div className={styles.card}>
-          <h2 className={styles.cardTitle}>Company</h2>
+          <h2 className={styles.cardTitle}>Company on invoice</h2>
           <div className={styles.row2}>
             <div className={styles.field}>
               <label className={styles.label}>
@@ -151,10 +140,39 @@ export default function InvoiceSettingsPage() {
               <input className={styles.input} value={gst_number} onChange={(e) => setGstNumber(e.target.value)} />
             </div>
           </div>
+          <div className={styles.row2} style={{ marginTop: 14 }}>
+            <div className={styles.field}>
+              <label className={styles.label}>Phone</label>
+              <input className={styles.input} value={phone} onChange={(e) => setPhone(e.target.value)} />
+            </div>
+            <div className={styles.field}>
+              <label className={styles.label}>Email</label>
+              <input type="email" className={styles.input} value={email} onChange={(e) => setEmail(e.target.value)} />
+            </div>
+          </div>
+          <div className={styles.field} style={{ marginTop: 14 }}>
+            <label className={styles.label}>Address</label>
+            <textarea
+              className={styles.textarea}
+              rows={2}
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+            />
+          </div>
+          <div className={styles.row2} style={{ marginTop: 14 }}>
+            <div className={styles.field}>
+              <label className={styles.label}>City</label>
+              <input className={styles.input} value={city} onChange={(e) => setCity(e.target.value)} />
+            </div>
+            <div className={styles.field}>
+              <label className={styles.label}>State</label>
+              <input className={styles.input} value={state} onChange={(e) => setState(e.target.value)} />
+            </div>
+          </div>
         </div>
 
         <div className={styles.card}>
-          <h2 className={styles.cardTitle}>Payment details (shown on invoice)</h2>
+          <h2 className={styles.cardTitle}>Bank details (payment receipts)</h2>
           <div className={styles.row2}>
             <div className={styles.field}>
               <label className={styles.label}>
@@ -186,7 +204,7 @@ export default function InvoiceSettingsPage() {
             </div>
           </div>
           <div className={styles.field} style={{ marginTop: 14 }}>
-            <label className={styles.label}>Default GST mode (for new invoices)</label>
+            <label className={styles.label}>Default GST on new invoices</label>
             <select className={styles.select} value={invoice_gst_mode} onChange={(e) => setGstMode(e.target.value)}>
               <option value="none">Non GST</option>
               <option value="igst">IGST</option>
@@ -196,7 +214,7 @@ export default function InvoiceSettingsPage() {
         </div>
 
         <button type="submit" className={styles.btnSubmit} disabled={saving}>
-          {saving ? "Saving…" : "Save invoice settings"}
+          {saving ? "Saving…" : "Save settings"}
         </button>
       </form>
     </div>

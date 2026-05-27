@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
+import { deleteInvoice, fetchInvoices } from "@/lib/invoicesApi";
+import { subscribeCrmLive } from "@/lib/chatRealtime";
 import {
   useConfirmDialog,
   buildDeleteMessage,
@@ -19,6 +21,16 @@ function fmtDate(d) {
   }
 }
 
+function defaultRange() {
+  const end = new Date();
+  const start = new Date();
+  start.setDate(end.getDate() - 30);
+  return {
+    from: start.toISOString().slice(0, 10),
+    to: end.toISOString().slice(0, 10),
+  };
+}
+
 export default function InvoiceSalesListPage() {
   const { confirm } = useConfirmDialog();
   const { isLoaded } = useAuth();
@@ -26,23 +38,22 @@ export default function InvoiceSalesListPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
 
+  const [range, setRange] = useState(defaultRange);
+  const [kind, setKind] = useState("all");
   const [staffId, setStaffId] = useState("all");
-  const [gstBucket, setGstBucket] = useState("all");
   const [q, setQ] = useState("");
   const [searchInput, setSearchInput] = useState("");
-
   const [users, setUsers] = useState([]);
 
-  const range = useMemo(() => {
-    const end = new Date();
-    const start = new Date();
-    start.setDate(end.getDate() - 7);
-    return {
-      from: start.toISOString().slice(0, 10),
-      to: end.toISOString().slice(0, 10),
-      label: `${start.toLocaleDateString("en-IN")} TO ${end.toLocaleDateString("en-IN")}`,
-    };
-  }, []);
+  const rangeLabel = useMemo(() => {
+    try {
+      const a = new Date(range.from).toLocaleDateString("en-IN");
+      const b = new Date(range.to).toLocaleDateString("en-IN");
+      return `${a} – ${b}`;
+    } catch {
+      return "";
+    }
+  }, [range.from, range.to]);
 
   const loadUsers = useCallback(async () => {
     if (!isLoaded) return;
@@ -61,28 +72,23 @@ export default function InvoiceSalesListPage() {
     setLoading(true);
     setErr(null);
     try {
-      const params = new URLSearchParams({
-        type: "sales",
-        limit: "100",
-        page: "1",
+      const params = {
         date_from: range.from,
         date_to: range.to,
-      });
-      if (staffId && staffId !== "all") params.set("staff_id", staffId);
-      if (gstBucket && gstBucket !== "all") params.set("gst_bucket", gstBucket);
-      if (q.trim()) params.set("q", q.trim());
+      };
+      if (kind && kind !== "all") params.kind = kind;
+      if (staffId && staffId !== "all") params.staff_id = staffId;
+      if (q.trim()) params.q = q.trim();
 
-      const res = await apiFetch(`/v2/invoices?${params.toString()}`);
-      const d = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(d.message || "Failed to load invoices");
-      setRows(d.invoices || []);
+      const { invoices } = await fetchInvoices(params);
+      setRows(invoices);
     } catch (e) {
       setErr(e.message || "Error");
       setRows([]);
     } finally {
       setLoading(false);
     }
-  }, [isLoaded, staffId, gstBucket, q, range.from, range.to]);
+  }, [isLoaded, kind, staffId, q, range.from, range.to]);
 
   useEffect(() => {
     loadUsers();
@@ -92,97 +98,116 @@ export default function InvoiceSalesListPage() {
     fetchList();
   }, [fetchList]);
 
+  useEffect(() => {
+    if (!isLoaded) return undefined;
+    return subscribeCrmLive(["invoices:changed", "collections:changed"], () => {
+      void fetchList();
+    });
+  }, [isLoaded, fetchList]);
+
   function applySearch(e) {
     e?.preventDefault?.();
     setQ(searchInput);
   }
 
-  function clearFilters() {
-    setStaffId("all");
-    setGstBucket("all");
-    setSearchInput("");
-    setQ("");
-  }
-
   async function removeInvoice(inv) {
-    const label =
-      inv.invoice_number?.trim() ||
-      inv.customer_name?.trim() ||
-      null;
+    const label = inv.invoice_number?.trim() || inv.customer_name?.trim() || null;
     const msg = buildDeleteMessage({ singular: "invoice", name: label });
     if (!(await confirm({ title: msg.title, description: msg.description }))) return;
     try {
-      const res = await apiFetch(`/v2/invoices/${inv.id}`, { method: "DELETE" });
-      if (!res.ok) return;
+      await deleteInvoice(inv.id);
       setRows((prev) => prev.filter((r) => r.id !== inv.id));
     } catch {
       /* ignore */
     }
   }
 
+  const isReceipt = (inv) =>
+    inv.source_type === "collection_payment" || inv.source_type === "fitness_transaction";
+
   return (
     <div className={styles.page}>
       <div className={styles.pageHead}>
         <div>
-          <h1 className={styles.title}>Invoice</h1>
-          <p className={styles.sub}>Sales invoices for the selected date range with staff and GST filters.</p>
+          <h1 className={styles.title}>Invoices</h1>
+          <p className={styles.sub}>
+            Payment receipts (from Collections) and manual sales invoices. Updates live when payments are recorded.
+          </p>
         </div>
+        <div className={styles.rowActions}>
+          <Link href="/settings/invoice" className={styles.btnGhost}>
+            Settings
+          </Link>
+          <Link href="/invoice/sales/new" className={styles.btnPrimary}>
+            New invoice
+          </Link>
+        </div>
+      </div>
+
+      <div className={styles.tabRow}>
+        {[
+          { id: "all", label: "All" },
+          { id: "receipt", label: "Payment receipts" },
+          { id: "manual", label: "Manual invoices" },
+        ].map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            className={`${styles.tab} ${kind === t.id ? styles.tabActive : ""}`}
+            onClick={() => setKind(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
 
       <form className={styles.filters} onSubmit={applySearch}>
+        <input
+          type="date"
+          className={styles.select}
+          value={range.from}
+          onChange={(e) => setRange((r) => ({ ...r, from: e.target.value }))}
+          aria-label="From date"
+        />
+        <input
+          type="date"
+          className={styles.select}
+          value={range.to}
+          onChange={(e) => setRange((r) => ({ ...r, to: e.target.value }))}
+          aria-label="To date"
+        />
         <select className={styles.select} value={staffId} onChange={(e) => setStaffId(e.target.value)}>
-          <option value="all">All Staff</option>
+          <option value="all">All staff</option>
           {users.map((u) => (
             <option key={u.id} value={u.id}>
-              {[u.first_name, u.last_name].filter(Boolean).join(" ") || u.email}
+              {u.full_name || [u.first_name, u.last_name].filter(Boolean).join(" ") || u.email}
             </option>
           ))}
         </select>
-
-        <select className={styles.select} value={gstBucket} onChange={(e) => setGstBucket(e.target.value)}>
-          <option value="all">ALL</option>
-          <option value="gst">GST</option>
-          <option value="non_gst">Non GST</option>
-        </select>
-
         <input
           className={`${styles.input} ${styles.inputSearch}`}
-          placeholder="Search invoice #, customer, notes…"
+          placeholder="Search #, customer…"
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
         />
-        <div className={styles.rowActions}>
-          <button type="submit" className={styles.iconBtn} aria-label="Search">
-            <i className="fas fa-search" />
-          </button>
-          <button type="button" className={styles.iconBtn} aria-label="Clear" onClick={clearFilters}>
-            <i className="fas fa-times" style={{ color: "#dc2626" }} />
-          </button>
-          <button type="button" className={styles.iconBtn} title="Date range uses last 7 days (backend filter)">
-            <i className="fas fa-calendar" />
-          </button>
-          <button type="button" className={styles.iconBtn} title="Export coming soon" disabled>
-            <i className="fas fa-download" />
-          </button>
-          <button type="button" className={styles.iconBtn} title="Import coming soon" disabled>
-            <i className="fas fa-cloud-upload-alt" />
-          </button>
-        </div>
+        <button type="submit" className={styles.iconBtn} aria-label="Search">
+          <i className="fas fa-search" />
+        </button>
       </form>
 
-      <div className={styles.midBar}>
-        <Link href="/invoice/sales/new" className={styles.btnPrimary}>
-          Create Invoice
-        </Link>
-        <span className={styles.dateRange}>{range.label}</span>
-      </div>
+      <p className={styles.dateRange}>{rangeLabel}</p>
 
       {err && <p className={styles.err}>{err}</p>}
 
       {loading ? (
         <p className={styles.sub}>Loading…</p>
       ) : rows.length === 0 ? (
-        <div className={styles.empty}>There are no records to display.</div>
+        <div className={styles.empty}>
+          <p>No invoices in this range.</p>
+          <Link href="/collections" className={styles.btnPrimary} style={{ marginTop: 12 }}>
+            Record a payment
+          </Link>
+        </div>
       ) : (
         <div className={styles.tableWrap}>
           <table className={styles.table}>
@@ -191,8 +216,7 @@ export default function InvoiceSalesListPage() {
                 <th>No.</th>
                 <th>Date</th>
                 <th>Customer</th>
-                <th>Staff</th>
-                <th>GST</th>
+                <th>Type</th>
                 <th>Total</th>
                 <th>Status</th>
                 <th />
@@ -202,28 +226,34 @@ export default function InvoiceSalesListPage() {
               {rows.map((inv) => (
                 <tr key={inv.id}>
                   <td>
-                    <Link href={`/invoice/sales/${inv.id}`} className={styles.invoiceNumLink}>
+                    <Link
+                      href={isReceipt(inv) ? `/invoice/receipt/${inv.id}` : `/invoice/sales/${inv.id}`}
+                      className={styles.invoiceNumLink}
+                    >
                       {inv.invoice_number || `#${inv.id}`}
                     </Link>
                   </td>
                   <td>{fmtDate(inv.invoice_date)}</td>
                   <td>{inv.customer_name || "—"}</td>
-                  <td>{inv.creator_name?.trim() || inv.creator_email || "—"}</td>
                   <td>
-                    {inv.gst_mode && inv.gst_mode !== "none" ? (
-                      <span className={`${styles.pill} ${styles.pillGst}`}>{inv.gst_mode}</span>
+                    {isReceipt(inv) ? (
+                      <span className={`${styles.pill} ${styles.pillReceipt}`}>Receipt</span>
                     ) : (
-                      <span className={`${styles.pill} ${styles.pillNon}`}>Non GST</span>
+                      <span className={`${styles.pill} ${styles.pillNon}`}>Sales</span>
                     )}
                   </td>
-                  <td>
-                    {Number(inv.total || 0).toFixed(2)} {inv.currency || "INR"}
-                  </td>
+                  <td>₹{Number(inv.total || 0).toLocaleString("en-IN")}</td>
                   <td>{inv.status}</td>
                   <td>
-                    <button type="button" className={styles.danger} onClick={() => removeInvoice(inv)}>
-                      Delete
-                    </button>
+                    {!isReceipt(inv) ? (
+                      <button type="button" className={styles.danger} onClick={() => removeInvoice(inv)}>
+                        Delete
+                      </button>
+                    ) : (
+                      <Link href={`/invoice/receipt/${inv.id}`} className={styles.linkAction}>
+                        View
+                      </Link>
+                    )}
                   </td>
                 </tr>
               ))}

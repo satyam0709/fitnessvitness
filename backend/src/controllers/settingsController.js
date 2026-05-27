@@ -1,4 +1,5 @@
 const { pool } = require("../config/database");
+const { emitInvoicesChanged } = require("../realtime/meetingsRealtime");
 
 // ── Company Settings ─────────────────────────────────────────
 
@@ -60,6 +61,7 @@ async function updateCompanySettings(req, res) {
         invoice_gst_mode || "none",
       ]
     );
+    emitInvoicesChanged({ reason: "company_settings_updated" });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

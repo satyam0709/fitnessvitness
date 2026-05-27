@@ -7,6 +7,10 @@ const {
   deleteCalendarEvent,
   getGoogleCalendarStatus,
   postGoogleCalendarSync,
+  getAppleCalendarStatus,
+  putAppleCalendarSettings,
+  deleteAppleCalendarDisconnect,
+  postAppleCalendarSync,
   quickAddFromCalendar,
 } = require("../controllers/calendarController");
 
@@ -21,5 +25,10 @@ router.delete("/events/:id", deleteCalendarEvent);
 
 router.get("/google/status", getGoogleCalendarStatus);
 router.post("/google/sync", postGoogleCalendarSync);
+
+router.get("/apple/status", getAppleCalendarStatus);
+router.put("/apple/settings", putAppleCalendarSettings);
+router.delete("/apple/disconnect", deleteAppleCalendarDisconnect);
+router.post("/apple/sync", postAppleCalendarSync);
 
 module.exports = router;

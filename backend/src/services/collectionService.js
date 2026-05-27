@@ -1,6 +1,10 @@
 const { pool } = require("../config/database");
 const { emitFitnessChanged, emitCollectionsChanged } = require("../realtime/meetingsRealtime");
 const {
+  createReceiptForCollectionPayment,
+  createReceiptForLatestCollectionPayment,
+} = require("./paymentReceiptService");
+const {
   notifyCollectionCreated,
   notifyCollectionPaid,
   sweepCollectionFollowupNotifications,
@@ -111,6 +115,26 @@ async function resolveExternalBuyer(eb) {
   return ins.insertId;
 }
 
+let paymentDueDateColExists = null;
+async function hasPaymentDueDateColumn(conn) {
+  if (paymentDueDateColExists !== null) return paymentDueDateColExists;
+  const db = conn || pool;
+  const [rows] = await db.execute(
+    `SELECT 1 FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fitness_transactions' AND COLUMN_NAME = 'payment_due_date' LIMIT 1`
+  );
+  paymentDueDateColExists = rows.length > 0;
+  return paymentDueDateColExists;
+}
+
+function collectionPaymentDueDate(collection) {
+  const pending = roundMoney(collection.pending_inr);
+  if (pending <= 0) return null;
+  return collection.next_followup_date
+    ? toSqlDate(collection.next_followup_date)
+    : null;
+}
+
 async function syncLinkedTransaction(conn, collection, payMode, transactionDate) {
   const hasClient = Boolean(collection.client_id);
   const hasExternal = Boolean(collection.external_buyer_id);
@@ -124,43 +148,84 @@ async function syncLinkedTransaction(conn, collection, payMode, transactionDate)
   const txType = mapTxType(collection.collection_type);
   const today = new Date().toISOString().slice(0, 10);
   const date = toSqlDate(transactionDate, toSqlDate(collection.created_at, today));
+  const paymentDue = collectionPaymentDueDate(collection);
+  const syncPaymentDue = await hasPaymentDueDateColumn(conn);
 
   if (collection.linked_transaction_id) {
-    await conn.execute(
-      `UPDATE fitness_transactions
-       SET received_inr = ?, pending_inr = ?, rate_inr = ?, mrp_inr = ?, product_plan = ?, type = ?, pay_mode = ?
-       WHERE id = ?`,
-      [
-        collection.received_inr,
-        collection.pending_inr,
-        collection.total_inr,
-        collection.total_inr,
-        collection.title,
-        txType,
-        payMode || "GPay",
-        collection.linked_transaction_id,
-      ]
-    );
+    if (syncPaymentDue) {
+      await conn.execute(
+        `UPDATE fitness_transactions
+         SET received_inr = ?, pending_inr = ?, rate_inr = ?, mrp_inr = ?, product_plan = ?, type = ?, pay_mode = ?, payment_due_date = ?
+         WHERE id = ?`,
+        [
+          collection.received_inr,
+          collection.pending_inr,
+          collection.total_inr,
+          collection.total_inr,
+          collection.title,
+          txType,
+          payMode || "GPay",
+          paymentDue,
+          collection.linked_transaction_id,
+        ]
+      );
+    } else {
+      await conn.execute(
+        `UPDATE fitness_transactions
+         SET received_inr = ?, pending_inr = ?, rate_inr = ?, mrp_inr = ?, product_plan = ?, type = ?, pay_mode = ?
+         WHERE id = ?`,
+        [
+          collection.received_inr,
+          collection.pending_inr,
+          collection.total_inr,
+          collection.total_inr,
+          collection.title,
+          txType,
+          payMode || "GPay",
+          collection.linked_transaction_id,
+        ]
+      );
+    }
     return collection.linked_transaction_id;
   }
 
+  const insertCols = [
+    "client_id",
+    "external_buyer_id",
+    "transaction_date",
+    "product_plan",
+    "type",
+    "mrp_inr",
+    "rate_inr",
+    "received_inr",
+    "pending_inr",
+    "cost_inr",
+    "pay_mode",
+    "notes",
+  ];
+  const insertVals = [
+    collection.client_id,
+    collection.external_buyer_id,
+    date,
+    collection.title,
+    txType,
+    collection.total_inr,
+    collection.total_inr,
+    collection.received_inr,
+    collection.pending_inr,
+    0,
+    payMode || "GPay",
+    collection.notes ? `Collection #${collection.id}: ${collection.notes}` : `Collection #${collection.id}`,
+  ];
+  if (syncPaymentDue) {
+    insertCols.push("payment_due_date");
+    insertVals.push(paymentDue);
+  }
+
   const [result] = await conn.execute(
-    `INSERT INTO fitness_transactions
-      (client_id, external_buyer_id, transaction_date, product_plan, type, mrp_inr, rate_inr, received_inr, pending_inr, cost_inr, pay_mode, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-    [
-      collection.client_id,
-      collection.external_buyer_id,
-      date,
-      collection.title,
-      txType,
-      collection.total_inr,
-      collection.total_inr,
-      collection.received_inr,
-      collection.pending_inr,
-      payMode || "GPay",
-      collection.notes ? `Collection #${collection.id}: ${collection.notes}` : `Collection #${collection.id}`,
-    ]
+    `INSERT INTO fitness_transactions (${insertCols.join(", ")})
+     VALUES (${insertCols.map(() => "?").join(", ")})`,
+    insertVals
   );
   const txId = result.insertId;
   await conn.execute(
@@ -197,11 +262,17 @@ async function recalcCollection(conn, collectionId) {
 }
 
 async function getCollectionWithDetails(id) {
+  const receiptSubquery = `(SELECT i.id FROM invoices i
+     INNER JOIN fitness_collection_payments p ON p.id = i.source_id
+     WHERE i.source_type = 'collection_payment' AND p.collection_id = c.id AND i.is_deleted = 0
+     ORDER BY i.id DESC LIMIT 1)`;
+
   const [rows] = await pool.execute(
     `SELECT c.*,
             fc.full_name AS client_name,
             eb.full_name AS external_buyer_name,
-            TRIM(CONCAT_WS(' ', u.first_name, u.last_name)) AS assignee_name
+            TRIM(CONCAT_WS(' ', u.first_name, u.last_name)) AS assignee_name,
+            ${receiptSubquery} AS latest_receipt_invoice_id
      FROM fitness_collections c
      LEFT JOIN fitness_clients fc ON fc.client_id = c.client_id
      LEFT JOIN fitness_external_buyers eb ON eb.id = c.external_buyer_id
@@ -285,11 +356,17 @@ async function listCollections(req) {
   const { where, params } = buildListWhere(req, []);
   const pageSql = sqlLimitOffset(limit, offset);
 
+  const receiptSubquery = `(SELECT i.id FROM invoices i
+     INNER JOIN fitness_collection_payments p ON p.id = i.source_id
+     WHERE i.source_type = 'collection_payment' AND p.collection_id = c.id AND i.is_deleted = 0
+     ORDER BY i.id DESC LIMIT 1)`;
+
   const [rows] = await pool.execute(
     `SELECT c.*,
             fc.full_name AS client_name,
             eb.full_name AS external_buyer_name,
-            TRIM(CONCAT_WS(' ', u.first_name, u.last_name)) AS assignee_name
+            TRIM(CONCAT_WS(' ', u.first_name, u.last_name)) AS assignee_name,
+            ${receiptSubquery} AS latest_receipt_invoice_id
      FROM fitness_collections c
      LEFT JOIN fitness_clients fc ON fc.client_id = c.client_id
      LEFT JOIN fitness_external_buyers eb ON eb.id = c.external_buyer_id
@@ -484,6 +561,21 @@ async function createCollectionsFromVisit(req) {
 
     emitFitnessChanged();
     emitCollectionsChanged({ action: "create", count: created.length });
+
+    for (const full of created) {
+      const payments = Array.isArray(full.payments) ? full.payments : [];
+      let receiptInvoiceId = null;
+      for (const p of payments) {
+        try {
+          const receipt = await createReceiptForCollectionPayment(p.id, userId);
+          if (receipt?.id) receiptInvoiceId = receipt.id;
+        } catch (receiptErr) {
+          console.warn("payment receipt (create visit):", receiptErr.message);
+        }
+      }
+      full.receipt_invoice_id = receiptInvoiceId;
+    }
+
     return created;
   } catch (e) {
     await conn.rollback();
@@ -517,11 +609,12 @@ async function addPayment(req, collectionId, body) {
       throw new Error(`Payment exceeds remaining balance (₹${remaining})`);
     }
 
-    await conn.execute(
+    const [payIns] = await conn.execute(
       `INSERT INTO fitness_collection_payments (collection_id, amount_inr, pay_mode, paid_at, notes, created_by)
        VALUES (?, ?, ?, ?, ?, ?)`,
       [collectionId, amount, payMode, paidAt, body.notes || null, userId]
     );
+    const newPaymentId = payIns.insertId;
 
     const updated = await recalcCollection(conn, collectionId);
     await syncLinkedTransaction(conn, updated, payMode, paidAt);
@@ -538,7 +631,17 @@ async function addPayment(req, collectionId, body) {
     await conn.commit();
     emitFitnessChanged();
     emitCollectionsChanged({ action: "payment", id: collectionId });
-    return getCollectionWithDetails(collectionId);
+
+    let receipt_invoice_id = null;
+    try {
+      const receipt = await createReceiptForCollectionPayment(newPaymentId, userId);
+      receipt_invoice_id = receipt?.id || null;
+    } catch (receiptErr) {
+      console.warn("payment receipt (add payment):", receiptErr.message);
+    }
+
+    const details = await getCollectionWithDetails(collectionId);
+    return { ...details, receipt_invoice_id };
   } catch (e) {
     await conn.rollback();
     throw e;
@@ -584,6 +687,24 @@ async function updateCollection(req, id, body) {
     params
   );
 
+  if (body.next_followup_date !== undefined) {
+    const [[col]] = await pool.execute(
+      "SELECT * FROM fitness_collections WHERE id = ?",
+      [id]
+    );
+    if (col?.linked_transaction_id && (await hasPaymentDueDateColumn())) {
+      const due =
+        col.pending_inr > 0 && col.next_followup_date
+          ? toSqlDate(col.next_followup_date)
+          : null;
+      await pool.execute(
+        "UPDATE fitness_transactions SET payment_due_date = ? WHERE id = ?",
+        [due, col.linked_transaction_id]
+      );
+      emitFitnessChanged();
+    }
+  }
+
   emitCollectionsChanged({ action: "update", id });
   return getCollectionWithDetails(id);
 }
@@ -621,7 +742,17 @@ async function markPaid(req, id, body) {
     await notifyCollectionPaid({ collection: updated, actorUserId: userId });
     emitFitnessChanged();
     emitCollectionsChanged({ action: "mark_paid", id });
-    return getCollectionWithDetails(id);
+
+    let receipt_invoice_id = null;
+    try {
+      const receipt = await createReceiptForLatestCollectionPayment(id, userId);
+      receipt_invoice_id = receipt?.id || null;
+    } catch (receiptErr) {
+      console.warn("payment receipt (mark paid):", receiptErr.message);
+    }
+
+    const details = await getCollectionWithDetails(id);
+    return { ...details, receipt_invoice_id };
   } catch (e) {
     await conn.rollback();
     throw e;
@@ -646,6 +777,7 @@ async function fetchCollectionFollowups(date, userId, role) {
      LEFT JOIN fitness_clients fc ON fc.client_id = c.client_id
      LEFT JOIN fitness_external_buyers eb ON eb.id = c.external_buyer_id
      WHERE c.status IN ('open','partial')
+       AND c.pending_inr > 0
        AND c.next_followup_date IS NOT NULL
        AND c.next_followup_date <= ?
        ${scope}
@@ -674,6 +806,19 @@ async function markCollectionFollowupDone(id, userId, body) {
      WHERE id = ? AND status IN ('open','partial')`,
     [newDate, id]
   );
+  if (result.affectedRows > 0) {
+    const [[col]] = await pool.execute(
+      "SELECT linked_transaction_id, pending_inr FROM fitness_collections WHERE id = ?",
+      [id]
+    );
+    if (col?.linked_transaction_id && (await hasPaymentDueDateColumn())) {
+      const due = col.pending_inr > 0 ? newDate : null;
+      await pool.execute(
+        "UPDATE fitness_transactions SET payment_due_date = ? WHERE id = ?",
+        [due, col.linked_transaction_id]
+      );
+    }
+  }
   return result.affectedRows > 0;
 }
 

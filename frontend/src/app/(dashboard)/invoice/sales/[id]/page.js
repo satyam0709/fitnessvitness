@@ -5,6 +5,9 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
+import { fetchInvoiceReceipt } from "@/lib/invoicesApi";
+import PaymentReceiptView from "@/components/Invoice/PaymentReceiptView";
+import { useToast } from "@/components/Toast/ToastContext";
 import styles from "../../invoicePages.module.css";
 
 function fmtDate(d) {
@@ -27,7 +30,9 @@ export default function InvoiceSalesDetailPage() {
   const params = useParams();
   const id = params?.id;
   const { isLoaded } = useAuth();
+  const { showToast } = useToast();
   const [inv, setInv] = useState(null);
+  const [company, setCompany] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
 
@@ -39,10 +44,27 @@ export default function InvoiceSalesDetailPage() {
       const res = await apiFetch(`/v2/invoices/${encodeURIComponent(id)}`);
       const d = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(d.message || "Could not load invoice");
-      setInv(d.invoice || null);
+      const invoice = d.invoice || null;
+      setInv(invoice);
+
+      if (
+        invoice?.is_payment_receipt ||
+        invoice?.source_type === "collection_payment" ||
+        invoice?.source_type === "fitness_transaction"
+      ) {
+        try {
+          const receipt = await fetchInvoiceReceipt(id);
+          setCompany(receipt.company);
+        } catch {
+          setCompany(null);
+        }
+      } else {
+        setCompany(null);
+      }
     } catch (e) {
       setErr(e.message || "Error");
       setInv(null);
+      setCompany(null);
     } finally {
       setLoading(false);
     }
@@ -52,8 +74,41 @@ export default function InvoiceSalesDetailPage() {
     load();
   }, [load]);
 
+  const isReceipt =
+    inv?.is_payment_receipt ||
+    inv?.source_type === "collection_payment" ||
+    inv?.source_type === "fitness_transaction";
+
   const lines = Array.isArray(inv?.line_items) ? inv.line_items : [];
   const cur = inv?.currency || "INR";
+
+  if (!loading && !err && inv && isReceipt) {
+    return (
+      <div className={styles.page}>
+        <div className={styles.pageHead}>
+          <div>
+            <h1 className={styles.title}>Payment receipt</h1>
+            <p className={styles.sub}>
+              {inv.invoice_number} — {inv.customer_name || "Customer"}
+            </p>
+          </div>
+          <div className={styles.rowActions}>
+            <Link href="/invoice/sales" className={styles.btnGhost}>
+              Invoice list
+            </Link>
+            <Link href={`/invoice/receipt/${inv.id}`} className={styles.btnPrimary}>
+              Full receipt view
+            </Link>
+          </div>
+        </div>
+        <PaymentReceiptView
+          invoice={inv}
+          company={company}
+          onWhatsAppError={(msg) => showToast(msg, "error")}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className={styles.page}>

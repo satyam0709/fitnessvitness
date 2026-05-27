@@ -90,11 +90,11 @@ async function listUsers(req, res) {
   try {
     const cols = await getUsersColumns();
     const nameSel = userNameSelectSql(cols);
-    const lastLogin = cols.has("last_login") ? "last_login" : "NULL AS last_login";
+    const lastLogin = cols.has("last_login") ? "u.last_login" : "NULL AS last_login";
     const [rows] = await mainPool.query(
-      `SELECT id, email, ${nameSel}, role, is_active, ${lastLogin}, created_at
-       FROM users
-       ORDER BY created_at DESC`
+      `SELECT u.id, u.email, ${nameSel}, u.role, u.is_active, ${lastLogin}, u.created_at
+       FROM users u
+       ORDER BY u.created_at DESC`
     );
     res.json({ success: true, total: rows.length, data: rows });
   } catch (err) {
