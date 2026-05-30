@@ -294,6 +294,13 @@ async function start() {
   await logProductionEmailConfig();
   await testConnection();
   await ensureSchema();
+  try {
+    const { ensureCrmSchemaCompat } = require("./utils/ensureCrmSchemaCompat");
+    const { pool } = require("./config/database");
+    await ensureCrmSchemaCompat(pool);
+  } catch (e) {
+    console.warn("start: ensureCrmSchemaCompat:", e.message);
+  }
   const httpServer = http.createServer(app);
   initMeetingsRealtime(httpServer);
   httpServer.listen(PORT, "0.0.0.0", () => {

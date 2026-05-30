@@ -1,4 +1,5 @@
 const { pool } = require("../config/database");
+const { tableExists } = require("../utils/schemaHelpers");
 const { emitAdminChanged, emitCalendarChanged, emitRemindersChanged } = require("../realtime/meetingsRealtime");
 const { createUserNotification } = require("../services/notificationService");
 
@@ -96,19 +97,60 @@ async function getReminders(req, res) {
     );
     const total = Number(countRows[0]?.total ?? 0);
 
-    const [reminders] = await pool.query(
-      `SELECT r.*, l.name as lead_name,
-        uc.full_name AS creator_name, uc.email AS creator_email,
-        ua.full_name AS assignee_name, ua.email AS assignee_email
+    const hasLeads = await tableExists("leads");
+    const leadJoin = hasLeads ? "LEFT JOIN leads l ON l.id = r.lead_id" : "";
+    const leadSelect = hasLeads ? "l.name as lead_name," : "NULL as lead_name,";
+    const userName = (alias) =>
+      `TRIM(CONCAT(COALESCE(${alias}.first_name,''), ' ', COALESCE(${alias}.last_name,'')))`;
+
+    let reminders;
+    try {
+      [reminders] = await pool.query(
+        `SELECT r.*, ${leadSelect}
+        ${userName("uc")} AS creator_name, uc.email AS creator_email,
+        ${userName("ua")} AS assignee_name, ua.email AS assignee_email
        FROM reminders r
-       LEFT JOIN leads l ON l.id = r.lead_id
+       ${leadJoin}
        LEFT JOIN users uc ON uc.id = r.user_id
        LEFT JOIN users ua ON ua.id = r.assigned_to_user_id
        WHERE ${where}
        ORDER BY r.remind_at ASC
        LIMIT ${lim} OFFSET ${offset}`,
-      params
-    );
+        params
+      );
+    } catch (err) {
+      if (err.code === "ER_BAD_FIELD_ERROR" && String(err.message).includes("is_deleted")) {
+        const whereNoDel = where.replace(/r\.is_deleted = 0 AND\s*/, "");
+        [reminders] = await pool.query(
+          `SELECT r.*, ${leadSelect}
+        ${userName("uc")} AS creator_name, uc.email AS creator_email,
+        ${userName("ua")} AS assignee_name, ua.email AS assignee_email
+       FROM reminders r
+       ${leadJoin}
+       LEFT JOIN users uc ON uc.id = r.user_id
+       LEFT JOIN users ua ON ua.id = r.assigned_to_user_id
+       WHERE ${whereNoDel}
+       ORDER BY r.remind_at ASC
+       LIMIT ${lim} OFFSET ${offset}`,
+          params
+        );
+      } else if (err.code === "ER_NO_SUCH_TABLE" && hasLeads) {
+        [reminders] = await pool.query(
+          `SELECT r.*, NULL as lead_name,
+        ${userName("uc")} AS creator_name, uc.email AS creator_email,
+        ${userName("ua")} AS assignee_name, ua.email AS assignee_email
+       FROM reminders r
+       LEFT JOIN users uc ON uc.id = r.user_id
+       LEFT JOIN users ua ON ua.id = r.assigned_to_user_id
+       WHERE ${where}
+       ORDER BY r.remind_at ASC
+       LIMIT ${lim} OFFSET ${offset}`,
+          params
+        );
+      } else {
+        throw err;
+      }
+    }
 
     res.json({ success: true, total, reminders });
   } catch (err) {

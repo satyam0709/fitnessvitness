@@ -997,8 +997,8 @@ async function ensureSchema() {
   }
 
   if (Number(ucnt) > 0) {
-    const { ensureCalendarCrmTables } = require("../utils/ensureCalendarCrmTables");
-    await ensureCalendarCrmTables(pool);
+    const { ensureCrmSchemaCompat } = require("../utils/ensureCrmSchemaCompat");
+    await ensureCrmSchemaCompat(pool);
   } else {
     console.warn("ensureSchema: skipped calendar CRM tables (users table missing).");
   }
@@ -1881,6 +1881,16 @@ async function ensureSchema() {
     await ensureAppleCalendarTable();
   } catch (e) {
     console.warn("ensureAppleCalendarTable:", e.message);
+  }
+
+  if (Number(ucnt) > 0) {
+    try {
+      const { resetCrmSchemaCompatCache, ensureCrmSchemaCompat } = require("../utils/ensureCrmSchemaCompat");
+      resetCrmSchemaCompatCache();
+      await ensureCrmSchemaCompat(pool);
+    } catch (e) {
+      console.warn("ensureSchema: final CRM compat pass:", e.message);
+    }
   }
 
   await pool.execute(
