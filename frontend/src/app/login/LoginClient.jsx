@@ -7,6 +7,7 @@ import { useAuth, getGlobalAuthData } from "@/contexts/AuthContext";
 import { runPostLoginDashboardRouting } from "@/lib/authRouting";
 import styles from "./page.module.css";
 
+import { APP_NAME, LOGO_SRC } from "@/lib/branding";
 import Image from "next/image";
 
 /**
@@ -186,8 +187,8 @@ export default function LoginClient({ initialReturnTo = "", initialEmail = "" })
           <div className={styles.formHeader}>
             <div className={styles.cardLogoWrapper}>
               <Image
-                src="/assets/logo.svg"
-                alt="RND TECHNOSOFT"
+                src={LOGO_SRC}
+                alt={APP_NAME}
                 width={160}
                 height={54}
                 className="logo-blend"

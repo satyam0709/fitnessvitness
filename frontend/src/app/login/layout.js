@@ -1,6 +1,6 @@
 export const metadata = {
-  title: "Login – RND TECHNOSOFT CRM",
-  description: "Sign in to your RND TECHNOSOFT CRM account.",
+  title: "Login – FitnessVitness CRM",
+  description: "Sign in to your FitnessVitness CRM account.",
 };
 
 export default function LoginLayout({ children }) {

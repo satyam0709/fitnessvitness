@@ -164,7 +164,7 @@
   height: 28px;
   border-radius: 8px;
   border: 2px solid var(--border, #cbd5e1);
-  background: #fff;
+  background: var(--bg-card);
   flex-shrink: 0;
   cursor: pointer;
   display: grid;

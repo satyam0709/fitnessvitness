@@ -3,8 +3,8 @@
 import { useAuth } from "@/contexts/AuthContext";
 import Image from "next/image";
 import Link from "next/link";
-import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
+import { APP_NAME, LOGO_SRC } from "@/lib/branding";
 import ThemeToggle from "@/components/Navbar/ThemeToggle";
 import styles from "./AppErrorPage.module.css";
 
@@ -17,7 +17,6 @@ export default function AppErrorPage({
   showSecondaryLink = true,
 }) {
   const { isLoaded, userId, user } = useAuth();
-  const { resolvedTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
   const [target, setTarget] = useState({ href: "/", label: "Back to home", ready: false });
 
@@ -35,19 +34,16 @@ export default function AppErrorPage({
     setTarget({ href: "/dashboard", label: "Back to home", ready: true });
   }, [isLoaded, userId, user]);
 
-  const logoSrc =
-    mounted && resolvedTheme === "dark"
-      ? "/assets/365-rnd-crm-logo-dark.svg"
-      : "/assets/365-rnd-crm-logo-transparent.svg";
+  const logoSrc = LOGO_SRC;
 
   return (
     <div className={styles.root}>
       <header className={styles.header}>
-        <Link href={target.ready ? target.href : "/"} className={styles.brand} aria-label="365 RND CRM home">
+        <Link href={target.ready ? target.href : "/"} className={styles.brand} aria-label={`${APP_NAME} home`}>
           {mounted ? (
             <Image
               src={logoSrc}
-              alt="365 RND CRM"
+              alt={APP_NAME}
               width={120}
               height={80}
               className={styles.navLogo}
@@ -56,7 +52,7 @@ export default function AppErrorPage({
             />
           ) : (
             <span style={{ fontFamily: "var(--font-display)", fontWeight: 900, color: "var(--text-main)" }}>
-              365 RND CRM
+              {APP_NAME}
             </span>
           )}
         </Link>

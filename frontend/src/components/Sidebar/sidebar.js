@@ -7,6 +7,7 @@ import { useTheme } from "next-themes";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
 import { useTodayFeed } from "@/lib/useTodayFeed";
+import { APP_NAME, LOGO_SRC } from "@/lib/branding";
 import styles from "./sidebar.module.css";
 import Image from "next/image";
 
@@ -141,13 +142,8 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle }) {
   const isActive       = (href)     => pathname === href || pathname.startsWith(href + "/");
   const isParentActive = (children) => children?.some((c) => isActive(c.href));
 
-  const logoSrc = mounted && resolvedTheme === "dark"
-    ? "/assets/365-rnd-crm-logo-dark.svg"
-    : "/assets/365-rnd-crm-logo-transparent.svg";
-
-  const collapsedLogoSrc = mounted && resolvedTheme === "dark"
-    ? "/assets/365-rnd-crm-sidebar-compressed-logo-dark.svg"
-    : "/assets/365-rnd-crm-sidebar-compressed-logo-light.svg";
+  const logoSrc = LOGO_SRC;
+  const collapsedLogoSrc = LOGO_SRC;
 
   const renderItem = (item) => {
     if (item.children) {
@@ -235,12 +231,12 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle }) {
           <Link href="/dashboard" className={styles.brand}>
             <Image
               src={logoSrc}
-              alt="RND CRM"
+              alt={APP_NAME}
               width={160}
               height={44}
               className={styles.logo}
-              style={{ width: "auto", height: "auto" }}
               priority
+              unoptimized
               key={resolvedTheme}
             />
           </Link>
@@ -249,12 +245,13 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle }) {
             <span className={styles.collapsedLogoWrap}>
               <Image
                 src={collapsedLogoSrc}
-                alt="RND CRM"
-                width={40}
-                height={40}
+                alt={APP_NAME}
+                width={36}
+                height={36}
                 className={styles.logoCollapsed}
                 sizes="36px"
                 priority
+                unoptimized
                 key={resolvedTheme}
               />
             </span>

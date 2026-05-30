@@ -12,6 +12,8 @@ import { TenantFeaturesProvider } from "@/contexts/TenantFeaturesContext";
 import { ConfirmDialogProvider } from "../../components/ConfirmDialog/ConfirmDialogContext";
 import { ToastProvider } from "../../components/Toast/ToastContext";
 import styles from "./layout.module.css";
+import "./dark-dashboard-shell.css";
+import "./fitness-crm-dark.css";
 
 
 export default function DashboardAppShell({ children }) {
@@ -36,9 +38,11 @@ export default function DashboardAppShell({ children }) {
           <ToastProvider>
             <ConfirmDialogProvider>
               {isWorkspaceAdminRoute ? (
-                <div className={styles.workspaceAdminRoot}>{children}</div>
+                <div className={styles.workspaceAdminRoot} data-dashboard-shell="">
+                  {children}
+                </div>
               ) : (
-                <div className={styles.shell}>
+                <div className={styles.shell} data-dashboard-shell="">
                   {mobileOpen && (
                     <div className={styles.overlay} onClick={() => setMobileOpen(false)} />
                   )}

@@ -583,7 +583,7 @@ function RemindersPageContent() {
       )}
 
       <footer className={styles.footer}>
-        COPYRIGHT © {new Date().getFullYear()} 365 RND CRM, All rights Reserved.
+        COPYRIGHT © {new Date().getFullYear()} FitnessVitness CRM, All rights Reserved.
       </footer>
 
       {calendarOpen ? (

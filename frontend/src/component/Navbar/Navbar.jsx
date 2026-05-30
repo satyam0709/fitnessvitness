@@ -189,11 +189,11 @@ export default function Navbar() {
           <Link
             href={homeHref}
             className={styles.brand}
-            aria-label="RND TECHNOSOFT Home"
+            aria-label="FitnessVitness Home"
           >
             <Image
-              src="/assets/logo.png"
-              alt="RND CRM Logo"
+              src="/assets/logo.svg"
+              alt="FitnessVitness CRM Logo"
               width={130}
               height={50}
               className={`${styles.navLogo} logo-blend`} // Combining local size + global blend
@@ -432,8 +432,8 @@ export default function Navbar() {
             className={styles.brand}
             onClick={() => setMobileOpen(false)}
           >
-            <span className={styles.logoMark}>RND</span>
-            <span className={styles.logoText}>TECHNOSOFT</span>
+            <span className={styles.logoMark}>Fitness</span>
+            <span className={styles.logoText}>Vitness</span>
           </Link>
           <div className={styles.drawerHeaderRight}>
             <ThemeToggle />

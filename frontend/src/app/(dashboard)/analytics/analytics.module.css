@@ -18,13 +18,13 @@
 .header h1 {
   font-size: 36px;
   font-weight: 800;
-  color: #1e293b;
+  color: var(--text-main);
   margin: 0;
   letter-spacing: -0.03em;
 }
 
 .header p {
-  color: #64748b;
+  color: var(--text-muted);
   font-size: 16px;
   margin: 8px 0 0;
 }
@@ -36,9 +36,9 @@
 }
 
 .card {
-  background: white;
+  background: var(--bg-card);
   border-radius: 24px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--border);
   padding: 24px;
   box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
   transition: all 0.3s ease;
@@ -55,7 +55,7 @@
 .cardTitle {
   font-size: 18px;
   font-weight: 800;
-  color: #1e293b;
+  color: var(--text-main);
   margin-bottom: 24px;
   display: flex;
   align-items: center;
@@ -85,7 +85,7 @@
   text-align: left;
   font-size: 12px;
   font-weight: 700;
-  color: #94a3b8;
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.1em;
   padding: 12px 16px;
@@ -95,8 +95,8 @@
 .table td {
   padding: 16px;
   font-size: 14px;
-  color: #475569;
-  border-bottom: 1px solid #f1f5f9;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
 }
 
 .highlightRow {
@@ -104,7 +104,7 @@
 }
 
 .highlightRow td {
-  color: #1e293b;
+  color: var(--text-main);
   font-weight: 600;
 }
 
@@ -115,7 +115,7 @@
 }
 
 .tierCard {
-  background: #f8fafc;
+  background: var(--grey-100);
   padding: 20px;
   border-radius: 20px;
   text-align: center;
@@ -124,7 +124,7 @@
 }
 
 .tierCard:hover {
-  background: white;
+  background: var(--bg-card);
   border-color: #f5c400;
   transform: translateY(-4px);
 }
@@ -138,19 +138,19 @@
 .tierCount {
   font-size: 28px;
   font-weight: 800;
-  color: #1e293b;
+  color: var(--text-main);
 }
 
 .tierPct {
   font-size: 12px;
   font-weight: 700;
-  color: #64748b;
+  color: var(--text-muted);
   margin-bottom: 12px;
 }
 
 .tierTip {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--text-muted);
   line-height: 1.4;
 }
 
@@ -180,7 +180,7 @@
   justify-content: center;
   height: 60vh;
   gap: 20px;
-  color: #94a3b8;
+  color: var(--text-muted);
 }
 
 .spinner {
@@ -199,6 +199,6 @@
 .empty {
   padding: 40px;
   text-align: center;
-  color: #94a3b8;
+  color: var(--text-muted);
   font-style: italic;
 }

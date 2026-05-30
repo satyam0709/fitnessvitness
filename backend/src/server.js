@@ -219,7 +219,7 @@ app.get("/api/health", async (_req, res) => {
 });
 
 app.get("/", (_req, res) =>
-  res.json({ status: "ok", message: "RND CRM API running" })
+  res.json({ status: "ok", message: "FitnessVitness CRM API running" })
 );
 
 // 404 handler for unknown routes

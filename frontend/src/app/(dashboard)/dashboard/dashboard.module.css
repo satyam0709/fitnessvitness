@@ -1751,8 +1751,8 @@
   align-items: center;
   justify-content: space-between;
   padding: 22px 28px;
-  background: linear-gradient(90deg, #f8f9fc 0%, #ffffff 100%);
-  border-bottom: 1px solid var(--border, #e4e7f0);
+  background: linear-gradient(90deg, var(--grey-100) 0%, var(--bg-card) 100%);
+  border-bottom: 1px solid var(--border);
 }
 
 .fitnessTitleGroup {
@@ -1771,7 +1771,7 @@
   font-family: 'Montserrat', sans-serif;
   font-size: 18px;
   font-weight: 800;
-  color: #1a1a2e;
+  color: var(--text-main);
   margin: 0;
   letter-spacing: -0.01em;
 }
@@ -1789,21 +1789,21 @@
   font-weight: 700;
   text-decoration: none;
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  background: white;
-  border: 1px solid #e4e7f0;
-  color: #5a5f7d;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
+  box-shadow: var(--shadow-xs);
 }
 
 .fitnessBtn:hover {
-  background: #ffffff;
-  border-color: #f5c400;
-  color: #1a1a2e;
+  background: var(--bg-hover);
+  border-color: var(--yellow);
+  color: var(--text-main);
   transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(245, 196, 0, 0.15);
+  box-shadow: var(--shadow-sm);
 }
 
 .fitnessStatsGrid {
@@ -1811,7 +1811,7 @@
   grid-template-columns: repeat(6, 1fr);
   padding: 28px;
   gap: 20px;
-  background: #ffffff;
+  background: var(--bg-card);
 }
 
 .fitnessStatItem {
@@ -1820,9 +1820,9 @@
   align-items: center;
   justify-content: center;
   padding: 28px 20px;
-  background: #f8fafc;
+  background: var(--grey-100);
   border-radius: 18px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--border);
   text-align: center;
   transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
   text-decoration: none;
@@ -1845,9 +1845,9 @@
 
 .fitnessStatItem:hover {
   transform: translateY(-8px);
-  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.08);
-  border-color: #f5c400;
-  background: #ffffff;
+  box-shadow: var(--shadow-md);
+  border-color: var(--yellow);
+  background: var(--bg-hover);
 }
 
 .fitnessStatItem:hover::before {
@@ -1858,7 +1858,7 @@
   font-family: 'Montserrat', sans-serif;
   font-size: 42px;
   font-weight: 800;
-  color: #1a1a2e;
+  color: var(--text-main);
   line-height: 1;
   margin-bottom: 12px;
   letter-spacing: -0.03em;
@@ -1867,6 +1867,9 @@
 .fitnessStatLabel {
   font-family: 'Montserrat', sans-serif;
   line-height: 1.4;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .financialStrip {
@@ -1874,8 +1877,8 @@
   align-items: center;
   gap: 32px;
   padding: 16px 28px;
-  background: #f8fafc;
-  border-top: 1px solid #e4e7f0;
+  background: var(--grey-100);
+  border-top: 1px solid var(--border);
 }
 
 .finItem {
@@ -1888,7 +1891,7 @@
   font-family: 'Montserrat', sans-serif;
   font-size: 10px;
   font-weight: 700;
-  color: #64748b;
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -1897,7 +1900,7 @@
   font-family: 'Montserrat', sans-serif;
   font-size: 18px;
   font-weight: 800;
-  color: #1a1a2e;
+  color: var(--text-main);
 }
 
 .finLink {
@@ -2001,11 +2004,29 @@
   font-family: 'Montserrat', sans-serif;
   font-size: 13px;
   font-weight: 800;
-  color: #1a1a2e;
+  color: var(--text-main);
 }
 
 .fitnessAlertBody {
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-muted);
   line-height: 1.4;
+}
+
+/* ── Dark theme: dashboard-only tweaks (fitness uses CSS vars above) ── */
+[data-theme="dark"] .fitnessCRMCard {
+  box-shadow: var(--shadow-sm);
+}
+
+[data-theme="dark"] .fitnessAlertsSection {
+  background: color-mix(in srgb, #ef4444 8%, var(--bg-card));
+  border-top-color: color-mix(in srgb, #ef4444 22%, var(--border));
+}
+
+[data-theme="dark"] .oprMiniCard {
+  border-left-color: color-mix(in srgb, var(--opr-accent) 58%, var(--bg-card));
+}
+
+[data-theme="dark"] .statCard {
+  box-shadow: var(--shadow-xs);
 }

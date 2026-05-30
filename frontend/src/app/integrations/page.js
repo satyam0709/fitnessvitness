@@ -3,8 +3,8 @@ import styles from "./page.module.css";
 import { INTEGRATIONS } from "../../lib/integrations";
 
 export const metadata = {
-  title: "Integrations – RND TECHNOSOFT CRM",
-  description: "Connect your lead sources to RND TECHNOSOFT CRM. IndiaMart, Facebook, Google Ads, 99acres, Housing and more.",
+  title: "Integrations – FitnessVitness CRM",
+  description: "Connect your lead sources to FitnessVitness CRM. IndiaMart, Facebook, Google Ads, 99acres, Housing and more.",
 };
 
 export default function IntegrationsPage() {

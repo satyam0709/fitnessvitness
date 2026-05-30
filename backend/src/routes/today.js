@@ -319,6 +319,7 @@ async function fetchTodos(date, userId, tenantId) {
 async function fetchMeetings(date, userId) {
   const hasConsultType = await hasColumn("meetings", "consultation_type");
   const hasClientCol = await hasColumn("meetings", "client_id");
+  const hasIsDeleted = await hasColumn("meetings", "is_deleted");
   const consultSelect = hasConsultType ? ", m.consultation_type" : ", NULL AS consultation_type";
   const clientJoin = hasClientCol
     ? "LEFT JOIN fitness_clients fc ON fc.client_id = m.client_id"
@@ -326,6 +327,14 @@ async function fetchMeetings(date, userId) {
   const clientSelect = hasClientCol
     ? ", m.client_id, fc.full_name AS client_name"
     : ", NULL AS client_id, NULL AS client_name";
+
+  const where = [
+    "m.start_time >= ?",
+    "m.start_time <= ?",
+    "m.status = 'scheduled'",
+    "(m.assigned_to_user_id = ? OR m.organizer_id = ? OR EXISTS (SELECT 1 FROM meeting_attendees ma WHERE ma.meeting_id = m.id AND ma.user_id = ?))",
+  ];
+  if (hasIsDeleted) where.unshift("m.is_deleted = 0");
 
   const [rows] = await pool.execute(
     `SELECT m.id, m.title, m.start_time, m.end_time, m.meeting_type, m.status,
@@ -335,12 +344,8 @@ async function fetchMeetings(date, userId) {
             ${clientSelect}
      FROM meetings m
      ${clientJoin}
-     WHERE m.is_deleted = 0
-       AND m.start_time >= ?
-       AND m.start_time <= ?
-       AND m.status = 'scheduled'
-       AND (m.assigned_to_user_id = ? OR m.organizer_id = ?)`,
-    [dayStart(date), dayEndExclusive(date), userId, userId]
+     WHERE ${where.join(" AND ")}`,
+    [dayStart(date), dayEndExclusive(date), userId, userId, userId]
   );
   return rows;
 }
@@ -736,13 +741,14 @@ async function fetchClientFollowups(date) {
             fc.next_due_date AS due_date, fc.phone, fc.email,
             fc.health_goal, fc.plan_type, fc.progress,
             fc.client_id, fc.full_name AS client_name,
-            'client_followup' AS source_type, 1 AS is_overdue,
+            'client_followup' AS source_type,
+            CASE WHEN fc.next_due_date < ? THEN 1 ELSE 0 END AS is_overdue,
             fc.client_id AS source_id, fc.status, NULL AS priority
      FROM fitness_clients fc
      WHERE fc.status = 'Active'
        AND fc.next_due_date IS NOT NULL
        AND fc.next_due_date <= ?`,
-    [date]
+    [date, date]
   );
   return rows;
 }
@@ -866,7 +872,7 @@ async function fetchUpcomingMeetings(date, userId) {
     "m.start_time > ?",
     "m.start_time <= ?",
     "m.status = 'scheduled'",
-    "(m.assigned_to_user_id = ? OR m.organizer_id = ?)",
+    "(m.assigned_to_user_id = ? OR m.organizer_id = ? OR EXISTS (SELECT 1 FROM meeting_attendees ma WHERE ma.meeting_id = m.id AND ma.user_id = ?))",
   ];
   if (hasIsDeleted) where.unshift("m.is_deleted = 0");
   const [rows] = await pool.execute(
@@ -880,7 +886,7 @@ async function fetchUpcomingMeetings(date, userId) {
      WHERE ${where.join(" AND ")}
      ORDER BY m.start_time ASC
      LIMIT ${UPCOMING_LIMIT}`,
-    [dayEndExclusive(date), dayEndExclusive(until), userId, userId]
+    [dayEndExclusive(date), dayEndExclusive(until), userId, userId, userId]
   );
   return rows;
 }
@@ -956,6 +962,48 @@ async function fetchUpcomingTodos(date, userId, tenantId) {
   return rows;
 }
 
+async function fetchUpcomingLeadFollowups(date, userId, tenantId) {
+  const hasHealthGoal = await hasColumn("leads", "health_goal");
+  const hasEnquiry = await hasColumn("leads", "enquiry_stage");
+  const hasTenant = await hasColumn("leads", "tenant_id");
+  const hasIsDeleted = await hasColumn("leads", "is_deleted");
+  const extraSelect = [
+    hasHealthGoal ? "l.health_goal" : "NULL AS health_goal",
+    hasEnquiry ? "l.enquiry_stage" : "NULL AS enquiry_stage",
+  ].join(", ");
+
+  const until = addDaysYmd(date, UPCOMING_DAYS);
+  const params = [];
+  const where = [];
+  if (hasIsDeleted) where.push("l.is_deleted = 0");
+  if (hasTenant) {
+    where.push("(? IS NULL OR l.tenant_id = ?)");
+    params.push(tenantId, tenantId);
+  }
+  where.push(
+    "l.follow_up_date IS NOT NULL",
+    "l.follow_up_date > ?",
+    "l.follow_up_date <= ?",
+    "l.status NOT IN ('confirm', 'cancel')",
+    "(l.assigned_to = ? OR l.created_by = ?)"
+  );
+  params.push(date, until, userId, userId);
+
+  const [rows] = await pool.execute(
+    `SELECT l.id, l.name AS title, l.phone, l.email, l.follow_up_date AS due_date,
+            l.status, l.source, ${extraSelect},
+            l.id AS source_id, 'lead_followup' AS source_type, NULL AS priority,
+            NULL AS client_id, NULL AS client_name,
+            0 AS is_overdue
+     FROM leads l
+     WHERE ${where.join(" AND ")}
+     ORDER BY l.follow_up_date ASC
+     LIMIT ${UPCOMING_LIMIT}`,
+    params
+  );
+  return rows;
+}
+
 async function fetchUpcomingOpportunityFollowups(date, userId) {
   if (!(await opportunitiesTableExists())) return [];
   const until = addDaysYmd(date, UPCOMING_DAYS);
@@ -988,10 +1036,11 @@ async function fetchUpcomingOpportunityFollowups(date, userId) {
 async function fetchUpcomingCollectionFollowups(date, userId, role) {
   if (!(await collectionsTableExists())) return [];
   const until = addDaysYmd(date, UPCOMING_DAYS);
-  const scope = canViewAll(role)
+  const canAll = ["admin", "manager", "owner"].includes(String(role || "").toLowerCase());
+  const scope = canAll
     ? ""
     : "AND (c.assigned_to = ? OR c.created_by = ?)";
-  const scopeParams = canViewAll(role) ? [] : [userId, userId];
+  const scopeParams = canAll ? [] : [userId, userId];
 
   const [rows] = await pool.execute(
     `SELECT c.id, c.title, c.next_followup_date AS due_date, c.pending_inr, c.collection_type,
@@ -1175,6 +1224,9 @@ router.get("/", async (req, res) => {
           : Promise.resolve([]),
         safeFetch("upcoming_apple_events", () => fetchAppleEventsUpcoming(date, userId)),
         safeFetch("upcoming_client_followups", () => fetchUpcomingClientFollowups(date)),
+        safeFetch("upcoming_lead_followups", () =>
+          fetchUpcomingLeadFollowups(date, userId, tenantId)
+        ),
         safeFetch("upcoming_opportunity_followups", () =>
           fetchUpcomingOpportunityFollowups(date, userId)
         ),
@@ -1185,7 +1237,7 @@ router.get("/", async (req, res) => {
         safeFetch("upcoming_payment_dues", () => fetchUpcomingPaymentDues(date)),
       ])
     ).flat();
-    const upcoming = sortItems(upcomingRaw.map(normalizeItem)).slice(0, UPCOMING_LIMIT);
+    const upcoming = sortItems(upcomingRaw.map(normalizeItem)).slice(0, 10);
 
     res.json({ success: true, date, summary, items, upcoming });
   } catch (err) {

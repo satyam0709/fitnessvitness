@@ -105,7 +105,7 @@ export default function ContactPopup() {
       <div className={styles.popup} role="dialog" aria-modal="true" aria-label="Contact form">
         <div className={styles.header}>
           <h2 className={styles.title}>
-            Have Questions? Contact <span>365 CRM</span> Anytime
+            Have Questions? Contact <span>FitnessVitness CRM</span> Anytime
           </h2>
           <button className={styles.closeBtn} onClick={close} aria-label="Close">
             ✕

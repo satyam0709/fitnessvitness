@@ -30,14 +30,14 @@ export default function Footer() {
             <div className={styles.logoRow}>
               <Image
                 src="/assets/logo.svg"
-                alt="RND CRM Logo"
+                alt="FitnessVitness CRM Logo"
                 width={150}
                 height={60}
                 className={`${styles.footerLogo} logo-blend`}
               />
             </div>
             <p className={styles.description}>
-              365 RND CRM platform is a systematic process in which all the
+              FitnessVitness CRM platform is a systematic process in which all the
               opportunities of your business are qualified, analyzed, and
               nurtured by time to time.
             </p>
@@ -81,16 +81,16 @@ export default function Footer() {
               <span>✉️</span>
               <div>
                 <a
-                  href="mailto:contact@365RNDleadmanagement.com"
+                  href="mailto:contact@fitnessvitness.com"
                   className={styles.contactLink}
                 >
-                  contact@365RNDleadmanagement.com
+                  contact@fitnessvitness.com
                 </a>
                 <a
-                  href="mailto:support@365leadmanagement.com"
+                  href="mailto:support@fitnessvitness.com"
                   className={styles.contactLink}
                 >
-                  support@365RNDleadmanagement.com
+                  support@fitnessvitness.com
                 </a>
               </div>
             </div>

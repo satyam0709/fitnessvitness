@@ -9,9 +9,9 @@ export default function IntegrationsSection() {
         
         {/* TEXT COLUMN */}
         <div className={styles.textCol}>
-          <h2 className={styles.title}>Seamless Integrations with 365 RND CRM</h2>
+          <h2 className={styles.title}>Seamless Integrations with FitnessVitness CRM</h2>
           <p className={styles.desc}>
-            Effortlessly connect 365 RND CRM Software with your favorite tools and
+            Effortlessly connect FitnessVitness CRM Software with your favorite tools and
             platforms. From lead generation platforms like IndiaMART, TradeIndia, and
             MagicBricks to communication tools like WhatsApp, Google Calendar, and
             Gmail - integrate them all to streamline your workflow. Simplify your

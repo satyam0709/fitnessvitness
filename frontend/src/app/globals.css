@@ -206,7 +206,8 @@ body {
   transition: background-color 0.35s var(--ease-in-out), color 0.35s var(--ease-in-out);
 }
 
-main {
+/* Marketing pages only — dashboard shell uses its own `.content` main. */
+body > main {
   padding-top: var(--nav-height);
 }
 

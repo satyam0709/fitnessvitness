@@ -7,11 +7,11 @@ import styles from "./happycustomers.module.css";
 const TESTIMONIALS = [
   {
     name: "Jiya Jain",
-    text: "Great service support. I'm so happy. Thank you 365 CRM team.",
+    text: "Great service support. I'm so happy. Thank you FitnessVitness CRM team.",
   },
   {
     name: "Bansi Patel",
-    text: "Awesome experience with 365 Team Management application. It's make easy to our life for day to day.",
+    text: "Awesome experience with FitnessVitness team management application. It's make easy to our life for day to day.",
   },
   {
     name: "Rahul Mehta",
@@ -23,7 +23,7 @@ const TESTIMONIALS = [
   },
   {
     name: "Amit Desai",
-    text: "Our team productivity has doubled since we started using 365 CRM. Highly recommended!",
+    text: "Our team productivity has doubled since we started using FitnessVitness CRM. Highly recommended!",
   },
   {
     name: "Neha Patel",
@@ -39,7 +39,7 @@ const TESTIMONIALS = [
   },
   {
     name: "Suresh Kumar",
-    text: "Switched from another CRM and never looked back. 365 CRM is far more intuitive.",
+    text: "Switched from another CRM and never looked back. FitnessVitness CRM is far more intuitive.",
   },
   {
     name: "Anita Sharma",

@@ -434,16 +434,131 @@
   font-size: 13px;
 }
 
+.muted {
+  color: var(--text-muted);
+}
+
+/* ── Tasks: dark theme (kanban headers, pills, menus) ── */
 [data-theme="dark"] .searchWrap,
 [data-theme="dark"] .select,
 [data-theme="dark"] .miniSelect,
-[data-theme="dark"] .dateInput {
+[data-theme="dark"] .dateInput,
+[data-theme="dark"] .input {
   background: var(--bg-card);
   border-color: var(--border);
+  color: var(--text-main);
 }
 
 [data-theme="dark"] .card {
+  background: var(--bg-card);
+  border-color: var(--border);
+  box-shadow: var(--shadow-xs);
+}
+
+[data-theme="dark"] .kanbanCol {
   background: var(--grey-100);
+  border-color: var(--border);
+}
+
+[data-theme="dark"] .colPending {
+  background: rgba(148, 163, 184, 0.22);
+  color: #e2e8f0;
+}
+
+[data-theme="dark"] .colProgress {
+  background: rgba(59, 130, 246, 0.22);
+  color: #93c5fd;
+}
+
+[data-theme="dark"] .colDone {
+  background: rgba(34, 197, 94, 0.2);
+  color: #86efac;
+}
+
+[data-theme="dark"] .colCarried {
+  background: rgba(249, 115, 22, 0.22);
+  color: #fdba74;
+}
+
+[data-theme="dark"] .pillPriHigh {
+  background: rgba(239, 68, 68, 0.18);
+  color: #fca5a5;
+}
+
+[data-theme="dark"] .pillPriMed {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fcd34d;
+}
+
+[data-theme="dark"] .pillPriLow {
+  background: rgba(100, 116, 139, 0.25);
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] .priHigh {
+  background: rgba(239, 68, 68, 0.18);
+  color: #fca5a5;
+}
+
+[data-theme="dark"] .priMed {
+  background: rgba(249, 115, 22, 0.2);
+  color: #fdba74;
+}
+
+[data-theme="dark"] .priLow {
+  background: rgba(100, 116, 139, 0.25);
+  color: #cbd5e1;
+}
+
+[data-theme="dark"] .btnDanger {
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+}
+
+[data-theme="dark"] .btnDanger:hover {
+  background: rgba(239, 68, 68, 0.25);
+}
+
+[data-theme="dark"] .errorBox {
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+}
+
+[data-theme="dark"] .btnDone {
+  background: rgba(34, 197, 94, 0.12);
+  border-color: #22c55e;
+  color: #86efac;
+}
+
+[data-theme="dark"] .menu,
+[data-theme="dark"] .clientHits {
+  background: var(--bg-card);
+  border-color: var(--border);
+  box-shadow: var(--shadow-md);
+}
+
+[data-theme="dark"] .menu button:hover,
+[data-theme="dark"] .clientHits button:hover {
+  background: var(--bg-hover);
+}
+
+[data-theme="dark"] .calPanel {
+  background: var(--grey-100);
+  border-color: var(--border);
+}
+
+[data-theme="dark"] .viewBtnOn,
+[data-theme="dark"] .typeBtnOn {
+  background: rgba(91, 33, 182, 0.35);
+  color: #c4b5fd;
+}
+
+[data-theme="dark"] .highlighted {
+  background-color: rgba(245, 158, 11, 0.14);
+}
+
+[data-theme="dark"] .emptyCol {
+  color: var(--text-muted);
 }
 
 .topBar {
@@ -477,7 +592,7 @@
   height: 40px;
   border-radius: 8px;
   border: 1px solid var(--border, #e2e8f0);
-  background: #fff;
+  background: var(--bg-card);
   cursor: pointer;
 }
 
@@ -505,10 +620,11 @@
 .statChip {
   padding: 8px 12px;
   border-radius: 999px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--grey-100);
+  border: 1px solid var(--border);
   font-size: 13px;
   font-weight: 600;
+  color: var(--text-main);
 }
 
 .filters {
@@ -538,7 +654,7 @@
 .typeBtn {
   padding: 8px 12px;
   border: none;
-  background: #fff;
+  background: var(--bg-card);
   cursor: pointer;
   font-size: 12px;
   font-weight: 600;
@@ -562,8 +678,8 @@
   list-style: none;
   margin: 4px 0 0;
   padding: 0;
-  background: #fff;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
   border-radius: 8px;
   max-height: 160px;
   overflow: auto;
@@ -582,7 +698,7 @@
   padding: 8px 12px;
   border-radius: 8px;
   border: 1px solid var(--border, #e2e8f0);
-  background: #fff;
+  background: var(--bg-card);
   cursor: pointer;
 }
 
@@ -601,9 +717,9 @@
 
 .kanbanCol {
   min-width: 220px;
-  background: #f8fafc;
+  background: var(--grey-100);
   border-radius: 12px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--border);
 }
 
 .kanbanHead {
@@ -643,8 +759,8 @@
 }
 
 .card {
-  background: #fff;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 12px;
   display: flex;
@@ -684,13 +800,13 @@
 
 .priLow {
   background: #f1f5f9;
-  color: #64748b;
+  color: var(--text-muted);
 }
 
 .cardCat,
 .cardClient {
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-muted);
 }
 
 .cardAssign {
@@ -727,7 +843,7 @@
 
 .dueNormal {
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-muted);
 }
 
 .cardActions {
@@ -756,9 +872,9 @@
 .menuBtn {
   width: 32px;
   height: 32px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: #fff;
+  background: var(--bg-card);
   cursor: pointer;
 }
 
@@ -767,8 +883,8 @@
   right: 0;
   top: 100%;
   z-index: 10;
-  background: #fff;
-  border: 1px solid #e2e8f0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
   border-radius: 8px;
   min-width: 140px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
@@ -797,7 +913,7 @@
   margin-bottom: 10px;
   background: #f8fafc;
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--border);
 }
 
 .thBtn {
@@ -816,7 +932,7 @@
 
 .calHint {
   font-size: 13px;
-  color: #64748b;
+  color: var(--text-muted);
   margin: 0 0 10px;
 }
 
@@ -836,5 +952,5 @@
 }
 
 .muted {
-  color: #64748b;
+  color: var(--text-muted);
 }

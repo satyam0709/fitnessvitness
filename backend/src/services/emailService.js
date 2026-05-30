@@ -283,8 +283,8 @@ async function sendWelcomeEmail(email, {
   if (!to || !tenantUrl) return { ok: false, reason: "missing_email_or_url" };
 
   const loginUrl = `${tenantUrl}/login`;
-  const appName = process.env.APP_NAME || "365 RND CRM";
-  const supportEmail = process.env.SUPPORT_EMAIL || "support@365rnd.com";
+  const appName = process.env.APP_NAME || "FitnessVitness CRM";
+  const supportEmail = process.env.SUPPORT_EMAIL || "support@fitnessvitness.com";
   const isTrial = String(registrationKind || "").toLowerCase() === "trial";
   const subject = isTrial
     ? `Your 7-day trial is ready — ${companyName} on ${appName}`
@@ -433,7 +433,7 @@ async function sendAccountCreatedEmail(email, { firstName = "there", companyName
   const to = String(email || "").trim();
   if (!to) return { ok: false, reason: "missing_email" };
 
-  const appName = process.env.APP_NAME || "365 RND CRM";
+  const appName = process.env.APP_NAME || "FitnessVitness CRM";
   const subject = `Your account is created — ${appName}`;
 
   const text = [
@@ -492,7 +492,7 @@ async function sendAccountCreatedEmail(email, { firstName = "there", companyName
           <tr>
             <td style="background:#f9fafb;border-top:1px solid #e5e7eb;padding:24px 40px;text-align:center;">
               <p style="margin:0 0 8px;font-size:12px;color:#9ca3af;">
-                Have questions? We're here to help at <a href="mailto:${process.env.SUPPORT_EMAIL || 'support@365rnd.com'}" style="color:#1d4ed8;text-decoration:none;font-weight:600;">${process.env.SUPPORT_EMAIL || 'support@365rnd.com'}</a>
+                Have questions? We're here to help at <a href="mailto:${process.env.SUPPORT_EMAIL || 'support@fitnessvitness.com'}" style="color:#1d4ed8;text-decoration:none;font-weight:600;">${process.env.SUPPORT_EMAIL || 'support@fitnessvitness.com'}</a>
               </p>
               <p style="margin:0;font-size:11px;color:#d1d5db;">${appName} © 2024</p>
             </td>
@@ -535,8 +535,8 @@ function pendingEmailHtml({
   packageName,
   loginEmail,
 }) {
-  const appName = process.env.APP_NAME || "365 RND CRM";
-  const supportEmail = process.env.SUPPORT_EMAIL || "support@365rnd.com";
+  const appName = process.env.APP_NAME || "FitnessVitness CRM";
+  const supportEmail = process.env.SUPPORT_EMAIL || "support@fitnessvitness.com";
   const safeCtaUrl = String(ctaUrl || appBaseUrl()).trim();
   return `<!DOCTYPE html>
 <html lang="en">
@@ -603,7 +603,7 @@ async function sendWorkspaceCreatedPendingEmail(
 ) {
   const to = String(email || "").trim();
   if (!to) return { ok: false, reason: "missing_email" };
-  const appName = process.env.APP_NAME || "365 RND CRM";
+  const appName = process.env.APP_NAME || "FitnessVitness CRM";
   const subject = `Workspace created - choose your package`;
   const ctaUrl = addPackageUrl || `${appBaseUrl()}/add-package?onboarding=1`;
   const text = [
@@ -645,7 +645,7 @@ async function sendPackageTrialPendingVerificationEmail(
 ) {
   const to = String(email || "").trim();
   if (!to) return { ok: false, reason: "missing_email" };
-  const appName = process.env.APP_NAME || "365 RND CRM";
+  const appName = process.env.APP_NAME || "FitnessVitness CRM";
   const subject = `Trial started - workspace verification pending`;
   const ctaUrl = `${appBaseUrl()}/workspace-pending`;
   const text = [
@@ -687,7 +687,7 @@ async function sendPaymentPendingVerificationEmail(
 ) {
   const to = String(email || "").trim();
   if (!to) return { ok: false, reason: "missing_email" };
-  const appName = process.env.APP_NAME || "365 RND CRM";
+  const appName = process.env.APP_NAME || "FitnessVitness CRM";
   const subject = `Payment successful - workspace verification pending`;
   const ctaUrl = `${appBaseUrl()}/workspace-pending`;
   const text = [
@@ -731,7 +731,7 @@ async function sendWorkspaceReadyEmail(
   const workspaceUrl = String(tenantUrl || "").trim();
   if (!to || !workspaceUrl) return { ok: false, reason: "missing_email_or_url" };
   const loginUrl = `${workspaceUrl.replace(/\/+$/, "")}/login`;
-  const appName = process.env.APP_NAME || "365 RND CRM";
+  const appName = process.env.APP_NAME || "FitnessVitness CRM";
   const subject = `Your workspace is ready`;
   const text = [
     `Hi ${firstName},`,
@@ -780,7 +780,7 @@ async function sendPaymentDoneEmail(
   const to = String(email || "").trim();
   if (!to) return { ok: false, reason: "missing_email" };
 
-  const appName = process.env.APP_NAME || "365 RND CRM";
+  const appName = process.env.APP_NAME || "FitnessVitness CRM";
   const subject = `Payment successful — ${appName}`;
   const workspaceUrl = String(tenantUrl || "").trim();
   const loginUrl = workspaceUrl ? `${workspaceUrl}/login` : "";
@@ -889,7 +889,7 @@ async function sendPaymentDoneEmail(
           <tr>
             <td style="background:#f9fafb;border-top:1px solid #e5e7eb;padding:24px 40px;text-align:center;">
               <p style="margin:0 0 8px;font-size:12px;color:#9ca3af;">
-                Have questions? We're here to help at <a href="mailto:${process.env.SUPPORT_EMAIL || 'support@365rnd.com'}" style="color:#10b981;text-decoration:none;font-weight:600;">${process.env.SUPPORT_EMAIL || 'support@365rnd.com'}</a>
+                Have questions? We're here to help at <a href="mailto:${process.env.SUPPORT_EMAIL || 'support@fitnessvitness.com'}" style="color:#10b981;text-decoration:none;font-weight:600;">${process.env.SUPPORT_EMAIL || 'support@fitnessvitness.com'}</a>
               </p>
               <p style="margin:0;font-size:11px;color:#d1d5db;">${appName} © 2024</p>
             </td>
@@ -928,7 +928,7 @@ async function sendWorkspaceActivatedEmail(
   const to = String(email || "").trim();
   if (!to) return { ok: false, reason: "missing_email" };
 
-  const appName = process.env.APP_NAME || "365 RND CRM";
+  const appName = process.env.APP_NAME || "FitnessVitness CRM";
   const workspaceUrl = String(tenantUrl || "").trim();
   const loginUrl = workspaceUrl ? `${workspaceUrl}/login` : "";
   const isTrial = String(paymentType || "").toLowerCase() === "trial";
@@ -1076,7 +1076,7 @@ async function sendWorkspaceActivatedEmail(
           <tr>
             <td style="background:#f9fafb;border-top:1px solid #e5e7eb;padding:24px 40px;text-align:center;">
               <p style="margin:0 0 8px;font-size:12px;color:#9ca3af;">
-                Have questions? We're here to help at <a href="mailto:${process.env.SUPPORT_EMAIL || "support@365rnd.com"}" style="color:#10b981;text-decoration:none;font-weight:600;">${process.env.SUPPORT_EMAIL || "support@365rnd.com"}</a>
+                Have questions? We're here to help at <a href="mailto:${process.env.SUPPORT_EMAIL || "support@fitnessvitness.com"}" style="color:#10b981;text-decoration:none;font-weight:600;">${process.env.SUPPORT_EMAIL || "support@fitnessvitness.com"}</a>
               </p>
               <p style="margin:0;font-size:11px;color:#d1d5db;">${appName} © 2024</p>
             </td>

@@ -1,8 +1,8 @@
 {
   "info": {
-    "name": "365 RND CRM API",
+    "name": "FitnessVitness CRM API",
     "_postman_id": "a2e9cb90-0000-0000-0000-000000000000",
-    "description": "Postman collection for RND CRM backend endpoints",
+    "description": "Postman collection for FitnessVitness CRM backend endpoints",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [

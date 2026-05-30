@@ -368,8 +368,10 @@ export default function DashboardPage() {
         try {
           setScheduleLoading(true);
           const today = new Date();
-          const from = today.toISOString().slice(0, 10);
-          const to = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+          const from = today.toLocaleDateString("en-CA"); // YYYY-MM-DD in local TZ
+          const todayPlusSeven = new Date(today);
+          todayPlusSeven.setDate(todayPlusSeven.getDate() + 7);
+          const to = todayPlusSeven.toLocaleDateString("en-CA");
           const res = await apiFetch(`/calendar/feed?from=${from}&to=${to}`);
           const json = await res.json().catch(() => ({}));
           if (res.ok && json.success) {
@@ -1079,7 +1081,7 @@ export default function DashboardPage() {
           ) : (
             <div className={styles.taskList}>
               {schedule.slice(0, 8).map((it) => {
-                const isToday = it.start.slice(0, 10) === new Date().toISOString().slice(0, 10);
+                const isToday = new Date(it.start).toLocaleDateString("en-CA") === new Date().toLocaleDateString("en-CA");
                 const timeStr = new Date(it.start).toLocaleTimeString("en-IN", { hour: '2-digit', minute: '2-digit' });
                 return (
                   <div key={it.id} className={styles.taskRow}>

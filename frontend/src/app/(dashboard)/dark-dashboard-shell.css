@@ -1,0 +1,135 @@
+/**
+ * Dark theme fixes for hardcoded light surfaces inside the dashboard app shell.
+ * Scoped with [data-dashboard-shell] so marketing/auth pages stay unchanged.
+ */
+
+[data-theme="dark"] [data-dashboard-shell] [class*="goldRow"] {
+  background: rgba(245, 196, 0, 0.08) !important;
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="highRisk"] {
+  background: rgba(239, 68, 68, 0.1) !important;
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="searchItem"]:hover,
+[data-theme="dark"] [data-dashboard-shell] [class*="field"] input:focus,
+[data-theme="dark"] [data-dashboard-shell] [class*="field"] select:focus,
+[data-theme="dark"] [data-dashboard-shell] [class*="field"] textarea:focus {
+  background: var(--bg-hover) !important;
+}
+
+/* Clients, business tracker, collections, consultations, analytics, meal plans — panels/toolbars */
+[data-theme="dark"] [data-dashboard-shell] [class*="Panel"],
+[data-theme="dark"] [data-dashboard-shell] [class*="panel"],
+[data-theme="dark"] [data-dashboard-shell] [class*="Sheet"],
+[data-theme="dark"] [data-dashboard-shell] [class*="Modal"] {
+  background: var(--bg-card);
+  border-color: var(--border);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="toolbar"],
+[data-theme="dark"] [data-dashboard-shell] [class*="Toolbar"],
+[data-theme="dark"] [data-dashboard-shell] [class*="filters"],
+[data-theme="dark"] [data-dashboard-shell] [class*="Filters"] {
+  background: var(--bg-card);
+  border-color: var(--border);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="tableWrap"] th,
+[data-theme="dark"] [data-dashboard-shell] [class*="Table"] th,
+[data-theme="dark"] [data-dashboard-shell] table th {
+  background: var(--grey-100);
+  color: var(--text-muted);
+  border-color: var(--border);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="tableWrap"] td,
+[data-theme="dark"] [data-dashboard-shell] table td {
+  border-color: var(--border);
+  color: var(--text-main);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="tableWrap"] tr:hover td,
+[data-theme="dark"] [data-dashboard-shell] table tbody tr:hover td {
+  background: var(--yellow-tint);
+}
+
+[data-theme="dark"] [data-dashboard-shell] input,
+[data-theme="dark"] [data-dashboard-shell] select,
+[data-theme="dark"] [data-dashboard-shell] textarea {
+  background: var(--bg-card);
+  border-color: var(--border);
+  color: var(--text-main);
+}
+
+[data-theme="dark"] [data-dashboard-shell] input::placeholder,
+[data-theme="dark"] [data-dashboard-shell] textarea::placeholder {
+  color: var(--text-faint);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="btnGhost"],
+[data-theme="dark"] [data-dashboard-shell] [class*="btnSecondary"],
+[data-theme="dark"] [data-dashboard-shell] [class*="btnOutline"] {
+  background: var(--bg-card);
+  border-color: var(--border);
+  color: var(--text-main);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="btnGhost"]:hover,
+[data-theme="dark"] [data-dashboard-shell] [class*="btnSecondary"]:hover {
+  background: var(--bg-hover);
+}
+
+/* Todos, tickets, leads list rows */
+[data-theme="dark"] [data-dashboard-shell] [class*="todoRow"],
+[data-theme="dark"] [data-dashboard-shell] [class*="ticketRow"],
+[data-theme="dark"] [data-dashboard-shell] [class*="leadRow"],
+[data-theme="dark"] [data-dashboard-shell] [class*="listItem"] {
+  background: var(--bg-card);
+  border-color: var(--border);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="todoRow"]:hover,
+[data-theme="dark"] [data-dashboard-shell] [class*="ticketRow"]:hover,
+[data-theme="dark"] [data-dashboard-shell] [class*="leadRow"]:hover {
+  background: var(--bg-hover);
+}
+
+/* Leads/tasks shared kanban (leads.module.css) */
+[data-theme="dark"] [data-dashboard-shell] [class*="kanbanCol"] {
+  background: var(--grey-100);
+  border-color: var(--border);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="kanbanHead"] {
+  filter: brightness(0.85);
+}
+
+/* Macro / status pills on meal plans & fitness pages */
+[data-theme="dark"] [data-dashboard-shell] [class*="macroF"],
+[data-theme="dark"] [data-dashboard-shell] [class*="macroP"],
+[data-theme="dark"] [data-dashboard-shell] [class*="macroC"] {
+  filter: brightness(0.9);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="statBox"],
+[data-theme="dark"] [data-dashboard-shell] [class*="metricCard"],
+[data-theme="dark"] [data-dashboard-shell] [class*="summaryCard"] {
+  background: var(--bg-card);
+  border-color: var(--border);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="emptyState"],
+[data-theme="dark"] [data-dashboard-shell] [class*="empty"] {
+  color: var(--text-muted);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="dropdown"],
+[data-theme="dark"] [data-dashboard-shell] [class*="Dropdown"],
+[data-theme="dark"] [data-dashboard-shell] [class*="popover"],
+[data-theme="dark"] [data-dashboard-shell] [class*="Popover"] {
+  background: var(--bg-dropdown);
+  border-color: var(--border);
+  color: var(--text-main);
+  box-shadow: var(--shadow-md);
+}

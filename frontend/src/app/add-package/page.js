@@ -423,7 +423,7 @@ function AddPackagePageInner() {
       {/* ── Plans Section Header ── */}
       <div className={styles.sectionHeader}>
         <span className={styles.sectionIcon}>✨</span>
-        <span className={styles.sectionTitle}>365 Packages</span>
+        <span className={styles.sectionTitle}>Fitness Packages</span>
         <span className={styles.sectionIcon}>✨</span>
       </div>
 
@@ -522,7 +522,7 @@ function AddPackagePageInner() {
       {/* ── Addons Section Header ── */}
       <div className={styles.sectionHeader} style={{ marginTop: 56 }}>
         <span className={styles.sectionIcon}>✨</span>
-        <span className={styles.sectionTitle}>365 Addon Services</span>
+        <span className={styles.sectionTitle}>Fitness Addon Services</span>
         <span className={styles.sectionIcon}>✨</span>
       </div>
 
@@ -693,7 +693,7 @@ function AddPackagePageInner() {
 
       {/* ── Footer ── */}
       <div className={styles.pageFooter}>
-        <p className={styles.copyright}>COPYRIGHT © 2026 RND TECHNOSOFT CRM, All rights reserved</p>
+        <p className={styles.copyright}>COPYRIGHT © 2026 FitnessVitness CRM, All rights reserved</p>
       </div>
 
       {/* ── Status Bar ── */}

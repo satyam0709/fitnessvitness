@@ -56,7 +56,7 @@ function buildConfiguredOrigins() {
 router.get("/health", (_req, res) =>
   res.json({
     status: "ok",
-    message: "RND TECHNOSOFT API is running",
+    message: "FitnessVitness CRM API is running",
     timestamp: new Date().toISOString(),
   })
 );

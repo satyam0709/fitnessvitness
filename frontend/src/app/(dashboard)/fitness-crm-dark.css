@@ -1,0 +1,262 @@
+/**
+ * Dark theme for Fitness CRM pages (Clients, Business Tracker, External sales,
+ * Consultations, Analytics, Meal Plans, Client detail).
+ * Loaded only inside [data-dashboard-shell]. Class names are CSS-module hashed
+ * but retain readable fragments (container, tableWrap, statCard, …).
+ */
+
+/* ── Typography & shells ── */
+[data-theme="dark"] [data-dashboard-shell] [class*="container"] [class*="header"] h1,
+[data-theme="dark"] [data-dashboard-shell] [class*="header"] h1,
+[data-theme="dark"] [data-dashboard-shell] [class*="monthlySection"] h2,
+[data-theme="dark"] [data-dashboard-shell] [class*="revenueHeader"] h2,
+[data-theme="dark"] [data-dashboard-shell] [class*="revenueCard"] h3,
+[data-theme="dark"] [data-dashboard-shell] [class*="yearTableTitle"],
+[data-theme="dark"] [data-dashboard-shell] [class*="modalContent"] h2,
+[data-theme="dark"] [data-dashboard-shell] [class*="modalHead"] h2,
+[data-theme="dark"] [data-dashboard-shell] [class*="cardTitle"],
+[data-theme="dark"] [data-dashboard-shell] [class*="planName"],
+[data-theme="dark"] [data-dashboard-shell] [class*="calories"],
+[data-theme="dark"] [data-dashboard-shell] [class*="tierCount"],
+[data-theme="dark"] [data-dashboard-shell] [class*="statValue"],
+[data-theme="dark"] [data-dashboard-shell] [class*="revenueMetrics"] strong,
+[data-theme="dark"] [data-dashboard-shell] [class*="periodLabel"],
+[data-theme="dark"] [data-dashboard-shell] [class*="searchItem"] strong {
+  color: var(--text-main);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="header"] p,
+[data-theme="dark"] [data-dashboard-shell] [class*="statLabel"],
+[data-theme="dark"] [data-dashboard-shell] [class*="tierPct"],
+[data-theme="dark"] [data-dashboard-shell] [class*="tierTip"],
+[data-theme="dark"] [data-dashboard-shell] [class*="revenueSub"],
+[data-theme="dark"] [data-dashboard-shell] [class*="revenueHint"],
+[data-theme="dark"] [data-dashboard-shell] [class*="notesCell"],
+[data-theme="dark"] [data-dashboard-shell] [class*="sectionLabel"],
+[data-theme="dark"] [data-dashboard-shell] [class*="field"] label,
+[data-theme="dark"] [data-dashboard-shell] [class*="datePick"],
+[data-theme="dark"] [data-dashboard-shell] [class*="rangeSmall"],
+[data-theme="dark"] [data-dashboard-shell] [class*="revenueMetrics"] span,
+[data-theme="dark"] [data-dashboard-shell] [class*="loading"],
+[data-theme="dark"] [data-dashboard-shell] [class*="empty"],
+[data-theme="dark"] [data-dashboard-shell] [class*="emptyState"],
+[data-theme="dark"] [data-dashboard-shell] [class*="loadingOverlay"] {
+  color: var(--text-muted);
+}
+
+/* ── Cards, tables, panels ── */
+[data-theme="dark"] [data-dashboard-shell] [class*="stat"]:not([class*="status"]),
+[data-theme="dark"] [data-dashboard-shell] [class*="statCard"],
+[data-theme="dark"] [data-dashboard-shell] [class*="tableWrap"],
+[data-theme="dark"] [data-dashboard-shell] [class*="card"]:not([class*="chart"]),
+[data-theme="dark"] [data-dashboard-shell] [class*="monthlySection"],
+[data-theme="dark"] [data-dashboard-shell] [class*="modalContent"],
+[data-theme="dark"] [data-dashboard-shell] [class*="revenueCard"],
+[data-theme="dark"] [data-dashboard-shell] [class*="yearTableWrap"] {
+  background: var(--bg-card);
+  border-color: var(--border);
+  box-shadow: var(--shadow-sm);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="table"] th {
+  background: var(--grey-100);
+  color: var(--text-muted);
+  border-color: var(--border);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="table"] td {
+  color: var(--text-main);
+  border-color: var(--border);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="table"] tr:hover td,
+[data-theme="dark"] [data-dashboard-shell] [class*="totalsRow"] {
+  background: var(--bg-hover);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="highlightRow"] {
+  background: var(--yellow-tint) !important;
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="highlightRow"] td {
+  color: var(--text-main);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="goldRow"] {
+  background: rgba(245, 196, 0, 0.1) !important;
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="highRisk"],
+[data-theme="dark"] [data-dashboard-shell] [class*="highRiskBadge"] {
+  background: rgba(239, 68, 68, 0.15) !important;
+  color: #fca5a5 !important;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+/* ── Filters & inputs ── */
+[data-theme="dark"] [data-dashboard-shell] [class*="filterBtn"],
+[data-theme="dark"] [data-dashboard-shell] [class*="search"],
+[data-theme="dark"] [data-dashboard-shell] [class*="dueInput"],
+[data-theme="dark"] [data-dashboard-shell] [class*="actionBtn"],
+[data-theme="dark"] [data-dashboard-shell] [class*="cancelBtn"],
+[data-theme="dark"] [data-dashboard-shell] [class*="delBtn"],
+[data-theme="dark"] [data-dashboard-shell] [class*="modalClose"],
+[data-theme="dark"] [data-dashboard-shell] [class*="periodTab"],
+[data-theme="dark"] [data-dashboard-shell] [class*="datePick"] input,
+[data-theme="dark"] [data-dashboard-shell] [class*="field"] input,
+[data-theme="dark"] [data-dashboard-shell] [class*="field"] select,
+[data-theme="dark"] [data-dashboard-shell] [class*="field"] textarea {
+  background: var(--bg-card);
+  border-color: var(--border);
+  color: var(--text-main);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="filterBtn"]:hover,
+[data-theme="dark"] [data-dashboard-shell] [class*="actionBtn"]:hover,
+[data-theme="dark"] [data-dashboard-shell] [class*="cancelBtn"]:hover,
+[data-theme="dark"] [data-dashboard-shell] [class*="modalClose"]:hover,
+[data-theme="dark"] [data-dashboard-shell] [class*="searchItem"]:hover {
+  background: var(--bg-hover);
+  color: var(--text-main);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="filterBtn"][class*="active"],
+[data-theme="dark"] [data-dashboard-shell] [class*="filterBtn"].active {
+  background: var(--yellow);
+  color: var(--btn-primary-txt);
+  border-color: var(--yellow);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="field"] input:focus,
+[data-theme="dark"] [data-dashboard-shell] [class*="field"] select:focus,
+[data-theme="dark"] [data-dashboard-shell] [class*="field"] textarea:focus,
+[data-theme="dark"] [data-dashboard-shell] [class*="search"]:focus,
+[data-theme="dark"] [data-dashboard-shell] [class*="dueInput"]:focus {
+  background: var(--bg-hover);
+  border-color: var(--yellow);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="searchResults"] {
+  background: var(--bg-card);
+  border-color: var(--border);
+  box-shadow: var(--shadow-md);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="formSection"],
+[data-theme="dark"] [data-dashboard-shell] [class*="modalActions"] {
+  border-color: var(--border);
+}
+
+/* ── Tier / macro / status badges (keep hue, soften for dark) ── */
+[data-theme="dark"] [data-dashboard-shell] [class*="type_"],
+[data-theme="dark"] [data-dashboard-shell] [class*="statusActive"],
+[data-theme="dark"] [data-dashboard-shell] [class*="statusArchived"],
+[data-theme="dark"] [data-dashboard-shell] [class*="macroP"],
+[data-theme="dark"] [data-dashboard-shell] [class*="macroC"],
+[data-theme="dark"] [data-dashboard-shell] [class*="macroF"],
+[data-theme="dark"] [data-dashboard-shell] [class*="riskBadge"],
+[data-theme="dark"] [data-dashboard-shell] [class*="daysLeft"],
+[data-theme="dark"] [data-dashboard-shell] [class*="badge"] {
+  filter: brightness(0.92);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="daysLeft"].expired,
+[data-theme="dark"] [data-dashboard-shell] [class*="daysLeft"][class*="expired"] {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="daysLeft"].urgent,
+[data-theme="dark"] [data-dashboard-shell] [class*="daysLeft"][class*="urgent"] {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fcd34d;
+}
+
+/* ── Business tracker extras ── */
+[data-theme="dark"] [data-dashboard-shell] [class*="revenueSection"] {
+  background: linear-gradient(145deg, var(--grey-100) 0%, var(--bg-card) 100%);
+  border-color: var(--border);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="periodTabs"] {
+  background: var(--bg-card);
+  border-color: var(--border);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="periodTabActive"] {
+  filter: brightness(1.05);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="revenueSub"] code {
+  background: var(--grey-200);
+  color: var(--text-main);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="tierCard"] {
+  background: var(--grey-100);
+  border-color: var(--border);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="tierCard"]:hover {
+  background: var(--bg-hover);
+  border-color: var(--yellow);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="macroStrip"] {
+  background: var(--grey-100);
+  border-color: var(--border);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="errorBanner"] {
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.25);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="profitPreview"] {
+  background: rgba(34, 197, 94, 0.12);
+  color: #86efac;
+  border-color: rgba(34, 197, 94, 0.25);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="externalLink"] {
+  background: rgba(20, 184, 166, 0.15);
+  border-color: rgba(20, 184, 166, 0.35);
+  color: #5eead4;
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="spinner"] {
+  border-color: var(--border);
+  border-top-color: var(--yellow);
+}
+
+/* Client profile page sections */
+[data-theme="dark"] [data-dashboard-shell] [class*="profileHeader"],
+[data-theme="dark"] [data-dashboard-shell] [class*="section"],
+[data-theme="dark"] [data-dashboard-shell] [class*="infoCard"],
+[data-theme="dark"] [data-dashboard-shell] [class*="tabPanel"],
+[data-theme="dark"] [data-dashboard-shell] [class*="taskCard"],
+[data-theme="dark"] [data-dashboard-shell] [class*="txnRow"],
+[data-theme="dark"] [data-dashboard-shell] [class*="consultCard"] {
+  background: var(--bg-card);
+  border-color: var(--border);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="tabActive"] {
+  background: var(--yellow-tint);
+  color: var(--text-main);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="highlightYellow"],
+[data-theme="dark"] [data-dashboard-shell] [class*="warnRow"],
+[data-theme="dark"] [data-dashboard-shell] [class*="highlightRowYellow"],
+[data-theme="dark"] [data-dashboard-shell] [class*="rowHighlight"] {
+  background: rgba(245, 196, 0, 0.12) !important;
+  color: var(--text-main);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="dangerZone"],
+[data-theme="dark"] [data-dashboard-shell] [class*="deleteSection"] {
+  border-color: rgba(239, 68, 68, 0.35);
+  background: rgba(239, 68, 68, 0.06);
+}
