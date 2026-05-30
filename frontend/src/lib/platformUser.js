@@ -1,5 +1,5 @@
 /**
- * True for 365 RND platform operators (JWT /auth `is_platform_admin`).
+ * True for FitnessVitness platform operators (JWT /auth `is_platform_admin`).
  * Not the same as a tenant workspace user whose CRM role may be labeled "admin" in the UI.
  */
 export function isPlatformSuperAdmin(user) {

@@ -90,7 +90,7 @@
 .field label {
   font-size: 0.85rem;
   font-weight: 600;
-  color: #475569;
+  color: var(--text-muted);
 }
 
 .field input, .field select, .field textarea {
@@ -99,7 +99,7 @@
   border-radius: 8px;
   font-family: inherit;
   font-size: 0.95rem;
-  background: white;
+  background: var(--bg-card);
   transition: border-color 0.3s ease;
 }
 
@@ -142,8 +142,8 @@
 }
 
 .cancelBtn {
-  background: #f1f5f9;
-  color: #475569;
+  background: var(--grey-100);
+  color: var(--text-muted);
   border: none;
   padding: 1rem 2rem;
   border-radius: 10px;

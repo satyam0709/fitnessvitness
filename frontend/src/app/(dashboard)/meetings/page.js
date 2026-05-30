@@ -920,7 +920,7 @@ function MeetingsPageContent() {
         </p>
       ) : null}
 
-      <p className={styles.footerCopy}>Copyright © {new Date().getFullYear()} 365 RND CRM. All rights reserved.</p>
+      <p className={styles.footerCopy}>Copyright © {new Date().getFullYear()} FitnessVitness CRM. All rights reserved.</p>
 
       <MeetingFormModal
         open={addOpen}

@@ -69,7 +69,7 @@ export default function AllInOneCRM() {
         
         {/* HEADER */}
         <div className={styles.header}>
-          <h2 className={styles.title}>All-in-365 RND CRM Software</h2>
+          <h2 className={styles.title}>All-in-FitnessVitness CRM Software</h2>
           
           <div className={styles.tabContainer}>
             {TABS.map((tab) => (

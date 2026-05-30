@@ -13,7 +13,7 @@ export default function FeaturesSection() {
         
         <div className={styles.header}>
           <h2 className={styles.title}>
-            365 RND CRM: Built for Sales Teams,<br />
+            FitnessVitness CRM: Built for Sales Teams,<br />
             Loved by Sales Teams
           </h2>
           
@@ -22,13 +22,13 @@ export default function FeaturesSection() {
               className={`${styles.tab} ${activeTab === "experienced" ? styles.activeTab : ""}`}
               onClick={() => setActiveTab("experienced")}
             >
-              I've used a 365 RND CRM before
+              I've used a FitnessVitness CRM before
             </button>
             <button 
               className={`${styles.tab} ${activeTab === "newbie" ? styles.activeTab : ""}`}
               onClick={() => setActiveTab("newbie")}
             >
-              I haven't used a 365 RND CRM before
+              I haven't used a FitnessVitness CRM before
             </button>
           </div>
         </div>
@@ -88,7 +88,7 @@ export default function FeaturesSection() {
                 />
               </div>
               <div className={styles.textCol}>
-                <h3 className={styles.heading}>365 RND CRM: Tailored to Your Business Needs</h3>
+                <h3 className={styles.heading}>FitnessVitness CRM: Tailored to Your Business Needs</h3>
                 <p className={styles.paragraph}>
                   A powerful lead management CRM tailored to your business aligns with your unique processes, helping streamline customer interactions, personalize experiences, improve team collaboration, and boost productivity. As the best CRM for small business, it adapts to your needs, enhancing efficiency and growth potential.
                 </p>
@@ -113,9 +113,9 @@ export default function FeaturesSection() {
                 />
               </div>
               <div className={styles.textCol}>
-                <h3 className={styles.heading}>Unlock Sales Success with 365 RND CRM</h3>
+                <h3 className={styles.heading}>Unlock Sales Success with FitnessVitness CRM</h3>
                 <p className={styles.paragraph}>
-                  Transform the way you manage leads and drive sales with 365 RND CRM. Designed to streamline your sales processes, our 365 RND CRM empowers you to efficiently track, nurture, and convert leads into loyal customers.
+                  Transform the way you manage leads and drive sales with FitnessVitness CRM. Designed to streamline your sales processes, our FitnessVitness CRM empowers you to efficiently track, nurture, and convert leads into loyal customers.
                 </p>
                 <ul className={styles.list}>
                   <li><strong>Boost Productivity:</strong> Centralize your data for quick access and seamless collaboration.</li>

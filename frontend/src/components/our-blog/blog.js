@@ -12,7 +12,7 @@ const BLOG_DATA = [
     desc: "In many growing companies, internal communication becomes complicated as teams expand and responsibilities increase. Sales teams share updates, manage task lists...",
     date: "20 Mar, 2026",
     comments: 0,
-    image: "/assets/logo.png",
+    image: "/assets/logo.svg",
     slug: "why-businesses-prefer-crm-live-chat",
   },
   {
@@ -21,16 +21,16 @@ const BLOG_DATA = [
     desc: "Running a startup often means working with limited resources, small teams, and a constant flow of responsibilities. Founders wear multiple hats and sales teams juggle leads...",
     date: "10 Mar, 2026",
     comments: 0,
-    image: "/assets/logo.png",
+    image: "/assets/logo.svg",
     slug: "crm-automation-for-startups",
   },
   {
     id: 3,
-    title: "Manage Your Business Easily with the 365 CRM Mobile App",
+    title: "Manage Your Business Easily with the FitnessVitness CRM Mobile App",
     desc: "Managing a business is no longer limited to office hours or desktop systems. Leads can arrive anytime, sales teams are often working in the field, and customer expectations...",
     date: "28 Feb, 2026",
     comments: 0,
-    image: "/assets/logo.png",
+    image: "/assets/logo.svg",
     slug: "manage-business-with-365-crm-mobile-app",
   },
 ];

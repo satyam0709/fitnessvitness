@@ -58,10 +58,10 @@ export default function ContactForm() {
     <section className={styles.section}>
       <div className={styles.inner}>
         <h2 className={styles.title}>
-          Empowering Businesses with <span>365 RND TECHNOSOFT CRM Solutions</span>
+          Empowering Businesses with <span>FitnessVitness CRM Solutions</span>
         </h2>
         <p className={styles.desc}>
-          Track leads, assign tasks, set reminders, and communicate effortlessly — all with 365 RND TECHNOSOFT CRM Software.
+          Track leads, assign tasks, set reminders, and communicate effortlessly — all with FitnessVitness CRM Software.
         </p>
 
         {success && (

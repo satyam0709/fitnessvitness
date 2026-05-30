@@ -362,7 +362,7 @@ export default function TodayPage() {
           {filteredUpcoming.length > 0 ? (
             <section className={styles.section}>
               <h2 className={`${styles.sectionHeader} ${styles.sectionUpcoming}`}>
-                Upcoming Tasks — {filteredUpcoming.length} next up
+                Upcoming — {filteredUpcoming.length} next up
               </h2>
               <div className={styles.cardList}>
                 {filteredUpcoming.map((it) => (

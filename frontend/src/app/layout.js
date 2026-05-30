@@ -2,6 +2,7 @@ import ConditionalLayout from "@/components/ConditionalLayout/conditionalLayout"
 import "./globals.css";
 import "@fortawesome/fontawesome-free/css/all.min.css";
 import { Inter, Lora, Montserrat } from "next/font/google";
+import { APP_NAME, LOGO_SRC } from "@/lib/branding";
 
 const montserrat = Montserrat({
   subsets: ["latin"],
@@ -26,10 +27,10 @@ const lora = Lora({
 });
 
 export const metadata = {
-  title: "365 RND CRM",
+  title: APP_NAME,
   icons: {
-    icon: "/assets/365-rnd-crm-sidebar-compressed-logo-dark.svg",
-    shortcut: "/assets/365-rnd-crm-sidebar-compressed-logo-dark.svg",
+    icon: LOGO_SRC,
+    shortcut: LOGO_SRC,
   },
 };
 

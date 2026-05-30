@@ -1,4 +1,4 @@
-# 365 RND CRM
+# FitnessVitness CRM
 
 Full-stack CRM web application: **Next.js** frontend, **Express** API, **MySQL**, **Clerk** authentication, subscriptions/orders, leads, tasks, reminders, meetings, notes, invoices, and an **admin** control panel.
 
@@ -205,5 +205,5 @@ For issues and feature requests, use **GitHub Issues** on this repository.
 ---
 
 <p align="center">
-  <b>365 RND CRM</b> · Built with Next.js & Express
+  <b>FitnessVitness CRM</b> · Built with Next.js & Express
 </p>

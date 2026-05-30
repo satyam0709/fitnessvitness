@@ -9,7 +9,7 @@ const PHRASES = [
   "Streamline Your Business",
   "Anytime",
   "Anywhere",
-  "Simplified 365 RND CRM",
+  "Simplified FitnessVitness CRM",
   "Leads in Your Hands"
 ];
 
@@ -63,7 +63,7 @@ export default function MobileAppSection() {
         </div>
 
         <div className={styles.textCol}>
-          <h2 className={styles.mainTitle}>365 RND CRM</h2>
+          <h2 className={styles.mainTitle}>FitnessVitness CRM</h2>
           
           <div className={styles.typewriterWrapper}>
             <span className={styles.animatedText}>{text}</span>
@@ -71,7 +71,7 @@ export default function MobileAppSection() {
           </div>
 
           <p className={styles.desc}>
-            Stay ahead of the competition with the 365 RND CRM mobile app.
+            Stay ahead of the competition with the FitnessVitness CRM mobile app.
             Take control of your business from anywhere. With real-time
             updates, lead management, and faster deal closures, you can
             stay productive whether you're on the move or at your desk.

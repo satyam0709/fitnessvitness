@@ -1,7 +1,7 @@
 {
   "name": "rnd-technosoft-backend",
   "version": "1.0.0",
-  "description": "RND TECHNOSOFT CRM Backend",
+  "description": "FitnessVitness CRM Backend",
   "main": "src/server.js",
   "scripts": {
     "dev": "nodemon src/server.js",

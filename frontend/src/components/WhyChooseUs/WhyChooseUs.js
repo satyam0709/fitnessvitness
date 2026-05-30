@@ -31,13 +31,13 @@ export default function WhyChooseSection() {
         
         {/* HEADER & TEXT */}
         <div className={styles.header}>
-          <h2 className={styles.title}>Why Choose 365 RND CRM Software?</h2>
+          <h2 className={styles.title}>Why Choose FitnessVitness CRM Software?</h2>
           <div className={styles.desc}>
             <p>
-               365 RND CRM Software offers a comprehensive solution to enhance your sales processes by eliminating lead leakage, ensuring faster response times, and boosting task efficiency. It centralizes lead tracking and automates follow-ups, simplifying lead management and reducing missed opportunities.
+               FitnessVitness CRM Software offers a comprehensive solution to enhance your sales processes by eliminating lead leakage, ensuring faster response times, and boosting task efficiency. It centralizes lead tracking and automates follow-ups, simplifying lead management and reducing missed opportunities.
             </p>
             <p>
-              365 RND CRM accelerates funnel movement by streamlining lead nurturing and ensuring timely actions, such as automated reminders and task assignments. Its robust lead management system provides real-time analytics and actionable insights, helping sales teams prioritize leads, improve conversion rates, and optimize workflows. By offering the best lead management software CRM with seamless automation and insightful tools, 365 RND CRM system drives productivity and overall sales performance.
+              FitnessVitness CRM accelerates funnel movement by streamlining lead nurturing and ensuring timely actions, such as automated reminders and task assignments. Its robust lead management system provides real-time analytics and actionable insights, helping sales teams prioritize leads, improve conversion rates, and optimize workflows. By offering the best lead management software CRM with seamless automation and insightful tools, FitnessVitness CRM system drives productivity and overall sales performance.
             </p>
           </div>
         </div>

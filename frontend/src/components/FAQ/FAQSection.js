@@ -39,7 +39,7 @@ const FAQS = [
   {
     category: "Integrations",
     q: "Can the CRM integrate with other software?",
-    a: "Yes, 365 CRM integrates with TradeIndia, 99acres, Justdial, Facebook, Instagram, MagicBricks, Google Calendar, SoftwareSuggest, and WordPress for seamless data sync. It also supports custom forms to collect and manage data specific to your business.",
+    a: "Yes, FitnessVitness CRM integrates with TradeIndia, 99acres, Justdial, Facebook, Instagram, MagicBricks, Google Calendar, SoftwareSuggest, and WordPress for seamless data sync. It also supports custom forms to collect and manage data specific to your business.",
   },
   {
     category: "Pricing",
@@ -170,7 +170,7 @@ export default function FAQSection({ preview = false }) {
           <p className={styles.eyebrow}>Got Questions?</p>
           <h2 className={styles.title}>Frequently Asked Questions</h2>
           <p className={styles.subtitle}>
-            Everything you need to know about 365 CRM. Can't find the answer? {" "}
+            Everything you need to know about FitnessVitness CRM. Can't find the answer? {" "}
             <a href="/contact-us" className={styles.contactLink}>Talk to our team.</a>
           </p>
         </div>

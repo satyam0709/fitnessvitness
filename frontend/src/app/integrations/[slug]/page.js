@@ -12,12 +12,12 @@ export function generateMetadata({ params }) {
 
   if (!integration) {
     return {
-      title: "Integration Not Found - RND TECHNOSOFT CRM",
+      title: "Integration Not Found - FitnessVitness CRM",
     };
   }
 
   return {
-    title: `${integration.title} Integration - RND TECHNOSOFT CRM`,
+    title: `${integration.title} Integration - FitnessVitness CRM`,
     description: integration.desc,
   };
 }
@@ -54,7 +54,7 @@ export default function IntegrationDetailPage({ params }) {
           </Link>
           <div className={styles.tag}>Integration Setup</div>
           <h1 className={styles.title}>
-            Connect <span>{integration.title}</span> to 365 RND CRM
+            Connect <span>{integration.title}</span> to FitnessVitness CRM
           </h1>
           <p className={styles.subtitle}>{integration.desc}</p>
 

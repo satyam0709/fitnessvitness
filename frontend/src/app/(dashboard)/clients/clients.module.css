@@ -21,7 +21,7 @@
 .header h1 {
   font-size: 32px;
   font-weight: 800;
-  color: #1e293b;
+  color: var(--text-main);
   margin: 0;
   letter-spacing: -0.03em;
 }
@@ -54,10 +54,10 @@
 }
 
 .stat {
-  background: white;
+  background: var(--bg-card);
   padding: 20px;
   border-radius: 20px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -74,13 +74,13 @@
 .statValue {
   font-size: 28px;
   font-weight: 800;
-  color: #1e293b;
+  color: var(--text-main);
 }
 
 .statLabel {
   font-size: 12px;
   font-weight: 600;
-  color: #64748b;
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -104,8 +104,8 @@
   padding: 8px 18px;
   border-radius: 12px;
   border: 1.5px solid #e2e8f0;
-  background: white;
-  color: #64748b;
+  background: var(--bg-card);
+  color: var(--text-muted);
   font-size: 14px;
   font-weight: 700;
   cursor: pointer;
@@ -115,19 +115,25 @@
 
 .filterBtn:hover {
   border-color: #f5c400;
-  color: #1e293b;
+  color: var(--text-main);
 }
 
-.filterBtn.active {
-  background: #1e293b;
-  color: white;
-  border-color: #1e293b;
+.active {
+  background: var(--btn-dark-bg);
+  color: var(--btn-dark-txt);
+  border-color: var(--btn-dark-bg);
+}
+
+[data-theme="dark"] .active {
+  background: var(--yellow);
+  color: var(--btn-primary-txt);
+  border-color: var(--yellow);
 }
 
 .search {
   padding: 12px 20px;
   border-radius: 14px;
-  border: 1.5px solid #e2e8f0;
+  border: 1.5px solid var(--border);
   width: 320px;
   font-size: 15px;
   transition: all 0.2s ease;
@@ -140,9 +146,9 @@
 }
 
 .tableWrap {
-  background: white;
+  background: var(--bg-card);
   border-radius: 24px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--border);
   box-shadow: 0 20px 25px -5px rgba(0,0,0,0.05);
   overflow: hidden;
 }
@@ -153,22 +159,22 @@
 }
 
 .table th {
-  background: #f8fafc;
+  background: var(--grey-100);
   padding: 18px 20px;
   text-align: left;
   font-size: 12px;
   font-weight: 700;
-  color: #64748b;
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--border);
 }
 
 .table td {
   padding: 20px;
   font-size: 15px;
-  color: #1e293b;
-  border-bottom: 1px solid #f1f5f9;
+  color: var(--text-main);
+  border-bottom: 1px solid var(--border);
 }
 
 .table tr:last-child td {
@@ -176,11 +182,11 @@
 }
 
 .table tr:hover td {
-  background: #f8fafc;
+  background: var(--bg-hover);
 }
 
-.goldRow { background: #fffdf5 !important; }
-.highRisk { background: #fff1f2 !important; }
+.goldRow { background: var(--yellow-tint) !important; }
+.highRisk { background: rgba(239, 68, 68, 0.08) !important; }
 
 .clientLink {
   color: #f5c400;
@@ -195,8 +201,8 @@
   padding: 8px 10px;
   border-radius: 10px;
   border: 1.5px solid #e2e8f0;
-  background: #fff;
-  color: #1e293b;
+  background: var(--bg-card);
+  color: var(--text-main);
   font-size: 13px;
   font-weight: 700;
 }
@@ -221,7 +227,7 @@
   font-size: 11px;
   font-weight: 700;
   background: #f1f5f9;
-  color: #64748b;
+  color: var(--text-muted);
 }
 
 .highRiskBadge {
@@ -259,6 +265,6 @@
 .loading, .empty {
   text-align: center;
   padding: 100px;
-  color: #94a3b8;
+  color: var(--text-muted);
   font-size: 16px;
 }

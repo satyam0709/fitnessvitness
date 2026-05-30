@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: RND TECHNOSOFT CRM API
+  title: FitnessVitness CRM API
   version: 1.0.0
   description: |
     Multi-tenant CRM API with three-tier architecture:

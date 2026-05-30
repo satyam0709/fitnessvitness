@@ -96,7 +96,7 @@
   border-radius: 8px;
   border: 1px solid var(--border, #e4e7f0);
   font-size: 0.9rem;
-  background: #fff;
+  background: var(--bg-card);
 }
 
 .searchInput {
@@ -106,7 +106,7 @@
 }
 
 .tableWrap {
-  background: #fff;
+  background: var(--bg-card);
   border-radius: 14px;
   border: 1px solid var(--border, #e4e7f0);
   overflow: hidden;
@@ -178,7 +178,7 @@
   padding: 0.35rem 0.6rem;
   border-radius: 8px;
   border: 1px solid #e2e8f0;
-  background: #fff;
+  background: var(--bg-card);
   font-size: 0.78rem;
   font-weight: 600;
   cursor: pointer;
@@ -296,7 +296,7 @@
   padding: 0.6rem 1rem;
   border-radius: 8px;
   border: 1px solid #e2e8f0;
-  background: #fff;
+  background: var(--bg-card);
   cursor: pointer;
   font-weight: 600;
 }

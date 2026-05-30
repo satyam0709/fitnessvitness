@@ -22,7 +22,8 @@ export function useTodayFeed({ enabled = true, debounceMs = 250 } = {}) {
       if (!silent) setLoading(true);
       setError("");
       try {
-        const res = await apiFetch("/today");
+        const localDate = new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD in browser local TZ
+        const res = await apiFetch(`/today?date=${localDate}`);
         const json = await res.json().catch(() => ({}));
         if (!res.ok || !json.success) {
           throw new Error(json.message || "Failed to load today");

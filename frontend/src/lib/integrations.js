@@ -16,7 +16,7 @@ function createIntegration(config) {
       name: "Aman Sharma",
       phone: "+91 98765 43210",
       email: "aman@example.com",
-      company_name: "RND Prospect",
+      company_name: "Fitness Prospect",
       message: "Interested in a demo and pricing details.",
       assigned_to: "clerk_user_id_or_internal_user_id",
     },
@@ -37,7 +37,7 @@ export const INTEGRATIONS = [
     badge: "Most Popular",
     setupSteps: [
       "Open Facebook Lead Ads or your automation tool for the page or campaign.",
-      "Configure a webhook or automation action that posts each lead to your RND CRM webhook URL.",
+      "Configure a webhook or automation action that posts each lead to your FitnessVitness CRM webhook URL.",
       "Send the shared integration secret in the `x-integration-secret` header or as a bearer token.",
       "Map the lead name and mobile number at minimum, then pass email, company, and notes when available.",
     ],
