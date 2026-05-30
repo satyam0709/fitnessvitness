@@ -16,8 +16,10 @@ const VALID_PRIORITY = new Set(["low", "medium", "high", "urgent"]);
 
 function applyScope(req, alias = "t") {
   const params = [];
-  const clauses = [`${alias}.is_deleted = 0`, `${alias}.tenant_id = ?`];
-  params.push(req.user.tenantId);
+  const clauses = [`${alias}.is_deleted = 0`];
+  const tenantId = req.user?.tenantId ?? null;
+  clauses.push(`(${alias}.tenant_id IS NULL OR ${alias}.tenant_id = ?)`);
+  params.push(tenantId);
   if (!canSeeAllTeamRecords(req)) {
     clauses.push(`(${alias}.created_by = ? OR ${alias}.assigned_to = ?)`);
     params.push(req.user.id, req.user.id);

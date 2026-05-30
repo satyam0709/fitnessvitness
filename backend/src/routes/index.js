@@ -23,9 +23,11 @@ const authRouter         = require("./auth");
 const fitnessRouter      = require("./fitness");
 const collectionsRouter  = require("./collections");
 const todayRouter        = require("./today");
+const { ensureCrmSchemaMiddleware } = require("../middleware/ensureCrmSchema");
 
 const router = express.Router();
 const protectedRoute = [verifyToken];
+const crmSchemaReady = ensureCrmSchemaMiddleware();
 
 function normalizeOrigin(raw) {
   const v = String(raw || "").trim();
@@ -111,13 +113,13 @@ router.get("/me/features", verifyToken, (req, res) => {
 });
 
 router.use("/users",        usersRouter);
-router.use("/leads", ...protectedRoute, leadsRouter);
+router.use("/leads", ...protectedRoute, crmSchemaReady, leadsRouter);
 router.use("/opportunities", ...protectedRoute, opportunitiesRouter);
-router.use("/tickets", ...protectedRoute, ticketsRouter);
-router.use("/tasks", ...protectedRoute, tasksRouter);
-router.use("/reminders", ...protectedRoute, remindersRouter);
-router.use("/meetings", ...protectedRoute, meetingsRouter);
-router.use("/todos", ...protectedRoute, todosRouter);
+router.use("/tickets", ...protectedRoute, crmSchemaReady, ticketsRouter);
+router.use("/tasks", ...protectedRoute, crmSchemaReady, tasksRouter);
+router.use("/reminders", ...protectedRoute, crmSchemaReady, remindersRouter);
+router.use("/meetings", ...protectedRoute, crmSchemaReady, meetingsRouter);
+router.use("/todos", ...protectedRoute, crmSchemaReady, todosRouter);
 router.use("/notifications", ...protectedRoute, notificationsRouter);
 router.use("/dashboard", ...protectedRoute, dashboardRouter);
 router.use("/today", ...protectedRoute, todayRouter);

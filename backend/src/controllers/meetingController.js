@@ -1,4 +1,5 @@
 const { pool } = require("../config/database");
+const { tableExists } = require("../utils/schemaHelpers");
 const {
   emitMeetingsChanged,
   emitAdminChanged,
@@ -206,6 +207,27 @@ async function resolveUserRowById(id) {
   return rows[0] || null;
 }
 
+function userDisplayName(alias) {
+  return `TRIM(CONCAT(COALESCE(${alias}.first_name,''), ' ', COALESCE(${alias}.last_name,'')))`;
+}
+
+function buildMeetingListSql(hasLeads) {
+  const leadJoin = hasLeads ? "LEFT JOIN leads l ON l.id = m.lead_id" : "";
+  const leadSelect = hasLeads ? "l.name AS lead_name," : "NULL AS lead_name,";
+  return `
+      SELECT DISTINCT m.*,
+        ${leadSelect}
+        ${userDisplayName("uo")} AS organizer_name,
+        ${userDisplayName("ua")} AS assignee_name,
+        (SELECT COUNT(*) FROM meeting_attendees c WHERE c.meeting_id = m.id) AS attendee_count,
+        (SELECT GROUP_CONCAT(ma2.user_id) FROM meeting_attendees ma2 WHERE ma2.meeting_id = m.id) AS attendee_ids_csv
+      FROM meetings m
+      LEFT JOIN meeting_attendees ma ON ma.meeting_id = m.id
+      ${leadJoin}
+      LEFT JOIN users uo ON uo.id = m.organizer_id
+      LEFT JOIN users ua ON ua.id = m.assigned_to_user_id`;
+}
+
 async function getMeetings(req, res) {
   try {
     const uid = viewerId(req);
@@ -225,23 +247,28 @@ async function getMeetings(req, res) {
     );
     const total = Number(countRows?.[0]?.total ?? 0);
 
-    const listSql = `
-      SELECT DISTINCT m.*,
-        l.name AS lead_name,
-        uo.full_name AS organizer_name,
-        ua.full_name AS assignee_name,
-        (SELECT COUNT(*) FROM meeting_attendees c WHERE c.meeting_id = m.id) AS attendee_count,
-        (SELECT GROUP_CONCAT(ma2.user_id) FROM meeting_attendees ma2 WHERE ma2.meeting_id = m.id) AS attendee_ids_csv
-      FROM meetings m
-      LEFT JOIN meeting_attendees ma ON ma.meeting_id = m.id
-      LEFT JOIN leads l ON l.id = m.lead_id
-      LEFT JOIN users uo ON uo.id = m.organizer_id
-      LEFT JOIN users ua ON ua.id = m.assigned_to_user_id
+    const hasLeads = await tableExists("leads");
+    const listSql = `${buildMeetingListSql(hasLeads)}
       WHERE ${whereSql}
       ORDER BY m.start_time DESC, m.id DESC
       LIMIT ${lim} OFFSET ${offset}`;
 
-    const [meetings] = await pool.query(listSql, bind);
+    let meetings;
+    try {
+      [meetings] = await pool.query(listSql, bind);
+    } catch (err) {
+      if (err.code === "ER_NO_SUCH_TABLE" && hasLeads) {
+        [meetings] = await pool.query(
+          `${buildMeetingListSql(false)}
+      WHERE ${whereSql}
+      ORDER BY m.start_time DESC, m.id DESC
+      LIMIT ${lim} OFFSET ${offset}`,
+          bind
+        );
+      } else {
+        throw err;
+      }
+    }
 
     res.json({
       success: true,
