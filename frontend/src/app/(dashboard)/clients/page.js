@@ -21,7 +21,15 @@ const PROGRESS_COLORS = {
   "Very Poor": "#ef4444",
 };
 
-const QUICK_CHIPS = ["all", "Active", "Hold", "Overdue", "High Risk", "Next Due"];
+const QUICK_CHIPS = [
+  "all",
+  "Active",
+  "Hold",
+  "Overdue",
+  "High Risk",
+  "Low Risk",
+  "Next Due",
+];
 
 const PROGRESS_OPTIONS = ["Very Good", "Good", "Neutral", "Poor", "Very Poor"];
 const SOURCE_OPTIONS = [
@@ -58,7 +66,7 @@ const DEFAULT_FILTERS = {
   tierMax: "",
   city: "",
   priority: "",
-  highRisk: false,
+  riskLevel: "",
   expiringWithin: "",
   nextDueFrom: "",
   nextDueTo: "",
@@ -104,7 +112,7 @@ function countAdvancedFilters(f) {
   if (f.tierMin || f.tierMax) n++;
   if (f.city) n++;
   if (f.priority) n++;
-  if (f.highRisk) n++;
+  if (f.riskLevel) n++;
   if (f.expiringWithin) n++;
   if (f.nextDueFrom || f.nextDueTo) n++;
   if (f.planExpiryFrom || f.planExpiryTo) n++;
@@ -125,7 +133,8 @@ function buildClientQueryParams(appliedFilters, search, sort) {
   if (appliedFilters.tierMax) params.set("tier_max", appliedFilters.tierMax);
   if (appliedFilters.city.trim()) params.set("city", appliedFilters.city.trim());
   if (appliedFilters.priority) params.set("priority", appliedFilters.priority);
-  if (appliedFilters.highRisk) params.set("high_risk", "1");
+  if (appliedFilters.riskLevel === "high") params.set("high_risk", "1");
+  if (appliedFilters.riskLevel === "low") params.set("low_risk", "1");
   if (appliedFilters.expiringWithin) params.set("expiring_within", appliedFilters.expiringWithin);
   if (appliedFilters.nextDueFrom) params.set("next_due_from", appliedFilters.nextDueFrom);
   if (appliedFilters.nextDueTo) params.set("next_due_to", appliedFilters.nextDueTo);
@@ -208,7 +217,12 @@ export default function ClientsPage() {
     setDraftFilters((prev) => ({ ...prev, [key]: value }));
 
   const handleQuickChip = (chip) => {
-    const next = { ...draftFilters, status: chip };
+    const next = {
+      ...draftFilters,
+      status: chip,
+      riskLevel:
+        chip === "High Risk" ? "high" : chip === "Low Risk" ? "low" : "",
+    };
     setDraftFilters(next);
     setAppliedFilters(next);
     if (chip === "Next Due" || chip === "Overdue") {
@@ -499,13 +513,31 @@ export default function ClientsPage() {
                 onChange={(e) => setDraftField("planExpiryTo", e.target.value)}
               />
             </label>
-            <label className={`${styles.filterField} ${styles.filterCheck}`}>
-              <input
-                type="checkbox"
-                checked={draftFilters.highRisk}
-                onChange={(e) => setDraftField("highRisk", e.target.checked)}
-              />
-              <span>High risk only</span>
+            <label className={styles.filterField}>
+              <span>Risk level</span>
+              <select
+                className={styles.filterSelect}
+                value={draftFilters.riskLevel}
+                onChange={(e) => {
+                  const riskLevel = e.target.value;
+                  setDraftFilters((prev) => ({
+                    ...prev,
+                    riskLevel,
+                    status:
+                      riskLevel === "high"
+                        ? "High Risk"
+                        : riskLevel === "low"
+                          ? "Low Risk"
+                          : prev.status === "High Risk" || prev.status === "Low Risk"
+                            ? "all"
+                            : prev.status,
+                  }));
+                }}
+              >
+                <option value="">Any</option>
+                <option value="high">High risk only</option>
+                <option value="low">Low risk only</option>
+              </select>
             </label>
           </div>
           <div className={styles.filterActions}>

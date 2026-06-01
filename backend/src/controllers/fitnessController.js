@@ -339,12 +339,14 @@ function buildClientListWhere(q) {
   const statusRaw = String(q.status || "").trim();
   const isOverdueView = statusRaw === "Overdue";
   const isHighRiskView = statusRaw === "High Risk";
+  const isLowRiskView = statusRaw === "Low Risk";
   const isNextDueView = statusRaw === "Next Due";
-  const isSpecialView = isOverdueView || isHighRiskView || isNextDueView;
+  const isSpecialView =
+    isOverdueView || isHighRiskView || isLowRiskView || isNextDueView;
 
   const clauses = ["1=1"];
   const params = [];
-  const computed = { overdue: false, highRisk: false, priority: null };
+  const computed = { overdue: false, highRisk: false, lowRisk: false, priority: null };
 
   if (statusRaw && !isSpecialView && VALID_ENUMS.status.includes(statusRaw)) {
     clauses.push("status = ?");
@@ -357,6 +359,9 @@ function buildClientListWhere(q) {
   } else if (isHighRiskView) {
     clauses.push("status != 'Inactive'");
     computed.highRisk = true;
+  } else if (isLowRiskView) {
+    clauses.push("status != 'Inactive'");
+    computed.lowRisk = true;
   } else if (isNextDueView) {
     clauses.push("status != 'Inactive'", "next_due_date IS NOT NULL");
   }
@@ -444,6 +449,11 @@ function buildClientListWhere(q) {
 
   if (q.high_risk === "1" || q.high_risk === "true") {
     computed.highRisk = true;
+    computed.lowRisk = false;
+  }
+  if (q.low_risk === "1" || q.low_risk === "true") {
+    computed.lowRisk = true;
+    computed.highRisk = false;
   }
 
   return {
@@ -493,6 +503,9 @@ function applyComputedClientFilters(rows, computed) {
   }
   if (computed.highRisk) {
     out = out.filter((c) => c.is_high_risk);
+  }
+  if (computed.lowRisk) {
+    out = out.filter((c) => !c.is_high_risk);
   }
   if (computed.priority === "due_soon") {
     out = out.filter((c) => c.follow_up_priority === "🟡 DUE SOON");
