@@ -99,6 +99,286 @@ function toIsoDateTime(v) {
   return Number.isNaN(d.getTime()) ? s : d.toISOString();
 }
 
+function truncateText(value, maxLen = 140) {
+  if (value == null || value === "") return null;
+  const t = String(value).replace(/\s+/g, " ").trim();
+  if (!t) return null;
+  return t.length <= maxLen ? t : `${t.slice(0, maxLen - 1)}…`;
+}
+
+function joinSubtitleParts(parts) {
+  return parts
+    .map((p) => (p == null ? "" : String(p).trim()))
+    .filter(Boolean)
+    .join(" · ");
+}
+
+const TODAY_ACTION_LABELS = {
+  todo: "Complete to-do",
+  meeting: "Attend meeting",
+  reminder: "Complete reminder",
+  lead_followup: "Call lead and log follow-up",
+  client_followup: "Client check-in follow-up",
+  task: "Complete task",
+  calendar_event: "Calendar event",
+  google_event: "Google Calendar event",
+  apple_event: "Apple Calendar event",
+  opportunity_followup: "Prospect follow-up",
+  collection_followup: "Collection follow-up",
+  fitness_payment_due: "Collect or record payment",
+  fitness_client_task: "Complete client task",
+};
+
+function isDateOnlyDue(sourceType, dueRaw) {
+  const dateOnlyTypes = new Set([
+    "lead_followup",
+    "client_followup",
+    "todo",
+    "fitness_client_task",
+    "collection_followup",
+    "fitness_payment_due",
+  ]);
+  if (dateOnlyTypes.has(sourceType)) return true;
+  const s = String(dueRaw || "");
+  return /^\d{4}-\d{2}-\d{2}$/.test(s.slice(0, 10)) && s.length <= 10;
+}
+
+function formatDisplayDate(ymdOrDate, dateOnly) {
+  const s = String(ymdOrDate).slice(0, 10);
+  const d = dateOnly ? new Date(`${s}T12:00:00`) : new Date(ymdOrDate);
+  if (Number.isNaN(d.getTime())) return s;
+  return d.toLocaleDateString("en-IN", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function formatDisplayTime(dueRaw, dateOnly) {
+  if (dateOnly) return null;
+  const d = new Date(dueRaw);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleTimeString("en-IN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+function buildDueDisplay(item, referenceDateYmd) {
+  const dueRaw = item.due_date;
+  if (!dueRaw) {
+    return {
+      label: "No date set",
+      relative: null,
+      date_text: null,
+      time_text: null,
+      due_ymd: null,
+    };
+  }
+
+  const dateOnly = isDateOnlyDue(item.source_type, dueRaw);
+  const dueYmd = String(dueRaw).slice(0, 10);
+  const dateText = formatDisplayDate(dueRaw, dateOnly);
+  const timeText = formatDisplayTime(dueRaw, dateOnly);
+
+  let relative = null;
+  if (dueYmd < referenceDateYmd) {
+    relative = item.is_overdue ? "Overdue" : "Past due";
+  } else if (dueYmd === referenceDateYmd) {
+    relative = "Today";
+  } else if (dueYmd === addDaysYmd(referenceDateYmd, 1)) {
+    relative = "Tomorrow";
+  } else {
+    const a = new Date(`${referenceDateYmd}T00:00:00`);
+    const b = new Date(`${dueYmd}T00:00:00`);
+    const days = Math.round((b - a) / 86400000);
+    if (days > 1) relative = `In ${days} days`;
+  }
+
+  const prefixByType = {
+    lead_followup: "Follow-up",
+    client_followup: "Check-in due",
+    opportunity_followup: "Follow-up",
+    collection_followup: "Follow-up",
+    fitness_payment_due: "Payment due",
+    meeting: "Scheduled",
+    calendar_event: "Event",
+    google_event: "Event",
+    apple_event: "Event",
+    reminder: "Remind",
+    todo: "Due",
+    task: "Due",
+    fitness_client_task: "Due",
+  };
+  const prefix = prefixByType[item.source_type] || "Due";
+
+  let label;
+  if (relative === "Today" && timeText) {
+    label = `Today · ${timeText}`;
+  } else if (relative === "Today") {
+    label = `Today · ${dateText}`;
+  } else if (relative === "Tomorrow" && timeText) {
+    label = `Tomorrow · ${timeText}`;
+  } else if (relative === "Tomorrow") {
+    label = `Tomorrow · ${dateText}`;
+  } else if (relative && (relative === "Overdue" || relative === "Past due")) {
+    label = `${relative} · ${prefix} ${dateText}${timeText ? ` · ${timeText}` : ""}`;
+  } else if (relative) {
+    label = `${relative} · ${prefix} ${dateText}${timeText ? ` · ${timeText}` : ""}`;
+  } else {
+    label = `${prefix}: ${dateText}${timeText ? ` · ${timeText}` : ""}`;
+  }
+
+  return {
+    label,
+    relative,
+    date_text: dateText,
+    time_text: timeText,
+    due_ymd: dueYmd,
+  };
+}
+
+function buildItemSubtitle(item) {
+  const m = item.meta || {};
+  const st = item.source_type;
+
+  switch (st) {
+    case "todo":
+      return truncateText(
+        joinSubtitleParts([
+          m.todo_category ? String(m.todo_category).replace(/_/g, " ") : null,
+          m.body && m.body !== item.title ? m.body : null,
+          m.frequency && m.frequency !== "once" ? `Repeats ${m.frequency}` : null,
+        ])
+      );
+    case "meeting":
+      return truncateText(
+        joinSubtitleParts([
+          m.description,
+          m.meeting_type,
+          m.consultation_type,
+          m.location,
+          m.meet_link ? "Online link" : null,
+          item.client_name,
+        ])
+      );
+    case "reminder":
+      return truncateText(
+        joinSubtitleParts([
+          m.note,
+          m.lead_name ? `Lead: ${m.lead_name}` : null,
+          m.reminder_category,
+          item.client_name,
+        ])
+      );
+    case "lead_followup":
+      return truncateText(
+        joinSubtitleParts([
+          m.phone ? `Phone ${m.phone}` : null,
+          m.email,
+          m.source ? `Source: ${m.source}` : null,
+          m.health_goal ? `Goal: ${m.health_goal}` : null,
+          m.enquiry_stage ? `Stage: ${m.enquiry_stage}` : null,
+          item.status ? `Status: ${item.status}` : null,
+        ])
+      );
+    case "client_followup":
+      return truncateText(
+        joinSubtitleParts([
+          item.client_name,
+          m.plan_type,
+          m.progress ? `Progress: ${m.progress}` : null,
+          m.health_goal,
+          m.phone,
+        ])
+      );
+    case "task":
+      return truncateText(
+        joinSubtitleParts([
+          m.description,
+          m.task_category,
+          m.task_type,
+          item.client_name,
+        ])
+      );
+    case "calendar_event":
+      return truncateText(
+        joinSubtitleParts([
+          m.description,
+          m.category ? `Type: ${m.category}` : null,
+          m.all_day ? "All day" : null,
+        ])
+      );
+    case "google_event":
+      return truncateText(
+        joinSubtitleParts([
+          m.description,
+          m.all_day ? "All day" : null,
+        ])
+      );
+    case "apple_event":
+      return truncateText(
+        joinSubtitleParts([
+          m.description,
+          m.location,
+          m.all_day ? "All day" : null,
+        ])
+      );
+    case "opportunity_followup":
+      return truncateText(
+        joinSubtitleParts([
+          m.visit_purpose,
+          m.followup_type,
+          m.product_category,
+          m.stage ? `Stage: ${m.stage}` : null,
+          m.phone,
+        ])
+      );
+    case "collection_followup":
+      return truncateText(
+        joinSubtitleParts([
+          item.client_name,
+          m.collection_type,
+          m.pending_inr != null
+            ? `₹${Number(m.pending_inr).toLocaleString("en-IN")} pending`
+            : null,
+        ])
+      );
+    case "fitness_payment_due":
+      return truncateText(
+        joinSubtitleParts([
+          item.client_name,
+          m.product_plan,
+          m.transaction_type,
+          m.pending_inr != null
+            ? `₹${Number(m.pending_inr).toLocaleString("en-IN")} pending`
+            : null,
+          m.pay_mode ? `Mode: ${m.pay_mode}` : null,
+        ])
+      );
+    case "fitness_client_task":
+      return truncateText(
+        joinSubtitleParts([
+          m.task_description && m.task_description !== item.title ? m.task_description : null,
+          m.period,
+          m.notes,
+          item.client_name,
+        ])
+      );
+    default:
+      return truncateText(item.client_name);
+  }
+}
+
+function enrichTodayItem(item, referenceDateYmd) {
+  item.due_display = buildDueDisplay(item, referenceDateYmd);
+  item.subtitle = buildItemSubtitle(item);
+  item.action_label = TODAY_ACTION_LABELS[item.source_type] || "Complete action";
+  return item;
+}
+
 function normalizeItem(row) {
   const sourceType = row.source_type;
   const priority = row.priority || null;
@@ -132,6 +412,7 @@ function normalizeItem(row) {
         consultation_type: row.consultation_type ?? null,
         location: row.location ?? null,
         meet_link: row.meet_link ?? null,
+        description: row.description ?? null,
       };
       break;
     case "reminder":
@@ -175,6 +456,7 @@ function normalizeItem(row) {
         end_at: toIsoDateTime(row.end_at),
         all_day: !!row.all_day,
         category: row.category ?? "event",
+        description: row.description ?? null,
         readOnly: true,
       };
       break;
@@ -184,6 +466,7 @@ function normalizeItem(row) {
         end_at: toIsoDateTime(row.end_at),
         all_day: !!row.all_day,
         google_event_id: row.google_event_id ?? row.source_id,
+        description: row.description ?? null,
         readOnly: true,
       };
       break;
@@ -194,6 +477,7 @@ function normalizeItem(row) {
         all_day: !!row.all_day,
         apple_uid: row.apple_uid ?? row.source_id,
         location: row.location ?? null,
+        description: row.description ?? null,
         readOnly: true,
       };
       break;
@@ -337,7 +621,7 @@ async function fetchMeetings(date, userId) {
   if (hasIsDeleted) where.unshift("m.is_deleted = 0");
 
   const [rows] = await pool.execute(
-    `SELECT m.id, m.title, m.start_time, m.end_time, m.meeting_type, m.status,
+    `SELECT m.id, m.title, m.description, m.start_time, m.end_time, m.meeting_type, m.status,
             m.location, m.meet_link, m.start_time AS due_date, m.id AS source_id,
             'meeting' AS source_type, 0 AS is_overdue, NULL AS priority
             ${consultSelect}
@@ -487,8 +771,11 @@ async function fetchCalendarEvents(date, userId) {
   );
   if (!tables.length) return [];
 
+  const hasDesc = await hasColumn("crm_calendar_events", "description");
+  const descSelect = hasDesc ? ", e.description" : ", NULL AS description";
   const [rows] = await pool.execute(
-    `SELECT e.id, e.title, e.start_at, e.end_at, e.all_day, e.category,
+    `SELECT e.id, e.title, e.start_at, e.end_at, e.all_day, e.category
+            ${descSelect},
             e.start_at AS due_date, e.id AS source_id, 'calendar_event' AS source_type,
             0 AS is_overdue, NULL AS priority, NULL AS client_id, NULL AS client_name,
             'scheduled' AS status
@@ -509,8 +796,11 @@ async function fetchUpcomingCalendarEvents(date, userId) {
   if (!tables.length) return [];
 
   const until = addDaysYmd(date, UPCOMING_DAYS);
+  const hasDesc = await hasColumn("crm_calendar_events", "description");
+  const descSelect = hasDesc ? ", e.description" : ", NULL AS description";
   const [rows] = await pool.execute(
-    `SELECT e.id, e.title, e.start_at, e.end_at, e.all_day, e.category,
+    `SELECT e.id, e.title, e.start_at, e.end_at, e.all_day, e.category
+            ${descSelect},
             e.start_at AS due_date, e.id AS source_id, 'calendar_event' AS source_type,
             0 AS is_overdue, NULL AS priority, NULL AS client_id, NULL AS client_name,
             'scheduled' AS status
@@ -555,6 +845,7 @@ async function fetchGoogleEventsForToday(date) {
         end_at: e.end,
         all_day: e.allDay ? 1 : 0,
         google_event_id: rawId,
+        description: e.description || null,
         source_type: "google_event",
         is_overdue: 0,
         priority: null,
@@ -587,6 +878,7 @@ async function fetchAppleEventsForToday(date, userId) {
         all_day: e.allDay ? 1 : 0,
         apple_uid: e.meta?.appleUid || rawId,
         location: e.meta?.location || null,
+        description: e.description || null,
         source_type: "apple_event",
         is_overdue: 0,
         priority: null,
@@ -627,6 +919,7 @@ async function fetchGoogleEventsUpcoming(date) {
         end_at: e.end,
         all_day: e.allDay ? 1 : 0,
         google_event_id: rawId,
+        description: e.description || null,
         source_type: "google_event",
         is_overdue: 0,
         priority: null,
@@ -665,6 +958,7 @@ async function fetchAppleEventsUpcoming(date, userId) {
           all_day: e.allDay ? 1 : 0,
           apple_uid: e.meta?.appleUid || rawId,
           location: e.meta?.location || null,
+          description: e.description || null,
           source_type: "apple_event",
           is_overdue: 0,
           priority: null,
@@ -1210,7 +1504,9 @@ router.get("/", async (req, res) => {
       ...paymentDues,
       ...fitnessClientTasks,
     ];
-    const items = sortItems(raw.map(normalizeItem));
+    const items = sortItems(
+      raw.map((row) => enrichTodayItem(normalizeItem(row), date))
+    );
     const summary = buildSummary(items);
     const upcomingRaw = (
       await Promise.all([
@@ -1237,7 +1533,9 @@ router.get("/", async (req, res) => {
         safeFetch("upcoming_payment_dues", () => fetchUpcomingPaymentDues(date)),
       ])
     ).flat();
-    const upcoming = sortItems(upcomingRaw.map(normalizeItem)).slice(0, 10);
+    const upcoming = sortItems(
+      upcomingRaw.map((row) => enrichTodayItem(normalizeItem(row), date))
+    ).slice(0, 10);
 
     res.json({ success: true, date, summary, items, upcoming });
   } catch (err) {

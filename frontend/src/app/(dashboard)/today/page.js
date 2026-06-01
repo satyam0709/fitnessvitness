@@ -156,36 +156,52 @@ function canMarkDone(item) {
 
 function TodayCard({ item, onDone, doing, showDoneButton = true }) {
   const meta = SOURCE_META[item.source_type] || SOURCE_META.todo;
-  const dueTime = formatDueTime(item);
   const overdueDays = item.is_overdue ? daysOverdue(item.due_date) : 0;
   const showDone = showDoneButton && canMarkDone(item);
-  const parts = [];
-  if (item.client_name) parts.push(item.client_name);
-  if (
-    (item.source_type === "collection_followup" || item.source_type === "fitness_payment_due") &&
-    item.meta?.pending_inr != null
-  ) {
-    parts.push(`₹${Number(item.meta.pending_inr).toLocaleString("en-IN")} pending`);
-  }
-  if (item.source_type === "fitness_payment_due" && item.meta?.product_plan) {
-    parts.push(item.meta.product_plan);
-  }
-  if (dueTime) parts.push(`at ${dueTime}`);
-  if (overdueDays > 0) parts.push(`🔴 ${overdueDays} day${overdueDays === 1 ? "" : "s"} overdue`);
+  const dueLabel =
+    item.due_display?.label ||
+    (formatDueTime(item) ? `Today · ${formatDueTime(item)}` : null) ||
+    "No date set";
+  const subtitle = item.subtitle || null;
+  const actionHint = item.action_label || null;
+  const relative = item.due_display?.relative;
+  const duePillClass =
+    relative === "Overdue" || relative === "Past due"
+      ? styles.duePillOverdue
+      : relative === "Today"
+        ? styles.duePillToday
+        : relative === "Tomorrow"
+          ? styles.duePillTomorrow
+          : styles.duePillUpcoming;
 
   return (
     <article className={`${styles.card} ${meta.border}`}>
-      <div className={styles.cardRow1}>
-        <div className={styles.cardTitleWrap}>
-          <span className={styles.badge}>
-            {meta.icon} {meta.label}
-          </span>
-          <span className={styles.cardTitle}>{item.title}</span>
-          {item.priority === "high" ? <span className={styles.priorityHigh}>HIGH</span> : null}
-          {item.priority === "medium" ? <span className={styles.priorityMed}>MED</span> : null}
+      <div className={styles.cardTop}>
+        <div className={styles.cardMain}>
+          <div className={styles.cardTitleRow}>
+            <span className={styles.badge}>
+              {meta.icon} {meta.label}
+            </span>
+            {item.priority === "high" ? <span className={styles.priorityHigh}>HIGH</span> : null}
+            {item.priority === "medium" ? <span className={styles.priorityMed}>MED</span> : null}
+          </div>
+          <h3 className={styles.cardTitle}>{item.title}</h3>
+          {actionHint ? <p className={styles.actionHint}>{actionHint}</p> : null}
+          {subtitle ? <p className={styles.cardSubtitle}>{subtitle}</p> : null}
+          {item.client_name && !subtitle?.includes(item.client_name) ? (
+            <p className={styles.cardClient}>{item.client_name}</p>
+          ) : null}
+          {overdueDays > 0 ? (
+            <p className={styles.overdueHint}>
+              🔴 {overdueDays} day{overdueDays === 1 ? "" : "s"} overdue
+            </p>
+          ) : null}
+        </div>
+        <div className={`${styles.duePill} ${duePillClass}`}>
+          <span className={styles.duePillLabel}>When</span>
+          <span className={styles.duePillValue}>{dueLabel}</span>
         </div>
       </div>
-      {parts.length ? <div className={styles.cardRow2}>{parts.join(" · ")}</div> : null}
       <div className={styles.cardActions}>
         {showDone ? (
           <button
