@@ -314,56 +314,206 @@ async function updateFitnessSettings(req, res) {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// CLIENTS
+// CLIENTS — list filters / sort
 // ─────────────────────────────────────────────────────────────────
+
+const CLIENT_LIST_SORTS = new Set([
+  "next_due",
+  "next_due_desc",
+  "plan_expiry",
+  "plan_expiry_desc",
+  "name",
+  "name_desc",
+  "tier",
+  "tier_desc",
+  "created",
+  "created_asc",
+]);
+
+function parseClientListYmd(raw) {
+  const s = String(raw || "").trim().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+
+function buildClientListWhere(q) {
+  const statusRaw = String(q.status || "").trim();
+  const isOverdueView = statusRaw === "Overdue";
+  const isHighRiskView = statusRaw === "High Risk";
+  const isNextDueView = statusRaw === "Next Due";
+  const isSpecialView = isOverdueView || isHighRiskView || isNextDueView;
+
+  const clauses = ["1=1"];
+  const params = [];
+  const computed = { overdue: false, highRisk: false, priority: null };
+
+  if (statusRaw && !isSpecialView && VALID_ENUMS.status.includes(statusRaw)) {
+    clauses.push("status = ?");
+    params.push(statusRaw);
+  }
+
+  if (isOverdueView) {
+    clauses.push("status = 'Active'");
+    computed.overdue = true;
+  } else if (isHighRiskView) {
+    clauses.push("status != 'Inactive'");
+    computed.highRisk = true;
+  } else if (isNextDueView) {
+    clauses.push("status != 'Inactive'", "next_due_date IS NOT NULL");
+  }
+
+  if (q.progress && VALID_ENUMS.progress.includes(String(q.progress))) {
+    clauses.push("progress = ?");
+    params.push(q.progress);
+  }
+
+  if (q.source && VALID_ENUMS.source.includes(String(q.source))) {
+    clauses.push("source = ?");
+    params.push(q.source);
+  }
+
+  if (q.plan_type && VALID_ENUMS.plan_type.includes(String(q.plan_type))) {
+    clauses.push("plan_type = ?");
+    params.push(q.plan_type);
+  }
+
+  const tierMin = q.tier_min != null && q.tier_min !== "" ? Number(q.tier_min) : null;
+  const tierMax = q.tier_max != null && q.tier_max !== "" ? Number(q.tier_max) : null;
+  if (tierMin != null && !Number.isNaN(tierMin) && tierMax != null && !Number.isNaN(tierMax)) {
+    clauses.push("tier BETWEEN ? AND ?");
+    params.push(Math.min(tierMin, tierMax), Math.max(tierMin, tierMax));
+  } else if (tierMin != null && !Number.isNaN(tierMin)) {
+    clauses.push("tier >= ?");
+    params.push(tierMin);
+  } else if (tierMax != null && !Number.isNaN(tierMax)) {
+    clauses.push("tier <= ?");
+    params.push(tierMax);
+  }
+
+  if (q.city && String(q.city).trim()) {
+    clauses.push("city LIKE ?");
+    params.push(`%${String(q.city).trim()}%`);
+  }
+
+  const nextDueFrom = parseClientListYmd(q.next_due_from);
+  const nextDueTo = parseClientListYmd(q.next_due_to);
+  if (nextDueFrom) {
+    clauses.push("next_due_date >= ?");
+    params.push(nextDueFrom);
+  }
+  if (nextDueTo) {
+    clauses.push("next_due_date <= ?");
+    params.push(nextDueTo);
+  }
+
+  const planExpiryFrom = parseClientListYmd(q.plan_expiry_from);
+  const planExpiryTo = parseClientListYmd(q.plan_expiry_to);
+  if (planExpiryFrom) {
+    clauses.push("plan_expiry_date >= ?");
+    params.push(planExpiryFrom);
+  }
+  if (planExpiryTo) {
+    clauses.push("plan_expiry_date <= ?");
+    params.push(planExpiryTo);
+  }
+
+  if (q.has_next_due === "1") {
+    clauses.push("next_due_date IS NOT NULL");
+  } else if (q.has_next_due === "0") {
+    clauses.push("next_due_date IS NULL");
+  }
+
+  const expiringWithin = Number(q.expiring_within);
+  if ([7, 14, 30].includes(expiringWithin)) {
+    clauses.push(
+      "plan_expiry_date IS NOT NULL",
+      "plan_expiry_date >= CURDATE()",
+      `plan_expiry_date <= DATE_ADD(CURDATE(), INTERVAL ${expiringWithin} DAY)`
+    );
+  }
+
+  if (q.search && String(q.search).trim()) {
+    const searchTerm = `%${String(q.search).trim()}%`;
+    clauses.push("(full_name LIKE ? OR client_id LIKE ? OR phone LIKE ? OR email LIKE ?)");
+    params.push(searchTerm, searchTerm, searchTerm, searchTerm);
+  }
+
+  const priority = String(q.priority || "").toLowerCase();
+  if (priority === "overdue") computed.overdue = true;
+  else if (priority === "due_soon") computed.priority = "due_soon";
+  else if (priority === "ok") computed.priority = "ok";
+
+  if (q.high_risk === "1" || q.high_risk === "true") {
+    computed.highRisk = true;
+  }
+
+  return {
+    whereSql: clauses.join(" AND "),
+    params,
+    computed,
+    isNextDueView,
+    isSpecialView,
+  };
+}
+
+function buildClientListOrder(sortRaw, isNextDueView) {
+  let sort = String(sortRaw || "").toLowerCase().trim();
+  if (!CLIENT_LIST_SORTS.has(sort)) {
+    sort = isNextDueView ? "next_due" : "created";
+  }
+
+  switch (sort) {
+    case "next_due":
+      return "ORDER BY (next_due_date IS NULL), next_due_date ASC, full_name ASC";
+    case "next_due_desc":
+      return "ORDER BY (next_due_date IS NULL), next_due_date DESC, full_name ASC";
+    case "plan_expiry":
+      return "ORDER BY (plan_expiry_date IS NULL), plan_expiry_date ASC, full_name ASC";
+    case "plan_expiry_desc":
+      return "ORDER BY (plan_expiry_date IS NULL), plan_expiry_date DESC, full_name ASC";
+    case "name":
+      return "ORDER BY full_name ASC";
+    case "name_desc":
+      return "ORDER BY full_name DESC";
+    case "tier":
+      return "ORDER BY tier ASC, full_name ASC";
+    case "tier_desc":
+      return "ORDER BY tier DESC, full_name ASC";
+    case "created_asc":
+      return "ORDER BY created_at ASC";
+    case "created":
+    default:
+      return "ORDER BY created_at DESC";
+  }
+}
+
+function applyComputedClientFilters(rows, computed) {
+  let out = rows;
+  if (computed.overdue) {
+    out = out.filter((c) => c.follow_up_priority === "🔴 OVERDUE");
+  }
+  if (computed.highRisk) {
+    out = out.filter((c) => c.is_high_risk);
+  }
+  if (computed.priority === "due_soon") {
+    out = out.filter((c) => c.follow_up_priority === "🟡 DUE SOON");
+  } else if (computed.priority === "ok") {
+    out = out.filter((c) => c.follow_up_priority === "✅ OK");
+  }
+  return out;
+}
+
 async function getAllClients(req, res) {
   try {
-    const { status, search, sort } = req.query;
-    const statusRaw = String(status || "").trim();
-    const isOverdueView = statusRaw === "Overdue";
-    const isHighRiskView = statusRaw === "High Risk";
-    const isNextDueView =
-      statusRaw === "Next Due" || String(sort || "").toLowerCase() === "next_due";
-    const isSpecialView = isOverdueView || isHighRiskView || isNextDueView;
+    const { sort } = req.query;
+    const { whereSql, params, computed, isNextDueView } = buildClientListWhere(req.query);
+    const orderSql = buildClientListOrder(sort, isNextDueView);
 
-    let query = "SELECT * FROM fitness_clients WHERE 1=1";
-    const params = [];
-
-    if (statusRaw && !isSpecialView) {
-      query += " AND status = ?";
-      params.push(statusRaw);
-    }
-
-    // Narrow SQL for virtual tabs (same rules as dashboard list stats)
-    if (isOverdueView) {
-      query += " AND status = 'Active'";
-    } else if (isHighRiskView) {
-      query += " AND status != 'Inactive'";
-    } else if (isNextDueView) {
-      query += " AND status != 'Inactive' AND next_due_date IS NOT NULL";
-    }
-
-    if (search) {
-      query += " AND (full_name LIKE ? OR client_id LIKE ? OR phone LIKE ? OR email LIKE ?)";
-      const searchTerm = `%${search}%`;
-      params.push(searchTerm, searchTerm, searchTerm, searchTerm);
-    }
-
-    if (isNextDueView) {
-      query += " ORDER BY next_due_date ASC, full_name ASC";
-    } else {
-      query += " ORDER BY created_at DESC";
-    }
+    const query = `SELECT * FROM fitness_clients WHERE ${whereSql} ${orderSql}`;
     const [rows] = await mainPool.execute(query, params);
-    let computed = rows.map(computeClientFields);
+    let result = rows.map(computeClientFields);
+    result = applyComputedClientFilters(result, computed);
 
-    if (isOverdueView) {
-      computed = computed.filter((c) => c.follow_up_priority === "🔴 OVERDUE");
-    } else if (isHighRiskView) {
-      computed = computed.filter((c) => c.is_high_risk);
-    }
-
-    res.json({ success: true, data: computed });
+    res.json({ success: true, data: result });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { apiFetch, connectGlobalSocket } from "@/lib/api";
 import { updateClient } from "@/lib/fitnessApi";
+import { useUserRole } from "@/components/Dashboard/UserRoleContext";
 import styles from "./clients.module.css";
 
 const STATUS_COLORS = {
@@ -13,11 +14,57 @@ const STATUS_COLORS = {
 };
 
 const PROGRESS_COLORS = {
-  'Very Good': "#10b981",
-  'Good': "#22c55e",
-  'Neutral': "#64748b",
-  'Poor': "#f59e0b",
-  'Very Poor': "#ef4444",
+  "Very Good": "#10b981",
+  Good: "#22c55e",
+  Neutral: "#64748b",
+  Poor: "#f59e0b",
+  "Very Poor": "#ef4444",
+};
+
+const QUICK_CHIPS = ["all", "Active", "Hold", "Overdue", "High Risk", "Next Due"];
+
+const PROGRESS_OPTIONS = ["Very Good", "Good", "Neutral", "Poor", "Very Poor"];
+const SOURCE_OPTIONS = [
+  "BNI",
+  "Instagram",
+  "Facebook",
+  "Referral - Existing Client",
+  "Friend / Family",
+  "Walk-in",
+  "Online / Website",
+  "Corporate / Company",
+];
+const PLAN_OPTIONS = ["1 Month Plan", "3 Month Plan", "6 Month Plan", "1 Year Plan"];
+
+const SORT_OPTIONS = [
+  { value: "next_due", label: "Next due — earliest first" },
+  { value: "next_due_desc", label: "Next due — latest first" },
+  { value: "plan_expiry", label: "Plan expiry — soonest first" },
+  { value: "plan_expiry_desc", label: "Plan expiry — latest first" },
+  { value: "name", label: "Name A–Z" },
+  { value: "name_desc", label: "Name Z–A" },
+  { value: "tier", label: "Tier low → high" },
+  { value: "tier_desc", label: "Tier high → low" },
+  { value: "created", label: "Joined — newest" },
+  { value: "created_asc", label: "Joined — oldest" },
+];
+
+const DEFAULT_FILTERS = {
+  status: "all",
+  progress: "",
+  source: "",
+  plan_type: "",
+  tierMin: "",
+  tierMax: "",
+  city: "",
+  priority: "",
+  highRisk: false,
+  expiringWithin: "",
+  nextDueFrom: "",
+  nextDueTo: "",
+  planExpiryFrom: "",
+  planExpiryTo: "",
+  hasNextDue: "",
 };
 
 function formatDate(d) {
@@ -26,9 +73,9 @@ function formatDate(d) {
 }
 
 function getPriorityDisplay(priority) {
-  if (priority === '🔴 OVERDUE') return { label: priority, className: styles.overdue };
-  if (priority === '🟡 DUE SOON') return { label: priority, className: styles.dueSoon };
-  return { label: priority || '✅ OK', className: styles.ok };
+  if (priority === "🔴 OVERDUE") return { label: priority, className: styles.overdue };
+  if (priority === "🟡 DUE SOON") return { label: priority, className: styles.dueSoon };
+  return { label: priority || "✅ OK", className: styles.ok };
 }
 
 function getDaysRemaining(planExpiryDate) {
@@ -43,25 +90,72 @@ function getDaysRemaining(planExpiryDate) {
 function renderTier(tier) {
   return (
     <span className={styles.tier}>
-      {"★".repeat(tier)}{"☆".repeat(5 - tier)}
+      {"★".repeat(tier)}
+      {"☆".repeat(5 - tier)}
     </span>
   );
 }
 
+function countAdvancedFilters(f) {
+  let n = 0;
+  if (f.progress) n++;
+  if (f.source) n++;
+  if (f.plan_type) n++;
+  if (f.tierMin || f.tierMax) n++;
+  if (f.city) n++;
+  if (f.priority) n++;
+  if (f.highRisk) n++;
+  if (f.expiringWithin) n++;
+  if (f.nextDueFrom || f.nextDueTo) n++;
+  if (f.planExpiryFrom || f.planExpiryTo) n++;
+  if (f.hasNextDue) n++;
+  return n;
+}
+
+function buildClientQueryParams(appliedFilters, search, sort) {
+  const params = new URLSearchParams();
+  const status = appliedFilters.status;
+  if (status && status !== "all") params.set("status", status);
+  if (search.trim()) params.set("search", search.trim());
+  if (sort) params.set("sort", sort);
+  if (appliedFilters.progress) params.set("progress", appliedFilters.progress);
+  if (appliedFilters.source) params.set("source", appliedFilters.source);
+  if (appliedFilters.plan_type) params.set("plan_type", appliedFilters.plan_type);
+  if (appliedFilters.tierMin) params.set("tier_min", appliedFilters.tierMin);
+  if (appliedFilters.tierMax) params.set("tier_max", appliedFilters.tierMax);
+  if (appliedFilters.city.trim()) params.set("city", appliedFilters.city.trim());
+  if (appliedFilters.priority) params.set("priority", appliedFilters.priority);
+  if (appliedFilters.highRisk) params.set("high_risk", "1");
+  if (appliedFilters.expiringWithin) params.set("expiring_within", appliedFilters.expiringWithin);
+  if (appliedFilters.nextDueFrom) params.set("next_due_from", appliedFilters.nextDueFrom);
+  if (appliedFilters.nextDueTo) params.set("next_due_to", appliedFilters.nextDueTo);
+  if (appliedFilters.planExpiryFrom) params.set("plan_expiry_from", appliedFilters.planExpiryFrom);
+  if (appliedFilters.planExpiryTo) params.set("plan_expiry_to", appliedFilters.planExpiryTo);
+  if (appliedFilters.hasNextDue === "yes") params.set("has_next_due", "1");
+  if (appliedFilters.hasNextDue === "no") params.set("has_next_due", "0");
+  return params;
+}
+
 export default function ClientsPage() {
+  const { isAdmin } = useUserRole();
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
+  const [searchDebounced, setSearchDebounced] = useState("");
+  const [sort, setSort] = useState("next_due");
+  const [draftFilters, setDraftFilters] = useState(DEFAULT_FILTERS);
+  const [appliedFilters, setAppliedFilters] = useState(DEFAULT_FILTERS);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [savingDue, setSavingDue] = useState({});
+  useEffect(() => {
+    const t = setTimeout(() => setSearchDebounced(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
 
   const loadClients = useCallback(async () => {
     try {
       setLoading(true);
-      const params = new URLSearchParams();
-      if (filter !== "all") params.append("status", filter);
-      if (search) params.append("search", search);
-
+      const params = buildClientQueryParams(appliedFilters, searchDebounced, sort);
       const res = await apiFetch(`/fitness/clients?${params}`);
       const json = await res.json();
       if (json.success) {
@@ -72,7 +166,7 @@ export default function ClientsPage() {
     } finally {
       setLoading(false);
     }
-  }, [filter, search]);
+  }, [appliedFilters, searchDebounced, sort]);
 
   const handleDueDateChange = async (clientId, value) => {
     setSavingDue((prev) => ({ ...prev, [clientId]: true }));
@@ -107,28 +201,59 @@ export default function ClientsPage() {
     };
   }, [loadClients]);
 
+  const advancedCount = useMemo(() => countAdvancedFilters(appliedFilters), [appliedFilters]);
+  const draftAdvancedCount = useMemo(() => countAdvancedFilters(draftFilters), [draftFilters]);
+
+  const setDraftField = (key, value) =>
+    setDraftFilters((prev) => ({ ...prev, [key]: value }));
+
+  const handleQuickChip = (chip) => {
+    const next = { ...draftFilters, status: chip };
+    setDraftFilters(next);
+    setAppliedFilters(next);
+    if (chip === "Next Due" || chip === "Overdue") {
+      setSort("next_due");
+    }
+  };
+
+  const handleApplyFilters = () => {
+    setAppliedFilters({ ...draftFilters });
+    setFiltersOpen(false);
+  };
+
+  const handleResetFilters = () => {
+    setDraftFilters(DEFAULT_FILTERS);
+    setAppliedFilters(DEFAULT_FILTERS);
+    setSort("next_due");
+    setSearch("");
+    setSearchDebounced("");
+    setFiltersOpen(false);
+  };
+
   const stats = {
-    active: clients.filter(c => c.status === "Active").length,
-    onHold: clients.filter(c => c.status === "Hold").length,
-    needAttention: clients.filter(c => c.progress === "Poor" || c.progress === "Very Poor").length,
-    overdue: clients.filter(c => {
+    active: clients.filter((c) => c.status === "Active").length,
+    onHold: clients.filter((c) => c.status === "Hold").length,
+    needAttention: clients.filter((c) => c.progress === "Poor" || c.progress === "Very Poor").length,
+    overdue: clients.filter((c) => {
       if (!c.next_due_date || c.status !== "Active") return false;
       return new Date(c.next_due_date) < new Date();
     }).length,
-    expiringSoon: clients.filter(c => {
+    expiringSoon: clients.filter((c) => {
       if (!c.plan_expiry_date || c.status !== "Active") return false;
       const days = getDaysRemaining(c.plan_expiry_date);
       return days !== null && days >= 0 && days <= 7;
     }).length,
-    fiveStar: clients.filter(c => c.tier === 5).length,
+    fiveStar: clients.filter((c) => c.tier === 5).length,
   };
+
+  const activeChip = appliedFilters.status;
 
   return (
     <div className={styles.container}>
       <div className={styles.header}>
         <div>
           <h1>Fitness Clients</h1>
-          <p style={{color: '#64748b', margin: '4px 0 0', fontSize: '15px'}}>Manage your portfolio and track progress</p>
+          <p className={styles.subtitle}>Manage your portfolio and track progress</p>
         </div>
         <Link href="/clients/new" className={styles.addBtn}>
           <i className="fa-solid fa-plus"></i> Add Client
@@ -136,40 +261,268 @@ export default function ClientsPage() {
       </div>
 
       <div className={styles.statsBar}>
-        <div className={styles.stat}><span className={styles.statValue}>{stats.active}</span><span className={styles.statLabel}>Active</span></div>
-        <div className={styles.stat}><span className={styles.statValue}>{stats.onHold}</span><span className={styles.statLabel}>On Hold</span></div>
-        <div className={styles.stat}><span className={styles.statValue}>{stats.needAttention}</span><span className={styles.statLabel}>Attention</span></div>
-        <div className={styles.stat}><span className={styles.statValue}>{stats.overdue}</span><span className={styles.statLabel}>Overdue</span></div>
-        <div className={styles.stat}><span className={styles.statValue}>{stats.expiringSoon}</span><span className={styles.statLabel}>Expiring</span></div>
-        <div className={styles.stat}><span className={styles.statValue}>{stats.fiveStar}</span><span className={styles.statLabel}>5-Star</span></div>
+        <div className={styles.stat}>
+          <span className={styles.statValue}>{stats.active}</span>
+          <span className={styles.statLabel}>Active</span>
+        </div>
+        <div className={styles.stat}>
+          <span className={styles.statValue}>{stats.onHold}</span>
+          <span className={styles.statLabel}>On Hold</span>
+        </div>
+        <div className={styles.stat}>
+          <span className={styles.statValue}>{stats.needAttention}</span>
+          <span className={styles.statLabel}>Attention</span>
+        </div>
+        <div className={styles.stat}>
+          <span className={styles.statValue}>{stats.overdue}</span>
+          <span className={styles.statLabel}>Overdue</span>
+        </div>
+        <div className={styles.stat}>
+          <span className={styles.statValue}>{stats.expiringSoon}</span>
+          <span className={styles.statLabel}>Expiring</span>
+        </div>
+        <div className={styles.stat}>
+          <span className={styles.statValue}>{stats.fiveStar}</span>
+          <span className={styles.statLabel}>5-Star</span>
+        </div>
       </div>
 
-      <div className={styles.filters}>
-        <div className={styles.filterBtns}>
-          {["all", "Active", "Hold", "Overdue", "High Risk", "Next Due"].map(f => (
+      <div className={styles.toolbar}>
+        <div className={styles.chipRow}>
+          {QUICK_CHIPS.map((f) => (
             <button
               key={f}
-              className={`${styles.filterBtn} ${filter === f ? styles.active : ""}`}
-              onClick={() => setFilter(f)}
+              type="button"
+              className={`${styles.filterBtn} ${activeChip === f ? styles.chipActive : ""}`}
+              onClick={() => handleQuickChip(f)}
             >
-              {f === "all" ? "All Base" : f}
+              {f === "all" ? "All" : f}
             </button>
           ))}
         </div>
-        <input
-          type="text"
-          placeholder="Search portfolio..."
-          className={styles.search}
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-        />
+        <div className={styles.toolbarRight}>
+          <select
+            className={styles.sortSelect}
+            value={sort}
+            onChange={(e) => setSort(e.target.value)}
+            aria-label="Sort clients"
+          >
+            {SORT_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          {isAdmin ? (
+            <button
+              type="button"
+              className={styles.filtersToggle}
+              onClick={() => setFiltersOpen((v) => !v)}
+            >
+              <i className="fa-solid fa-sliders" /> Filters
+              {(advancedCount > 0 || draftAdvancedCount > 0) && (
+                <span className={styles.filterBadge}>
+                  {Math.max(advancedCount, draftAdvancedCount)}
+                </span>
+              )}
+            </button>
+          ) : null}
+          <input
+            type="text"
+            placeholder="Search portfolio..."
+            className={styles.search}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
       </div>
+
+      {isAdmin && filtersOpen ? (
+        <div className={styles.filterPanel}>
+          <div className={styles.filterGrid}>
+            <label className={styles.filterField}>
+              <span>Progress</span>
+              <select
+                className={styles.filterSelect}
+                value={draftFilters.progress}
+                onChange={(e) => setDraftField("progress", e.target.value)}
+              >
+                <option value="">Any</option>
+                {PROGRESS_OPTIONS.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.filterField}>
+              <span>Source</span>
+              <select
+                className={styles.filterSelect}
+                value={draftFilters.source}
+                onChange={(e) => setDraftField("source", e.target.value)}
+              >
+                <option value="">Any</option>
+                {SOURCE_OPTIONS.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.filterField}>
+              <span>Plan type</span>
+              <select
+                className={styles.filterSelect}
+                value={draftFilters.plan_type}
+                onChange={(e) => setDraftField("plan_type", e.target.value)}
+              >
+                <option value="">Any</option>
+                {PLAN_OPTIONS.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.filterField}>
+              <span>Follow-up priority</span>
+              <select
+                className={styles.filterSelect}
+                value={draftFilters.priority}
+                onChange={(e) => setDraftField("priority", e.target.value)}
+              >
+                <option value="">Any</option>
+                <option value="overdue">Overdue</option>
+                <option value="due_soon">Due soon</option>
+                <option value="ok">OK</option>
+              </select>
+            </label>
+            <label className={styles.filterField}>
+              <span>Tier min</span>
+              <select
+                className={styles.filterSelect}
+                value={draftFilters.tierMin}
+                onChange={(e) => setDraftField("tierMin", e.target.value)}
+              >
+                <option value="">—</option>
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <option key={n} value={String(n)}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.filterField}>
+              <span>Tier max</span>
+              <select
+                className={styles.filterSelect}
+                value={draftFilters.tierMax}
+                onChange={(e) => setDraftField("tierMax", e.target.value)}
+              >
+                <option value="">—</option>
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <option key={n} value={String(n)}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.filterField}>
+              <span>City</span>
+              <input
+                type="text"
+                className={styles.filterInput}
+                value={draftFilters.city}
+                onChange={(e) => setDraftField("city", e.target.value)}
+                placeholder="City name"
+              />
+            </label>
+            <label className={styles.filterField}>
+              <span>Plan expiring within</span>
+              <select
+                className={styles.filterSelect}
+                value={draftFilters.expiringWithin}
+                onChange={(e) => setDraftField("expiringWithin", e.target.value)}
+              >
+                <option value="">Any</option>
+                <option value="7">7 days</option>
+                <option value="14">14 days</option>
+                <option value="30">30 days</option>
+              </select>
+            </label>
+            <label className={styles.filterField}>
+              <span>Has next due</span>
+              <select
+                className={styles.filterSelect}
+                value={draftFilters.hasNextDue}
+                onChange={(e) => setDraftField("hasNextDue", e.target.value)}
+              >
+                <option value="">Any</option>
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+              </select>
+            </label>
+            <label className={styles.filterField}>
+              <span>Next due from</span>
+              <input
+                type="date"
+                className={styles.filterInput}
+                value={draftFilters.nextDueFrom}
+                onChange={(e) => setDraftField("nextDueFrom", e.target.value)}
+              />
+            </label>
+            <label className={styles.filterField}>
+              <span>Next due to</span>
+              <input
+                type="date"
+                className={styles.filterInput}
+                value={draftFilters.nextDueTo}
+                onChange={(e) => setDraftField("nextDueTo", e.target.value)}
+              />
+            </label>
+            <label className={styles.filterField}>
+              <span>Plan expiry from</span>
+              <input
+                type="date"
+                className={styles.filterInput}
+                value={draftFilters.planExpiryFrom}
+                onChange={(e) => setDraftField("planExpiryFrom", e.target.value)}
+              />
+            </label>
+            <label className={styles.filterField}>
+              <span>Plan expiry to</span>
+              <input
+                type="date"
+                className={styles.filterInput}
+                value={draftFilters.planExpiryTo}
+                onChange={(e) => setDraftField("planExpiryTo", e.target.value)}
+              />
+            </label>
+            <label className={`${styles.filterField} ${styles.filterCheck}`}>
+              <input
+                type="checkbox"
+                checked={draftFilters.highRisk}
+                onChange={(e) => setDraftField("highRisk", e.target.checked)}
+              />
+              <span>High risk only</span>
+            </label>
+          </div>
+          <div className={styles.filterActions}>
+            <button type="button" className={styles.resetBtn} onClick={handleResetFilters}>
+              Reset
+            </button>
+            <button type="button" className={styles.applyBtn} onClick={handleApplyFilters}>
+              Apply filters
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {loading ? (
         <div className={styles.loading}>
-          <div style={{width: '40px', height: '40px', border: '4px solid #f1f5f9', borderTopColor: '#f5c400', borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 16px'}}></div>
+          <div className={styles.spinner}></div>
           Synchronizing client database...
-          <style jsx>{` @keyframes spin { to { transform: rotate(360deg); } } `}</style>
         </div>
       ) : (
         <div className={styles.tableWrap}>
@@ -189,33 +542,51 @@ export default function ClientsPage() {
               </tr>
             </thead>
             <tbody>
-              {clients.map(client => {
+              {clients.map((client) => {
                 const daysLeft = client.days_remaining;
                 const priority = getPriorityDisplay(client.follow_up_priority);
-                const risk = client.risk_status || '✅ OK';
+                const risk = client.risk_status || "✅ OK";
 
                 return (
                   <tr
                     key={client.client_id}
                     className={`${client.tier === 5 ? styles.goldRow : ""} ${client.is_high_risk ? styles.highRisk : ""}`}
                   >
-                    <td><Link href={`/clients/${client.client_id}`} className={styles.clientLink}>{client.client_id}</Link></td>
+                    <td>
+                      <Link href={`/clients/${client.client_id}`} className={styles.clientLink}>
+                        {client.client_id}
+                      </Link>
+                    </td>
                     <td>
                       <Link href={`/clients/${client.client_id}`} className={styles.clientLink}>
                         <strong>{client.full_name}</strong>
                       </Link>
                     </td>
-                    <td><span className={`${styles.riskBadge} ${client.is_high_risk ? styles.highRiskBadge : ""}`}>{risk}</span></td>
                     <td>
-                      <span className={styles.badge} style={{ 
-                        color: STATUS_COLORS[client.status]?.color || "#64748b",
-                        background: STATUS_COLORS[client.status]?.bg || "#f1f5f9"
-                      }}>
+                      <span
+                        className={`${styles.riskBadge} ${client.is_high_risk ? styles.highRiskBadge : ""}`}
+                      >
+                        {risk}
+                      </span>
+                    </td>
+                    <td>
+                      <span
+                        className={styles.badge}
+                        style={{
+                          color: STATUS_COLORS[client.status]?.color || "#64748b",
+                          background: STATUS_COLORS[client.status]?.bg || "#f1f5f9",
+                        }}
+                      >
                         {client.status}
                       </span>
                     </td>
                     <td>
-                      <span style={{ fontWeight: 700, color: PROGRESS_COLORS[client.progress] || "#64748b" }}>
+                      <span
+                        style={{
+                          fontWeight: 700,
+                          color: PROGRESS_COLORS[client.progress] || "#64748b",
+                        }}
+                      >
                         {client.progress}
                       </span>
                     </td>
@@ -229,10 +600,14 @@ export default function ClientsPage() {
                         onChange={(e) => handleDueDateChange(client.client_id, e.target.value)}
                       />
                     </td>
-                    <td><span className={`${styles.priority} ${priority.className}`}>{priority.label}</span></td>
+                    <td>
+                      <span className={`${styles.priority} ${priority.className}`}>{priority.label}</span>
+                    </td>
                     <td>
                       {daysLeft !== null && (
-                        <span className={`${styles.daysLeft} ${daysLeft < 0 ? styles.expired : daysLeft <= 7 ? styles.urgent : ""}`}>
+                        <span
+                          className={`${styles.daysLeft} ${daysLeft < 0 ? styles.expired : daysLeft <= 7 ? styles.urgent : ""}`}
+                        >
                           {daysLeft < 0 ? "EX" : daysLeft}
                         </span>
                       )}
@@ -244,7 +619,9 @@ export default function ClientsPage() {
               })}
             </tbody>
           </table>
-          {clients.length === 0 && <div className={styles.empty}>No matching clients in current view</div>}
+          {clients.length === 0 && (
+            <div className={styles.empty}>No matching clients in current view</div>
+          )}
         </div>
       )}
     </div>

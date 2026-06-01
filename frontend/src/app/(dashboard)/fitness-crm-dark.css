@@ -127,6 +127,45 @@
   border-color: var(--yellow);
 }
 
+/* Clients page — green/black filter toolbar */
+[data-theme="dark"] [data-dashboard-shell] [class*="toolbar"],
+[data-theme="dark"] [data-dashboard-shell] [class*="filterPanel"] {
+  background: #0a0e12;
+  border-color: #1e293b;
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="chipActive"] {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
+  color: #fff !important;
+  border-color: #10b981 !important;
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="sortSelect"],
+[data-theme="dark"] [data-dashboard-shell] [class*="filtersToggle"],
+[data-theme="dark"] [data-dashboard-shell] [class*="filterSelect"],
+[data-theme="dark"] [data-dashboard-shell] [class*="filterInput"] {
+  background: #1e293b;
+  border-color: #334155;
+  color: #f1f5f9;
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="sortSelect"]:focus,
+[data-theme="dark"] [data-dashboard-shell] [class*="filterSelect"]:focus,
+[data-theme="dark"] [data-dashboard-shell] [class*="filterInput"]:focus,
+[data-theme="dark"] [data-dashboard-shell] [class*="search"]:focus {
+  border-color: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.25);
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="applyBtn"] {
+  color: #0f1419;
+}
+
+[data-theme="dark"] [data-dashboard-shell] [class*="filterBadge"] {
+  background: #10b981;
+  color: #0f1419;
+}
+
 [data-theme="dark"] [data-dashboard-shell] [class*="field"] input:focus,
 [data-theme="dark"] [data-dashboard-shell] [class*="field"] select:focus,
 [data-theme="dark"] [data-dashboard-shell] [class*="field"] textarea:focus,
