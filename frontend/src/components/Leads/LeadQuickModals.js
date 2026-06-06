@@ -2,6 +2,8 @@
 
 import { useState, useRef } from "react";
 import { apiFetch } from "@/lib/api";
+import ConvertLeadModal from "./ConvertLeadModal";
+import { isLeadConverted } from "./leadConstants";
 import styles from "./LeadQuickModals.module.css";
 
 const LABEL_PRESETS = ["Hot", "Warm", "Cold", "VIP", "Enterprise", "Partner", "Inbound"];
@@ -57,7 +59,15 @@ function sanitizeWaText(s) {
  * @param onDone — refresh list
  * @param onLeadPatch — (partial lead row) merge into UI
  */
-export default function LeadQuickModals({ modal, onClose, users = [], statuses = [], onDone, onLeadPatch }) {
+export default function LeadQuickModals({
+  modal,
+  onClose,
+  users = [],
+  statuses = [],
+  onDone,
+  onLeadPatch,
+  onConvertLead,
+}) {
   if (!modal?.lead) return null;
 
   const { type, lead } = modal;
@@ -71,10 +81,23 @@ export default function LeadQuickModals({ modal, onClose, users = [], statuses =
         <AssignModal lead={lead} users={users} onClose={onClose} onDone={onDone} onLeadPatch={onLeadPatch} />
       )}
       {type === "convert" && (
-        <ConvertModal lead={lead} onClose={onClose} onDone={onDone} onLeadPatch={onLeadPatch} />
+        <ConvertLeadModal lead={lead} onClose={onClose} onDone={onDone} />
+      )}
+      {type === "link-client" && (
+        <LinkClientModal lead={lead} onClose={onClose} onDone={onDone} onLeadPatch={onLeadPatch} />
+      )}
+      {type === "duplicate" && (
+        <DuplicateModal lead={lead} onClose={onClose} onDone={onDone} onLeadPatch={onLeadPatch} />
       )}
       {type === "status" && (
-        <StatusModal lead={lead} statuses={statuses} onClose={onClose} onDone={onDone} onLeadPatch={onLeadPatch} />
+        <StatusModal
+          lead={lead}
+          statuses={statuses}
+          onClose={onClose}
+          onDone={onDone}
+          onLeadPatch={onLeadPatch}
+          onConvertLead={onConvertLead}
+        />
       )}
       {type === "followup" && (
         <FollowupModal lead={lead} onClose={onClose} onDone={onDone} />
@@ -368,7 +391,7 @@ function AssignModal({ lead, users, onClose, onDone, onLeadPatch }) {
   );
 }
 
-function ConvertModal({ lead, onClose, onDone, onLeadPatch }) {
+function LinkClientModal({ lead, onClose, onDone, onLeadPatch }) {
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
 
@@ -376,13 +399,13 @@ function ConvertModal({ lead, onClose, onDone, onLeadPatch }) {
     setSaving(true);
     setErr("");
     try {
-      const res = await apiFetch(`/leads/${lead.id}/convert`, { method: "POST" });
+      const res = await apiFetch(`/leads/${lead.id}/link-client`, { method: "POST" });
       const json = await res.json();
       if (!res.ok || !json.success) {
         setErr(json.message || "Failed");
         return;
       }
-      onLeadPatch?.({ id: lead.id, status: "confirm" });
+      onLeadPatch?.({ id: lead.id });
       onDone?.();
       onClose();
     } catch (e) {
@@ -396,12 +419,12 @@ function ConvertModal({ lead, onClose, onDone, onLeadPatch }) {
     <div className={styles.overlay} role="dialog" aria-modal="true">
       <div className={styles.modal} style={{ maxWidth: 420 }}>
         <div className={styles.body} style={{ textAlign: "center", paddingTop: 28 }}>
-          <div style={{ fontSize: 40, color: "#f97316", marginBottom: 12 }}>
-            <i className="fas fa-circle-exclamation" />
+          <div style={{ fontSize: 40, color: "#3b82f6", marginBottom: 12 }}>
+            <i className="fas fa-link" />
           </div>
           {err ? <p className={styles.err}>{err}</p> : null}
           <p className={styles.confirmText}>
-            Are You Sure You Want To Convert This Lead To Customer?
+            Link this lead to a fitness/customer record? This does not create an opportunity.
           </p>
         </div>
         <div className={styles.footer}>
@@ -409,7 +432,7 @@ function ConvertModal({ lead, onClose, onDone, onLeadPatch }) {
             Cancel
           </button>
           <button type="button" className={styles.btnPrimary} onClick={confirm} disabled={saving}>
-            {saving ? "…" : "Yes, Convert!"}
+            {saving ? "…" : "Link Client"}
           </button>
         </div>
       </div>
@@ -417,9 +440,54 @@ function ConvertModal({ lead, onClose, onDone, onLeadPatch }) {
   );
 }
 
-function StatusModal({ lead, statuses, onClose, onDone, onLeadPatch }) {
+function DuplicateModal({ lead, onClose, onDone, onLeadPatch }) {
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function confirm() {
+    setSaving(true);
+    setErr("");
+    try {
+      const res = await apiFetch(`/leads/${lead.id}/duplicate`, { method: "POST" });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        setErr(json.message || "Failed");
+        return;
+      }
+      onLeadPatch?.(json.data);
+      onDone?.();
+      onClose();
+    } catch (e) {
+      setErr(e?.message || "Error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className={styles.overlay} role="dialog" aria-modal="true">
+      <div className={styles.modal} style={{ maxWidth: 420 }}>
+        <div className={styles.body} style={{ textAlign: "center", paddingTop: 28 }}>
+          {err ? <p className={styles.err}>{err}</p> : null}
+          <p className={styles.confirmText}>Duplicate lead &quot;{lead.name}&quot; as a new lead?</p>
+        </div>
+        <div className={styles.footer}>
+          <button type="button" className={styles.btnGhost} onClick={onClose}>
+            Cancel
+          </button>
+          <button type="button" className={styles.btnPrimary} onClick={confirm} disabled={saving}>
+            {saving ? "…" : "Duplicate"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StatusModal({ lead, statuses, onClose, onDone, onLeadPatch, onConvertLead }) {
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
+  const alreadyConverted = isLeadConverted(lead);
 
   async function pick(st) {
     if (st === lead.status) {
@@ -475,6 +543,22 @@ function StatusModal({ lead, statuses, onClose, onDone, onLeadPatch }) {
               </button>
             ))}
           </div>
+          {!alreadyConverted && (
+            <button
+              type="button"
+              className={styles.convertStatusBtn}
+              onClick={() => onConvertLead?.(lead)}
+              disabled={saving}
+            >
+              <i className="fas fa-briefcase" />
+              Convert to Opportunity
+            </button>
+          )}
+          {alreadyConverted && lead.converted_opportunity_id && (
+            <p className={styles.convertHint}>
+              Already converted — opportunity #{lead.converted_opportunity_id}
+            </p>
+          )}
         </div>
         <div className={styles.footer}>
           <button type="button" className={styles.btnGhost} onClick={onClose}>

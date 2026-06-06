@@ -5,6 +5,7 @@ import Link from "next/link";
 import { apiFetch, connectGlobalSocket } from "@/lib/api";
 import { updateClient } from "@/lib/fitnessApi";
 import { useUserRole } from "@/components/Dashboard/UserRoleContext";
+import ClientSortDropdown from "@/components/Clients/ClientSortDropdown";
 import styles from "./clients.module.css";
 
 const STATUS_COLORS = {
@@ -56,6 +57,31 @@ const SORT_OPTIONS = [
   { value: "created", label: "Joined — newest" },
   { value: "created_asc", label: "Joined — oldest" },
 ];
+
+const SORT_HINTS = {
+  next_due:
+    "Who to call first: clients with the nearest follow-up date appear at the top. Clients without a date are listed last.",
+  next_due_desc:
+    "Furthest follow-ups first — useful when you want to defer recent contacts and focus on later dates.",
+  plan_expiry:
+    "Membership ending soonest appears first — ideal for renewal conversations before plans lapse.",
+  plan_expiry_desc:
+    "Plans expiring latest appear first — clients with no expiry date are listed last.",
+  name: "Alphabetical by client name (A to Z).",
+  name_desc: "Reverse alphabetical by client name (Z to A).",
+  tier: "Lower star tier (1★) first, then higher tiers — spot clients who may need more attention.",
+  tier_desc: "Highest tier (5★) first — your top-rated clients rise to the top.",
+  created: "Most recently added clients first.",
+  created_asc: "Longest-standing clients first — who joined earliest in your portfolio.",
+};
+
+const SORT_STORAGE_KEY = "fitness_clients_sort";
+
+function readStoredSort() {
+  if (typeof window === "undefined") return "next_due";
+  const stored = window.localStorage.getItem(SORT_STORAGE_KEY);
+  return SORT_OPTIONS.some((o) => o.value === stored) ? stored : "next_due";
+}
 
 const DEFAULT_FILTERS = {
   status: "all",
@@ -151,7 +177,8 @@ export default function ClientsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [searchDebounced, setSearchDebounced] = useState("");
-  const [sort, setSort] = useState("next_due");
+  const [sort, setSort] = useState(readStoredSort);
+  const [sortMeta, setSortMeta] = useState(null);
   const [draftFilters, setDraftFilters] = useState(DEFAULT_FILTERS);
   const [appliedFilters, setAppliedFilters] = useState(DEFAULT_FILTERS);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -168,7 +195,8 @@ export default function ClientsPage() {
       const res = await apiFetch(`/fitness/clients?${params}`);
       const json = await res.json();
       if (json.success) {
-        setClients(json.data);
+        setClients(Array.isArray(json.data) ? json.data : []);
+        if (json.meta) setSortMeta(json.meta);
       }
     } catch (err) {
       console.error("Failed to load clients:", err);
@@ -193,6 +221,16 @@ export default function ClientsPage() {
   useEffect(() => {
     loadClients();
   }, [loadClients]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(SORT_STORAGE_KEY, sort);
+    }
+  }, [sort]);
+
+  const activeSortLabel =
+    sortMeta?.sortLabel || SORT_OPTIONS.find((o) => o.value === sort)?.label || "Sort";
+  const sortHint = SORT_HINTS[sortMeta?.sort || sort] || SORT_HINTS.next_due;
 
   useEffect(() => {
     let mounted = true;
@@ -315,18 +353,14 @@ export default function ClientsPage() {
           ))}
         </div>
         <div className={styles.toolbarRight}>
-          <select
-            className={styles.sortSelect}
-            value={sort}
-            onChange={(e) => setSort(e.target.value)}
-            aria-label="Sort clients"
-          >
-            {SORT_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
+          <div className={styles.sortBlock}>
+            <span className={styles.sortBlockLabel}>Sort order</span>
+            <ClientSortDropdown
+              value={sort}
+              onChange={setSort}
+              options={SORT_OPTIONS}
+            />
+          </div>
           {isAdmin ? (
             <button
               type="button"
@@ -348,6 +382,20 @@ export default function ClientsPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
+        </div>
+      </div>
+
+      <div className={styles.sortHintBar} role="status" aria-live="polite">
+        <i className="fa-solid fa-arrow-down-wide-short" aria-hidden />
+        <div className={styles.sortHintText}>
+          <strong>{activeSortLabel}</strong>
+          <span> — {sortHint}</span>
+          {!loading && (
+            <span className={styles.sortHintCount}>
+              {" "}
+              · {clients.length} client{clients.length === 1 ? "" : "s"} shown
+            </span>
+          )}
         </div>
       </div>
 

@@ -195,6 +195,117 @@ function generateClientId(clientCount) {
   return `FV-${padded}`;
 }
 
+/** Normalize DB / computed values to YYYY-MM-DD or null. */
+function normalizeEffectiveDate(value) {
+  if (value === undefined || value === null || value === '') return null;
+  if (value instanceof Date) {
+    if (isNaN(value.getTime())) return null;
+    return value.toISOString().slice(0, 10);
+  }
+  const s = String(value).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || s.startsWith('0000')) return null;
+  return s;
+}
+
+function effectiveDateTimestamp(value) {
+  const ymd = normalizeEffectiveDate(value);
+  if (!ymd) return null;
+  const ts = new Date(`${ymd}T00:00:00`).getTime();
+  return Number.isNaN(ts) ? null : ts;
+}
+
+function compareNames(a, b) {
+  return String(a.full_name || '').localeCompare(String(b.full_name || ''), 'en', {
+    sensitivity: 'base',
+  });
+}
+
+/**
+ * Sort client rows using the same effective fields shown in the UI (after compute).
+ */
+function sortClientRows(rows, sortKey) {
+  const list = [...rows];
+  const sort = String(sortKey || '').toLowerCase();
+
+  switch (sort) {
+    case 'next_due':
+      list.sort((a, b) => {
+        const at = effectiveDateTimestamp(a.next_due_date);
+        const bt = effectiveDateTimestamp(b.next_due_date);
+        if (at == null && bt == null) return compareNames(a, b);
+        if (at == null) return 1;
+        if (bt == null) return -1;
+        return at - bt || compareNames(a, b);
+      });
+      break;
+    case 'next_due_desc':
+      list.sort((a, b) => {
+        const at = effectiveDateTimestamp(a.next_due_date);
+        const bt = effectiveDateTimestamp(b.next_due_date);
+        if (at == null && bt == null) return compareNames(a, b);
+        if (at == null) return 1;
+        if (bt == null) return -1;
+        return bt - at || compareNames(a, b);
+      });
+      break;
+    case 'plan_expiry':
+      list.sort((a, b) => {
+        const at = effectiveDateTimestamp(a.plan_expiry_date);
+        const bt = effectiveDateTimestamp(b.plan_expiry_date);
+        if (at == null && bt == null) return compareNames(a, b);
+        if (at == null) return 1;
+        if (bt == null) return -1;
+        return at - bt || compareNames(a, b);
+      });
+      break;
+    case 'plan_expiry_desc':
+      list.sort((a, b) => {
+        const at = effectiveDateTimestamp(a.plan_expiry_date);
+        const bt = effectiveDateTimestamp(b.plan_expiry_date);
+        if (at == null && bt == null) return compareNames(a, b);
+        if (at == null) return 1;
+        if (bt == null) return -1;
+        return bt - at || compareNames(a, b);
+      });
+      break;
+    case 'name':
+      list.sort(compareNames);
+      break;
+    case 'name_desc':
+      list.sort((a, b) => compareNames(b, a));
+      break;
+    case 'tier':
+      list.sort((a, b) => (Number(a.tier) || 0) - (Number(b.tier) || 0) || compareNames(a, b));
+      break;
+    case 'tier_desc':
+      list.sort((a, b) => (Number(b.tier) || 0) - (Number(a.tier) || 0) || compareNames(a, b));
+      break;
+    case 'created_asc':
+      list.sort((a, b) => {
+        const at = effectiveDateTimestamp(a.created_at);
+        const bt = effectiveDateTimestamp(b.created_at);
+        if (at == null && bt == null) return compareNames(a, b);
+        if (at == null) return 1;
+        if (bt == null) return -1;
+        return at - bt || compareNames(a, b);
+      });
+      break;
+    case 'created':
+    default:
+      list.sort((a, b) => {
+        const at = effectiveDateTimestamp(a.created_at);
+        const bt = effectiveDateTimestamp(b.created_at);
+        if (at == null && bt == null) return compareNames(a, b);
+        if (at == null) return 1;
+        if (bt == null) return -1;
+        return bt - at || compareNames(a, b);
+      });
+      break;
+  }
+
+  return list;
+}
+
 /**
  * Compute all derived fields for a fitness client
  * @param {object} client - Client object from database
@@ -217,11 +328,14 @@ function computeClientFields(client) {
     computed.plan_expiry_date = client.plan_expiry_date;
   }
 
-  // Calculate next due date
-  computed.next_due_date = calculateNextDueDate(
+  // Effective next due: manual DB date wins, else calculated from last consultation
+  const calculatedDue = calculateNextDueDate(
     client.last_consultation_date,
     client.follow_up_freq_days
   );
+  const storedDue = normalizeEffectiveDate(client.next_due_date);
+  const calculatedDueYmd = calculatedDue ? normalizeEffectiveDate(calculatedDue) : null;
+  computed.next_due_date = storedDue || calculatedDueYmd;
 
   // Calculate BMI
   computed.bmi = calculateBMI(client.height_cm, client.current_weight_kg);
@@ -232,11 +346,9 @@ function computeClientFields(client) {
   // Calculate days remaining
   computed.days_remaining = calculateDaysRemaining(computed.plan_expiry_date);
 
-  // Determine follow-up overdue
-  computed.follow_up_overdue = isFollowUpOverdue(client.next_due_date || computed.next_due_date);
-
-  // Get follow-up priority
-  computed.follow_up_priority = getFollowUpPriority(client.next_due_date || computed.next_due_date);
+  // Determine follow-up overdue / priority from the same date shown in the list
+  computed.follow_up_overdue = isFollowUpOverdue(computed.next_due_date);
+  computed.follow_up_priority = getFollowUpPriority(computed.next_due_date);
 
   // Determine risk flag
   computed.risk_status = getRiskStatus(
@@ -285,6 +397,8 @@ module.exports = {
   // Batch processors
   computeClientFields,
   computeClientFieldsBatch,
+  normalizeEffectiveDate,
+  sortClientRows,
 
   // Constants
   PLAN_DURATIONS,

@@ -279,12 +279,26 @@ paths:
   /crm/leads:
     get:
       tags: [CRM]
-      summary: List tenant leads
+      summary: List tenant leads (tenant-scoped)
       security:
         - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string }
+          description: Legacy or reference status (mapped)
+        - name: source
+          in: query
+          schema: { type: string }
+        - name: search
+          in: query
+          schema: { type: string }
+        - name: assigned_to
+          in: query
+          schema: { type: string }
       responses:
         "200":
-          description: Leads list
+          description: Leads list with status and status_v2
     post:
       tags: [CRM]
       summary: Create lead
@@ -293,6 +307,107 @@ paths:
       responses:
         "201":
           description: Lead created
+  /crm/leads/{id}:
+    get:
+      tags: [CRM]
+      summary: Get lead by id
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Lead detail
+    put:
+      tags: [CRM]
+      summary: Update lead
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Lead updated
+    delete:
+      tags: [CRM]
+      summary: Soft-delete lead
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Lead deleted
+  /crm/leads/{id}/convert:
+    post:
+      tags: [CRM]
+      summary: Convert lead to opportunity
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount: { type: number }
+                currency: { type: string }
+                product_category: { type: string }
+                expected_close_date: { type: string, format: date }
+                notes: { type: string }
+      responses:
+        "200":
+          description: Opportunity created; lead status converted
+  /crm/leads/{id}/link-client:
+    post:
+      tags: [CRM]
+      summary: Link lead to fitness/customer record (separate from convert)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Customer record linked
+  /crm/leads/{id}/duplicate:
+    post:
+      tags: [CRM]
+      summary: Duplicate lead as new row
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: Cloned lead
+  /crm/leads/{id}/history:
+    get:
+      tags: [CRM]
+      summary: Lead activity history (counts or tab rows)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: tab
+          in: query
+          schema: { type: string, enum: [counts, followups, notes, change_log] }
+      responses:
+        "200":
+          description: History data
+  /crm/leads/{id}/change-log:
+    get:
+      tags: [CRM]
+      summary: Paginated lead change audit log
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer }
+        - name: limit
+          in: query
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Change log entries
+  /crm/opportunities:
+    get:
+      tags: [CRM]
+      summary: List opportunities
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Opportunities list (may include lead_id from convert)
   /crm/tasks:
     get:
       tags: [CRM]

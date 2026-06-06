@@ -1,0 +1,114 @@
+.wrap {
+  position: relative;
+  min-width: 220px;
+}
+
+.trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 2px solid #10b981;
+  background: var(--sort-trigger-bg, #1e293b);
+  color: var(--sort-trigger-text, #e2e8f0);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.trigger:hover,
+.triggerOpen {
+  border-color: #34d399;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
+}
+
+.triggerLabel {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chevron {
+  font-size: 11px;
+  color: #10b981;
+  transition: transform 0.15s ease;
+}
+
+.chevronUp {
+  transform: rotate(180deg);
+}
+
+.menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 50;
+  margin: 0;
+  padding: 6px 0;
+  list-style: none;
+  background: var(--sort-menu-bg, #fff);
+  border: 1px solid var(--sort-menu-border, #e2e8f0);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.option {
+  display: block;
+  width: 100%;
+  padding: 11px 16px;
+  border: none;
+  background: transparent;
+  color: var(--sort-option-text, #1e293b);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.option:hover {
+  background: var(--sort-option-hover, #f1f5f9);
+}
+
+.optionActive {
+  background: var(--sort-option-active-bg, #64748b);
+  color: var(--sort-option-active-text, #fff);
+  font-weight: 700;
+}
+
+.optionActive:hover {
+  background: var(--sort-option-active-bg, #64748b);
+}
+
+:root[data-theme="dark"] .trigger {
+  --sort-trigger-bg: #1e293b;
+  --sort-trigger-text: #e2e8f0;
+}
+
+:root[data-theme="dark"] .menu {
+  --sort-menu-bg: #1e293b;
+  --sort-menu-border: #334155;
+  --sort-option-text: #e2e8f0;
+  --sort-option-hover: #334155;
+  --sort-option-active-bg: #475569;
+  --sort-option-active-text: #fff;
+}
+
+:root:not([data-theme="dark"]) .trigger {
+  --sort-trigger-bg: #fff;
+  --sort-trigger-text: #1e293b;
+}
+
+:root:not([data-theme="dark"]) .menu {
+  --sort-menu-bg: #fff;
+  --sort-menu-border: #d1fae5;
+}
