@@ -13,37 +13,17 @@ import {
   useConfirmDialog,
   buildDeleteMessage,
 } from "@/components/ConfirmDialog/ConfirmDialogContext";
+import LeadChangeLogModal from "@/components/Leads/LeadChangeLogModal";
+import {
+  LEGACY_STATUSES,
+  SOURCES,
+  CONVERT_OPTION_VALUE,
+  isLeadConverted,
+} from "@/components/Leads/leadConstants";
 import styles from "./leads.module.css";
 
-// ─── constants ────────────────────────────────────────────────────────────
-const STATUSES = [
-  { key: "new",        label: "New",        color: "#0d9488", bg: "#0d94881a" },
-  { key: "processing", label: "Processing", color: "#7c3aed", bg: "#7c3aed1a" },
-  { key: "close_by",   label: "Close-by",   color: "#16a34a", bg: "#16a34a1a" },
-  { key: "confirm",    label: "Confirm",    color: "#15803d", bg: "#15803d1a" },
-  { key: "cancel",     label: "Cancel",     color: "#dc2626", bg: "#dc26261a" },
-];
-
-/** Values sent to API `source` query; labels match common CRM sources */
-const SOURCE_ITEMS = [
-  { value: "online", label: "Online" },
-  { value: "offline", label: "Offline" },
-  { value: "facebook", label: "Facebook" },
-  { value: "instagram", label: "Instagram" },
-  { value: "whatsapp", label: "Whatsapp" },
-  { value: "google_form", label: "Google Form" },
-  { value: "google_ads", label: "Google Ads" },
-  { value: "indiamart", label: "IndiaMart" },
-  { value: "website_lead", label: "Website" },
-  { value: "customer_reminder", label: "Customer Reminder" },
-  { value: "referral", label: "Referral" },
-  { value: "99acres", label: "99Acres" },
-  { value: "housing", label: "Housing.com" },
-  { value: "magicbricks", label: "MagicBricks" },
-  { value: "just_dial", label: "Just Dial" },
-  { value: "tradeindia", label: "TradeIndia" },
-  { value: "other", label: "Other" },
-];
+const STATUSES = LEGACY_STATUSES;
+const SOURCE_ITEMS = SOURCES;
 
 export default function LeadsPage() {
   const { confirm } = useConfirmDialog();
@@ -75,6 +55,7 @@ export default function LeadsPage() {
   const menuRef = useRef(null);
 
   const [actionModal, setActionModal] = useState(null);
+  const [changeLogLeadId, setChangeLogLeadId] = useState(null);
 
   // ── toast ──────────────────────────────────────────────────────────────
   const [toast, setToast] = useState(null);
@@ -143,7 +124,26 @@ export default function LeadsPage() {
   });
 
   function leadsForStatus(key) {
-    return filteredLeads.filter((l) => l.status === key);
+    if (key === "confirm") {
+      return filteredLeads.filter((l) => isLeadConverted(l) || l.status === "confirm");
+    }
+    return filteredLeads.filter((l) => l.status === key && !isLeadConverted(l));
+  }
+
+  function handleStatusSelect(lead, newStatus) {
+    if (newStatus === CONVERT_OPTION_VALUE) {
+      if (isLeadConverted(lead)) {
+        showToast("Lead is already converted", "error");
+        return;
+      }
+      setActionModal({ type: "convert", lead });
+      return;
+    }
+    handleStatusChange(lead.id, newStatus);
+  }
+
+  function openConvertFromStatus(lead) {
+    setActionModal({ type: "convert", lead });
   }
 
   // ── status change (inline dropdown) ────────────────────────────────────
@@ -260,7 +260,10 @@ export default function LeadsPage() {
     filterStatus;
 
   function statusCount(key) {
-    return filteredLeads.filter((l) => l.status === key).length;
+    if (key === "confirm") {
+      return filteredLeads.filter((l) => isLeadConverted(l) || l.status === "confirm").length;
+    }
+    return filteredLeads.filter((l) => l.status === key && !isLeadConverted(l)).length;
   }
 
   function toggleStatusFilter(key) {
@@ -371,6 +374,18 @@ export default function LeadsPage() {
     }
     if (key === "invoice") {
       router.push(`/invoice/sales/new?lead_id=${lead.id}`);
+      return;
+    }
+    if (key === "duplicate") {
+      setActionModal({ type: "duplicate", lead });
+      return;
+    }
+    if (key === "link-client") {
+      setActionModal({ type: "link-client", lead });
+      return;
+    }
+    if (key === "change-log") {
+      setChangeLogLeadId(lead.id);
     }
   }
 
@@ -589,9 +604,7 @@ export default function LeadsPage() {
           </div>
         </div>
 
-        {/* List view only: kanban columns already show one card per status (avoids duplicate rows). */}
-        {viewMode === "list" && (
-          <div className={styles.statusStrip} role="tablist" aria-label="Filter by status">
+        <div className={styles.statusStrip} role="tablist" aria-label="Filter by status">
             {STATUSES.map((st) => {
               const n = statusCount(st.key);
               const active = filterStatus === st.key;
@@ -611,7 +624,6 @@ export default function LeadsPage() {
               );
             })}
           </div>
-        )}
       </div>
 
       {/* ── KANBAN VIEW ───────────────────────────────────────────────────── */}
@@ -641,7 +653,7 @@ export default function LeadsPage() {
                         key={lead.id}
                         lead={lead}
                         statuses={STATUSES}
-                        onStatusChange={handleStatusChange}
+                        onStatusChange={handleStatusSelect}
                         onDelete={handleDelete}
                         onOpenAction={(type, l) => setActionModal({ type, lead: l })}
                         onMenuAction={handleLeadMenuAction}
@@ -700,7 +712,7 @@ export default function LeadsPage() {
                       statuses={STATUSES}
                       selected={selectedLeads.has(lead.id)}
                       onToggle={() => toggleSelect(lead.id)}
-                      onStatusChange={handleStatusChange}
+                      onStatusChange={handleStatusSelect}
                       onDelete={handleDelete}
                       onOpenAction={(type, l) => setActionModal({ type, lead: l })}
                       onMenuAction={handleLeadMenuAction}
@@ -758,10 +770,47 @@ export default function LeadsPage() {
         modal={actionModal}
         onClose={() => setActionModal(null)}
         users={users}
-        statuses={STATUSES} onDone={fetchLeads}
+        statuses={STATUSES}
+        onDone={fetchLeads}
         onLeadPatch={mergeLead}
+        onConvertLead={openConvertFromStatus}
       />
+
+      {changeLogLeadId && (
+        <LeadChangeLogModal
+          leadId={changeLogLeadId}
+          onClose={() => setChangeLogLeadId(null)}
+        />
+      )}
     </div>
+  );
+}
+
+function LeadStatusSelect({ lead, statuses, className, style, onChange }) {
+  const converted = isLeadConverted(lead);
+  return (
+    <select
+      className={className}
+      value={lead.status}
+      onChange={(e) => {
+        const v = e.target.value;
+        onChange(lead, v);
+        if (v === CONVERT_OPTION_VALUE) {
+          e.target.value = lead.status;
+        }
+      }}
+      style={style}
+      aria-label="Lead status"
+    >
+      {statuses.map((s) => (
+        <option key={s.key} value={s.key}>{s.label}</option>
+      ))}
+      {!converted && (
+        <optgroup label="Opportunity">
+          <option value={CONVERT_OPTION_VALUE}>Convert to Opportunity…</option>
+        </optgroup>
+      )}
+    </select>
   );
 }
 
@@ -772,19 +821,22 @@ const CARD_TOOLBAR = [
   { key: "delete",   icon: "fa-trash",        title: "Delete",    danger: true },
   { key: "label",    icon: "fa-tag",          title: "Label" },
   { key: "assign",   icon: "fa-user",         title: "Assign" },
-  { key: "convert",  icon: "fa-right-left",   title: "Convert to customer" },
+  { key: "convert",  icon: "fa-right-left",   title: "Convert to opportunity" },
   { key: "status",   icon: "fa-chart-line",   title: "Change status" },
   { key: "followup", icon: "fa-calendar-plus", title: "Follow-up" },
 ];
 
 const MENU_ITEMS = [
-  { key: "whatsapp",  icon: "fa-whatsapp", label: "Whatsapp", fab: true },
-  { key: "reminder",    icon: "fa-bell",     label: "Set Reminder" },
-  { key: "meeting",     icon: "fa-briefcase", label: "Set Meeting" },
-  { key: "copy",        icon: "fa-copy",     label: "Copy Lead" },
-  { key: "task",        icon: "fa-list-check", label: "Create Task" },
-  { key: "quotation",   icon: "fa-file-invoice", label: "Create Quotation" },
-  { key: "invoice",     icon: "fa-file-invoice-dollar", label: "Create Invoice" },
+  { key: "whatsapp", icon: "fa-whatsapp", label: "Whatsapp", fab: true },
+  { key: "reminder", icon: "fa-bell", label: "Set Reminder" },
+  { key: "meeting", icon: "fa-briefcase", label: "Set Meeting" },
+  { key: "copy", icon: "fa-copy", label: "Copy Lead" },
+  { key: "duplicate", icon: "fa-clone", label: "Duplicate Lead" },
+  { key: "link-client", icon: "fa-link", label: "Link Client" },
+  { key: "change-log", icon: "fa-history", label: "Change Log" },
+  { key: "task", icon: "fa-list-check", label: "Create Task" },
+  { key: "quotation", icon: "fa-file-invoice", label: "Create Quotation" },
+  { key: "invoice", icon: "fa-file-invoice-dollar", label: "Create Invoice" },
 ];
 
 function KanbanCard({ lead, statuses, onStatusChange, onDelete, onOpenAction, onMenuAction }) {
@@ -874,16 +926,13 @@ function KanbanCard({ lead, statuses, onStatusChange, onDelete, onOpenAction, on
         </div>
       </div>
       <div className={styles.kcFooter}>
-        <select
+        <LeadStatusSelect
+          lead={lead}
+          statuses={statuses}
           className={styles.kcStatusSel}
-          value={lead.status}
-          onChange={(e) => onStatusChange(lead.id, e.target.value)}
           style={{ color: st.color, borderColor: st.color }}
-        >
-          {statuses.map((s) => (
-            <option key={s.key} value={s.key}>{s.label}</option>
-          ))}
-        </select>
+          onChange={onStatusChange}
+        />
         <Link href={`/leads/${lead.id}`} className={styles.kcActionBtn} title="View">
           <i className="fas fa-eye" />
         </Link>
@@ -946,19 +995,16 @@ function ListRow({ lead, idx, statuses, selected, onToggle, onStatusChange, onDe
             : "—"}
         </td>
         <td>
-          <select
+          <LeadStatusSelect
+            lead={lead}
+            statuses={statuses}
             className={styles.statusSel}
-            value={lead.status}
-            onChange={(e) => onStatusChange(lead.id, e.target.value)}
             style={{
               color: statuses.find((s) => s.key === lead.status)?.color,
               borderColor: statuses.find((s) => s.key === lead.status)?.color,
             }}
-          >
-            {statuses.map((s) => (
-              <option key={s.key} value={s.key}>{s.label}</option>
-            ))}
-          </select>
+            onChange={onStatusChange}
+          />
         </td>
         <td>
           <div className={styles.actionRow}>

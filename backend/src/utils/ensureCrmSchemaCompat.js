@@ -40,6 +40,7 @@ async function ensureLeadsTable(pool) {
         name            VARCHAR(100) NOT NULL,
         company_name    VARCHAR(150) DEFAULT NULL,
         phone           VARCHAR(20)  NOT NULL DEFAULT '',
+        phone_dial      VARCHAR(10)  DEFAULT NULL,
         email           VARCHAR(150) DEFAULT NULL,
         source          VARCHAR(50)  NOT NULL DEFAULT 'other',
         status          ENUM('new','processing','close_by','confirm','cancel') NOT NULL DEFAULT 'new',
@@ -48,6 +49,8 @@ async function ensureLeadsTable(pool) {
         assigned_to     INT UNSIGNED DEFAULT NULL,
         created_by      INT UNSIGNED NOT NULL,
         follow_up_date  DATE DEFAULT NULL,
+        address         TEXT DEFAULT NULL,
+        reference       VARCHAR(255) DEFAULT NULL,
         notes           TEXT DEFAULT NULL,
         is_deleted      TINYINT(1) NOT NULL DEFAULT 0,
         deleted_at      DATETIME DEFAULT NULL,
@@ -65,13 +68,110 @@ async function ensureLeadsTable(pool) {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     `);
     console.log("ensureCrmSchemaCompat: created leads table");
-    return;
   }
 
   await addColumn(pool, "leads", "is_deleted", "TINYINT(1) NOT NULL DEFAULT 0");
   await addColumn(pool, "leads", "deleted_at", "DATETIME DEFAULT NULL");
   await addColumn(pool, "leads", "attachments_json", "JSON DEFAULT NULL");
   await addColumn(pool, "leads", "tenant_id", "INT UNSIGNED DEFAULT NULL");
+  await addColumn(pool, "leads", "phone_dial", "VARCHAR(10) DEFAULT NULL");
+  await addColumn(pool, "leads", "address", "TEXT DEFAULT NULL");
+  await addColumn(pool, "leads", "reference", "VARCHAR(255) DEFAULT NULL");
+  await addColumn(pool, "leads", "label", "VARCHAR(50) DEFAULT NULL");
+  await addColumn(pool, "leads", "cancel_reason", "VARCHAR(255) DEFAULT NULL");
+  await addColumn(pool, "leads", "follow_up_date", "DATE DEFAULT NULL");
+  await addColumn(pool, "leads", "company_name", "VARCHAR(150) DEFAULT NULL");
+
+  const refCols = [
+    ["first_name", "VARCHAR(100) DEFAULT NULL"],
+    ["last_name", "VARCHAR(100) DEFAULT NULL"],
+    ["designation", "VARCHAR(120) DEFAULT NULL"],
+    ["company_id", "INT UNSIGNED DEFAULT NULL"],
+    ["phones_json", "JSON DEFAULT NULL"],
+    ["emails_json", "JSON DEFAULT NULL"],
+    ["followup_at", "DATETIME DEFAULT NULL"],
+    ["followup_type", "VARCHAR(80) DEFAULT NULL"],
+    ["comments_history", "TEXT DEFAULT NULL"],
+    ["account_relationship", "VARCHAR(32) DEFAULT NULL"],
+    ["industry", "VARCHAR(120) DEFAULT NULL"],
+    ["department", "VARCHAR(120) DEFAULT NULL"],
+    ["product_category", "VARCHAR(80) DEFAULT NULL"],
+    ["team", "VARCHAR(160) DEFAULT NULL"],
+    ["contact_id", "INT UNSIGNED DEFAULT NULL"],
+    ["lead_number", "INT UNSIGNED DEFAULT NULL"],
+    ["amount", "DECIMAL(12,2) DEFAULT 0"],
+    ["currency", "VARCHAR(8) DEFAULT 'INR'"],
+    ["address_line1", "VARCHAR(255) DEFAULT NULL"],
+    ["address_line2", "VARCHAR(255) DEFAULT NULL"],
+    ["city", "VARCHAR(120) DEFAULT NULL"],
+    ["state", "VARCHAR(120) DEFAULT NULL"],
+    ["country", "VARCHAR(120) DEFAULT NULL"],
+    ["postal_code", "VARCHAR(32) DEFAULT NULL"],
+    ["converted_opportunity_id", "INT UNSIGNED DEFAULT NULL"],
+    ["last_touched_at", "DATETIME DEFAULT NULL"],
+    ["updated_by", "INT UNSIGNED DEFAULT NULL"],
+    ["status_v2", "VARCHAR(32) DEFAULT NULL"],
+  ];
+  for (const [col, def] of refCols) {
+    await addColumn(pool, "leads", col, def);
+  }
+}
+
+async function ensureLeadFollowupsTable(pool) {
+  if (!(await tableExists(pool, "leads"))) return;
+  if (!(await tableExists(pool, "lead_followups"))) {
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS lead_followups (
+        id                  INT UNSIGNED NOT NULL AUTO_INCREMENT,
+        lead_id             INT UNSIGNED NOT NULL,
+        note                TEXT NOT NULL,
+        next_follow_up_date DATE DEFAULT NULL,
+        next_follow_up_at   DATETIME DEFAULT NULL,
+        attachments_json    JSON DEFAULT NULL,
+        created_by          INT UNSIGNED DEFAULT NULL,
+        created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY idx_lead_followups_lead (lead_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+  }
+  await addColumn(pool, "lead_followups", "next_follow_up_at", "DATETIME DEFAULT NULL");
+  await addColumn(pool, "lead_followups", "attachments_json", "JSON DEFAULT NULL");
+}
+
+async function ensureLeadChangeLogTable(pool) {
+  if (!(await tableExists(pool, "leads"))) return;
+  if (!(await tableExists(pool, "lead_change_log"))) {
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS lead_change_log (
+        id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+        lead_id     INT UNSIGNED NOT NULL,
+        field_name  VARCHAR(80) NOT NULL,
+        old_value   TEXT DEFAULT NULL,
+        new_value   TEXT DEFAULT NULL,
+        user_id     INT UNSIGNED DEFAULT NULL,
+        created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY idx_lead_change_log_lead (lead_id),
+        KEY idx_lead_change_log_created (created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+    console.log("ensureCrmSchemaCompat: created lead_change_log table");
+  }
+}
+
+async function ensureTenantLeadCountersTable(pool) {
+  if (!(await tableExists(pool, "tenant_lead_counters"))) {
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS tenant_lead_counters (
+        tenant_id         INT UNSIGNED NOT NULL,
+        next_lead_number  INT UNSIGNED NOT NULL DEFAULT 1,
+        updated_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (tenant_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+    console.log("ensureCrmSchemaCompat: created tenant_lead_counters table");
+  }
 }
 
 async function ensureTicketsTable(pool) {
@@ -145,6 +245,9 @@ async function ensureCrmSchemaCompat(pool) {
   if (compatReady) return;
   await ensureCalendarCrmTables(pool);
   await ensureLeadsTable(pool);
+  await ensureLeadFollowupsTable(pool);
+  await ensureLeadChangeLogTable(pool);
+  await ensureTenantLeadCountersTable(pool);
   await ensureTicketsTable(pool);
   await patchCrmColumns(pool);
   compatReady = true;

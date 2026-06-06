@@ -7,7 +7,11 @@ const {
 const XLSX = require("xlsx");
 const path = require("path");
 const fs = require("fs");
-const { generateClientId, computeClientFields } = require("../services/fitnessComputedFields");
+const {
+  generateClientId,
+  computeClientFields,
+  sortClientRows,
+} = require("../services/fitnessComputedFields");
 const { body, validationResult } = require("express-validator");
 
 // ─────────────────────────────────────────────────────────────────
@@ -465,6 +469,19 @@ function buildClientListWhere(q) {
   };
 }
 
+const CLIENT_SORT_LABELS = {
+  next_due: "Next due — earliest first",
+  next_due_desc: "Next due — latest first",
+  plan_expiry: "Plan expiry — soonest first",
+  plan_expiry_desc: "Plan expiry — latest first",
+  name: "Name A–Z",
+  name_desc: "Name Z–A",
+  tier: "Tier low → high",
+  tier_desc: "Tier high → low",
+  created: "Joined — newest",
+  created_asc: "Joined — oldest",
+};
+
 function buildClientListOrder(sortRaw, isNextDueView) {
   let sort = String(sortRaw || "").toLowerCase().trim();
   if (!CLIENT_LIST_SORTS.has(sort)) {
@@ -515,18 +532,36 @@ function applyComputedClientFilters(rows, computed) {
   return out;
 }
 
+function resolveClientListSort(sortRaw, isNextDueView) {
+  let sort = String(sortRaw || "").toLowerCase().trim();
+  if (!CLIENT_LIST_SORTS.has(sort)) {
+    sort = isNextDueView ? "next_due" : "created";
+  }
+  return sort;
+}
+
 async function getAllClients(req, res) {
   try {
-    const { sort } = req.query;
+    const { sort: sortQuery } = req.query;
     const { whereSql, params, computed, isNextDueView } = buildClientListWhere(req.query);
+    const sort = resolveClientListSort(sortQuery, isNextDueView);
     const orderSql = buildClientListOrder(sort, isNextDueView);
 
     const query = `SELECT * FROM fitness_clients WHERE ${whereSql} ${orderSql}`;
     const [rows] = await mainPool.execute(query, params);
     let result = rows.map(computeClientFields);
     result = applyComputedClientFilters(result, computed);
+    result = sortClientRows(result, sort);
 
-    res.json({ success: true, data: result });
+    res.json({
+      success: true,
+      data: result,
+      meta: {
+        sort,
+        sortLabel: CLIENT_SORT_LABELS[sort] || sort,
+        total: result.length,
+      },
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

@@ -1,5 +1,6 @@
 const express = require("express");
 const { verifyToken } = require("../middleware/verifyToken");
+const { requireFeature } = require("../middleware/requireFeature");
 const { pool } = require("../config/database");
 const {
   emitAdminChanged,
@@ -49,6 +50,7 @@ function emitOppChanges(req, action, extra = {}) {
 
 const router = express.Router();
 router.use(verifyToken);
+router.use(requireFeature("opportunities"));
 
 const STAGE_ALIAS = {
   open: "qualification_done",

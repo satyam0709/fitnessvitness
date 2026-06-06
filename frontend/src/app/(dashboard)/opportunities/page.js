@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { createPortal } from "react-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSearchParams } from "next/navigation";
@@ -163,6 +164,7 @@ export default function OpportunitiesPage() {
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [starredOnly, setStarredOnly] = useState(false);
+  const [fromLeadsOnly, setFromLeadsOnly] = useState(searchParams.get("from_leads") === "1");
   const [colFilters, setColFilters] = useState({
     title: "",
     company: "",
@@ -275,8 +277,14 @@ export default function OpportunitiesPage() {
       return acc + (Number(it.amount) || 0);
     }, 0);
   }, [items, listView]);
+  const leadConversionCount = useMemo(
+    () => items.filter((it) => it.lead_id).length,
+    [items]
+  );
+
   const filteredRows = useMemo(() => {
     return items.filter((it) => {
+      if (fromLeadsOnly && !it.lead_id) return false;
       if (colFilters.title && !String(it.title || "").toLowerCase().includes(colFilters.title.toLowerCase())) return false;
       if (colFilters.company && !String(it.company_name || "").toLowerCase().includes(colFilters.company.toLowerCase()))
         return false;
@@ -304,7 +312,7 @@ export default function OpportunitiesPage() {
       if (colFilters.owner && !String(it.owner_email || "").toLowerCase().includes(colFilters.owner.toLowerCase())) return false;
       return true;
     });
-  }, [colFilters, items]);
+  }, [colFilters, fromLeadsOnly, items]);
 
   const selectedStageMeta = useMemo(() => Object.fromEntries(STAGES.map((s) => [s.value, s.label])), []);
   const followupTypeLabels = useMemo(() => buildLabelMap(FOLLOWUP_TYPES), []);
@@ -657,8 +665,11 @@ export default function OpportunitiesPage() {
       <div className={styles.stageStrip}>
         <button
           type="button"
-          className={`${styles.stageCard} ${!stageFilter ? styles.stageCardActive : ""}`}
-          onClick={() => setStageFilter("")}
+          className={`${styles.stageCard} ${!stageFilter && !fromLeadsOnly ? styles.stageCardActive : ""}`}
+          onClick={() => {
+            setFromLeadsOnly(false);
+            setStageFilter("");
+          }}
         >
           <span>All stages</span>
           <strong>{stageCounts.all || 0}</strong>
@@ -669,12 +680,28 @@ export default function OpportunitiesPage() {
             type="button"
             className={`${styles.stageCard} ${stageFilter === s.value ? styles.stageCardActive : ""}`}
             style={{ borderTopColor: s.color }}
-            onClick={() => setStageFilter((prev) => (prev === s.value ? "" : s.value))}
+            onClick={() => {
+              setFromLeadsOnly(false);
+              setStageFilter((prev) => (prev === s.value ? "" : s.value));
+            }}
           >
             <span>{s.label}</span>
             <strong>{stageCounts[s.value] || 0}</strong>
           </button>
         ))}
+        <button
+          type="button"
+          className={`${styles.stageCard} ${fromLeadsOnly ? styles.stageCardActive : ""}`}
+          style={{ borderTopColor: "#6366f1" }}
+          onClick={() => {
+            setStageFilter("");
+            setFromLeadsOnly((v) => !v);
+          }}
+          title="Opportunities created from lead conversion"
+        >
+          <span>From leads</span>
+          <strong>{leadConversionCount}</strong>
+        </button>
       </div>
       )}
 
@@ -699,6 +726,7 @@ export default function OpportunitiesPage() {
             setToDate("");
             setStageFilter("");
             setStarredOnly(false);
+            setFromLeadsOnly(false);
             setListView("pipeline");
           }}
         >
@@ -710,6 +738,16 @@ export default function OpportunitiesPage() {
           onClick={() => setStarredOnly((v) => !v)}
         >
           <i className="fas fa-star" /> Starred
+        </button>
+        <button
+          type="button"
+          className={`${styles.btnGhost} ${fromLeadsOnly ? styles.btnStarActive : ""}`}
+          onClick={() => {
+            setStageFilter("");
+            setFromLeadsOnly((v) => !v);
+          }}
+        >
+          <i className="fas fa-user-tag" /> From leads ({leadConversionCount})
         </button>
       </div>
 
@@ -870,7 +908,14 @@ export default function OpportunitiesPage() {
                       <i className="fas fa-star" />
                     </button>
                   </td>
-                  <td>{it.title}</td>
+                  <td>
+                    <div>{it.title}</div>
+                    {it.lead_id ? (
+                      <Link href={`/leads/${it.lead_id}`} className={styles.leadSourceLink}>
+                        From lead #{it.lead_id}
+                      </Link>
+                    ) : null}
+                  </td>
                   <td>{it.phone || "—"}</td>
                   <td>{purposeLabel(it)}</td>
                   {!showWonCols && !showLostCols ? <td>{formatFollowupAt(it.followup_at)}</td> : null}

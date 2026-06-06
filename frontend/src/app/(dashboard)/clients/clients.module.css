@@ -144,22 +144,63 @@
   box-shadow: 0 4px 12px rgba(16, 185, 129, 0.35);
 }
 
-.sortSelect {
-  padding: 10px 14px;
-  border-radius: 10px;
-  border: 1px solid #334155;
-  background: #1e293b;
-  color: #e2e8f0;
-  font-size: 13px;
-  font-weight: 600;
-  min-width: 200px;
-  cursor: pointer;
+.sortBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 220px;
 }
 
-.sortSelect:focus {
-  outline: none;
-  border-color: #10b981;
-  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.25);
+.sortBlockLabel {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+}
+
+.sortHintBar {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  color: #94a3b8;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.sortHintBar i {
+  color: #10b981;
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.sortHintText strong {
+  color: #e2e8f0;
+  font-weight: 700;
+}
+
+.sortHintCount {
+  color: #64748b;
+  font-weight: 600;
+}
+
+:root:not([data-theme="dark"]) .sortHintBar {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #475569;
+}
+
+:root:not([data-theme="dark"]) .sortHintText strong {
+  color: #0f172a;
+}
+
+:root:not([data-theme="dark"]) .sortBlockLabel {
+  color: #64748b;
 }
 
 .filtersToggle {
@@ -344,7 +385,6 @@
 }
 
 :root:not([data-theme="dark"]) .filterBtn,
-:root:not([data-theme="dark"]) .sortSelect,
 :root:not([data-theme="dark"]) .filtersToggle,
 :root:not([data-theme="dark"]) .filterSelect,
 :root:not([data-theme="dark"]) .filterInput,
