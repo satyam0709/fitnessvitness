@@ -40,8 +40,7 @@ const QUICK_CREATE_KEYS = new Set([
   "note",
 ]);
 
-// sidebarCollapsed — tells topbar how far left to sit on desktop
-// onMenuToggle    — only used on mobile to open the sidebar drawer
+
 export default function DashboardTopbar({ onMenuToggle, sidebarCollapsed }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchVal,  setSearchVal]  = useState("");
