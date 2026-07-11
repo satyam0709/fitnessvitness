@@ -1,8 +1,7 @@
 const express = require("express");
 const { verifyToken } = require("../middleware/verifyToken");
 const { requireFeature } = require("../middleware/requireFeature");
-const prisma = require("../config/prisma");
-const { Prisma } = require("../generated/prisma");
+const { pool } = require("../config/database");
 const {
   emitAdminChanged,
   emitCalendarChanged,
@@ -15,6 +14,28 @@ const {
   createClientFromOpportunity,
   linkExistingClient,
 } = require("../services/opportunityClientService");
+
+const columnCache = new Map();
+let hasTenantIdColumn = null;
+
+async function hasColumn(table, column) {
+  const key = `${table}.${column}`;
+  if (columnCache.has(key)) return columnCache.get(key);
+  const [rows] = await pool.execute(
+    `SELECT 1 FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ? LIMIT 1`,
+    [table, column]
+  );
+  const exists = rows.length > 0;
+  columnCache.set(key, exists);
+  return exists;
+}
+
+async function opportunitiesHasTenantId() {
+  if (hasTenantIdColumn !== null) return hasTenantIdColumn;
+  hasTenantIdColumn = await hasColumn("opportunities", "tenant_id");
+  return hasTenantIdColumn;
+}
 
 function tenantId(req) {
   return req.user?.tenantId ?? req.tenantId ?? null;
@@ -83,64 +104,43 @@ function normalizeEnum(v) {
   return String(v || "").trim().toLowerCase().replace(/\s+/g, "_");
 }
 
-function applyScope(req) {
-  const where = {
-    is_deleted: false,
-    tenant_id: tenantId(req),
-  };
-  if (!canSeeAllTeamRecords(req)) {
-    where.OR = [
-      { created_by: req.user.id },
-      { owner_user_id: req.user.id }
-    ];
+async function applyScope(req, alias = "o") {
+  const params = [];
+  const clauses = [`${alias}.is_deleted = 0`];
+  if (await opportunitiesHasTenantId()) {
+    clauses.push(`${alias}.tenant_id <=> ?`);
+    params.push(tenantId(req));
   }
-  return where;
-}
-
-function formatOpp(opp) {
-  if (!opp) return null;
-  return {
-    ...opp,
-    amount: opp.amount ? opp.amount.toString() : "0.00",
-    final_amount: opp.final_amount ? opp.final_amount.toString() : null,
-  };
+  if (!canSeeAllTeamRecords(req)) {
+    clauses.push(`(${alias}.created_by = ? OR ${alias}.owner_user_id = ?)`);
+    params.push(req.user.id, req.user.id);
+  }
+  return { where: clauses.join(" AND "), params };
 }
 
 async function loadOpportunityScoped(req, id) {
-  const scope = applyScope(req);
-  const where = {
-    id: Number(id),
-    ...scope
-  };
-  
-  const opp = await prisma.opportunities.findFirst({
-    where,
-    include: {
-      users_opportunities_owner_user_idTousers: {
-        select: {
-          email: true
-        }
-      }
-    }
-  });
-  if (!opp) return null;
-  const owner = opp.users_opportunities_owner_user_idTousers;
-  return formatOpp({
-    ...opp,
-    owner_email: owner ? owner.email : null
-  });
+  const scope = await applyScope(req, "o");
+  const [[row]] = await pool.execute(
+    `SELECT o.*, u.email AS owner_email
+     FROM opportunities o
+     LEFT JOIN users u ON u.id = o.owner_user_id
+     WHERE o.id = ? AND ${scope.where}`,
+    [id, ...scope.params]
+  );
+  return row || null;
 }
 
-async function syncFollowupReminder(txOrPrisma, opportunity, userId) {
-  const client = txOrPrisma || prisma;
+async function syncFollowupReminder(executor, opportunity, userId) {
+  const db = executor || pool;
   const followAt = opportunity.followup_at;
+  const hasLinkedCol = await hasColumn("opportunities", "linked_reminder_id");
+  if (!hasLinkedCol) return null;
 
   if (!followAt) {
     if (opportunity.linked_reminder_id) {
-      await client.reminders.update({
-        where: { id: opportunity.linked_reminder_id },
-        data: { is_done: true }
-      });
+      await db.execute("UPDATE reminders SET is_done = 1 WHERE id = ?", [
+        opportunity.linked_reminder_id,
+      ]);
     }
     return null;
   }
@@ -153,53 +153,41 @@ async function syncFollowupReminder(txOrPrisma, opportunity, userId) {
     : "call";
 
   if (opportunity.linked_reminder_id) {
-    await client.reminders.update({
-      where: { id: opportunity.linked_reminder_id },
-      data: {
-        title,
-        note,
-        remind_at: new Date(followAt),
-        assigned_to_user_id: ownerId,
-        reminder_type: remindType,
-        is_done: false
-      }
-    });
+    await db.execute(
+      `UPDATE reminders SET title = ?, note = ?, remind_at = ?, assigned_to_user_id = ?, reminder_type = ?, is_done = 0
+       WHERE id = ? AND is_deleted = 0`,
+      [title, note, followAt, ownerId, remindType, opportunity.linked_reminder_id]
+    );
     return opportunity.linked_reminder_id;
   }
 
-  const createdReminder = await client.reminders.create({
-    data: {
-      user_id: userId,
+  const [r] = await db.execute(
+    `INSERT INTO reminders (user_id, title, note, remind_at, lead_id, assigned_to_user_id, reminder_type)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      userId,
       title,
       note,
-      remind_at: new Date(followAt),
-      lead_id: opportunity.lead_id || null,
-      assigned_to_user_id: ownerId,
-      reminder_type: remindType,
-      tenant_id: opportunity.tenant_id
-    }
-  });
-
-  await client.opportunities.update({
-    where: { id: opportunity.id },
-    data: { linked_reminder_id: createdReminder.id }
-  });
-
-  return createdReminder.id;
+      followAt,
+      opportunity.lead_id || null,
+      ownerId,
+      remindType,
+    ]
+  );
+  await db.execute("UPDATE opportunities SET linked_reminder_id = ? WHERE id = ?", [
+    r.insertId,
+    opportunity.id,
+  ]);
+  return r.insertId;
 }
 
-async function insertOpportunityActivity(txOrPrisma, { opportunityId, tenantId, activityType, notes, metadata, userId }) {
-  const client = txOrPrisma || prisma;
-  await client.opportunity_activities.create({
-    data: {
-      opportunity_id: opportunityId,
-      tenant_id: tenantId ?? null,
-      activity_type: activityType,
-      notes: notes ?? null,
-      metadata: metadata || null,
-      created_by: userId ?? null
-    }
-  });
+async function insertOpportunityActivity(executor, { opportunityId, tenantId, activityType, notes, metadata, userId }) {
+  const metaJson = metadata != null ? JSON.stringify(metadata) : null;
+  await executor.execute(
+    `INSERT INTO opportunity_activities (opportunity_id, tenant_id, activity_type, notes, metadata, created_by)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [opportunityId, tenantId ?? null, activityType, notes ?? null, metaJson, userId ?? null]
+  );
 }
 
 /** Stages that should advance to consultation_done when a consultation is logged. */
@@ -212,19 +200,17 @@ router.get("/", async (req, res) => {
   try {
     const { stage, q, owner_user_id, expected_close_from, expected_close_to, include_breakdown, starred, view } =
       req.query;
-      
-    const scope = applyScope(req);
-    const where = { ...scope };
+    const scope = await applyScope(req, "o");
+    const where = [scope.where];
+    const params = [...scope.params];
 
     const viewNorm = String(view || "").trim().toLowerCase();
     if (viewNorm === "pipeline") {
-      where.stage = {
-        notIn: ['closed_won', 'closed_lost']
-      };
+      where.push("o.stage NOT IN ('closed_won','closed_lost')");
     } else if (viewNorm === "won") {
-      where.stage = 'closed_won';
+      where.push("o.stage = 'closed_won'");
     } else if (viewNorm === "lost") {
-      where.stage = 'closed_lost';
+      where.push("o.stage = 'closed_lost'");
     } else if (viewNorm && viewNorm !== "all") {
       return res.status(400).json({ success: false, message: "view must be pipeline, won, lost, or all" });
     }
@@ -234,90 +220,59 @@ router.get("/", async (req, res) => {
         return res.status(400).json({ success: false, message: "Invalid stage" });
       }
       const normalizedStage = normalizeStage(stage);
-      where.stage = normalizedStage;
+      where.push("o.stage = ?");
+      params.push(normalizedStage);
     }
-    
     if (q && String(q).trim()) {
-      const qCondition = {
-        OR: [
-          { title: { contains: String(q).trim() } },
-          { company_name: { contains: String(q).trim() } }
-        ]
-      };
-      if (where.AND) {
-        where.AND.push(qCondition);
-      } else {
-        where.AND = [qCondition];
-      }
+      where.push("(o.title LIKE ? OR o.company_name LIKE ?)");
+      const like = `%${String(q).trim()}%`;
+      params.push(like, like);
     }
-    
     if (owner_user_id && Number.isInteger(Number(owner_user_id))) {
-      where.owner_user_id = Number(owner_user_id);
+      where.push("o.owner_user_id = ?");
+      params.push(Number(owner_user_id));
     }
-    
-    if (expected_close_from || expected_close_to) {
-      where.expected_close_date = {};
-      if (expected_close_from) {
-        where.expected_close_date.gte = new Date(expected_close_from);
-      }
-      if (expected_close_to) {
-        where.expected_close_date.lte = new Date(expected_close_to);
-      }
+    if (expected_close_from) {
+      where.push("o.expected_close_date >= ?");
+      params.push(String(expected_close_from).slice(0, 10));
     }
-    
+    if (expected_close_to) {
+      where.push("o.expected_close_date <= ?");
+      params.push(String(expected_close_to).slice(0, 10));
+    }
     if (String(starred || "") === "1") {
-      where.is_starred = true;
+      where.push("o.is_starred = 1");
     }
 
-    let orderBy = { created_at: 'desc' };
+    let orderSql = "ORDER BY o.created_at DESC";
     if (viewNorm === "won") {
-      orderBy = [
-        { closed_won_at: 'desc' },
-        { id: 'desc' }
-      ];
+      orderSql = "ORDER BY o.closed_won_at IS NULL, o.closed_won_at DESC, o.id DESC";
     } else if (viewNorm === "lost") {
-      orderBy = [
-        { closed_lost_at: 'desc' },
-        { id: 'desc' }
-      ];
+      orderSql = "ORDER BY o.closed_lost_at IS NULL, o.closed_lost_at DESC, o.id DESC";
     }
 
-    const rows = await prisma.opportunities.findMany({
-      where,
-      orderBy,
-      include: {
-        users_opportunities_owner_user_idTousers: {
-          select: {
-            email: true
-          }
-        }
-      }
-    });
-
-    const formattedRows = rows.map(opp => {
-      const owner = opp.users_opportunities_owner_user_idTousers;
-      return formatOpp({
-        ...opp,
-        owner_email: owner ? owner.email : null
-      });
-    });
+    const [rows] = await pool.execute(
+      `SELECT o.*, u.email AS owner_email
+       FROM opportunities o
+       LEFT JOIN users u ON u.id = o.owner_user_id
+       WHERE ${where.join(" AND ")}
+       ${orderSql}`,
+      params
+    );
 
     let stageBreakdown = null;
     if (String(include_breakdown || "") === "1") {
-      const buckets = await prisma.opportunities.groupBy({
-        by: ['stage'],
-        where,
-        _count: {
-          _all: true
-        }
-      });
-      stageBreakdown = buckets.map(b => ({
-        key: String(b.stage),
-        count: Number(b._count._all)
-      })).sort((a, b) => b.count - a.count);
+      const [buckets] = await pool.execute(
+        `SELECT o.stage AS bucket, COUNT(*) AS count
+         FROM opportunities o
+         WHERE ${where.join(" AND ")}
+         GROUP BY o.stage
+         ORDER BY count DESC`,
+        params
+      );
+      stageBreakdown = buckets.map((b) => ({ key: String(b.bucket), count: Number(b.count) || 0 }));
     }
-
-    res.json({ success: true, total: formattedRows.length, data: formattedRows, stageBreakdown });
+    res.json({ success: true, total: rows.length, data: rows, stageBreakdown });
   } catch (err) {
     console.error("GET /api/opportunities", err);
     res.status(500).json({ success: false, message: err.message });
@@ -331,14 +286,14 @@ router.get("/:id/activities", async (req, res) => {
     const row = await loadOpportunityScoped(req, id);
     if (!row) return res.status(404).json({ success: false, message: "Opportunity not found" });
 
-    const activities = await prisma.$queryRaw`
-      SELECT a.*, u.email AS created_by_email
-      FROM opportunity_activities a
-      LEFT JOIN users u ON u.id = a.created_by
-      WHERE a.opportunity_id = ${id}
-      ORDER BY a.created_at DESC
-    `;
-
+    const [activities] = await pool.execute(
+      `SELECT a.*, u.email AS created_by_email
+       FROM opportunity_activities a
+       LEFT JOIN users u ON u.id = a.created_by
+       WHERE a.opportunity_id = ?
+       ORDER BY a.created_at DESC`,
+      [id]
+    );
     res.json({ success: true, data: activities });
   } catch (err) {
     console.error("GET /api/opportunities/:id/activities", err);
@@ -367,7 +322,11 @@ router.post("/:id/consultation", async (req, res) => {
     if (!notes) return res.status(400).json({ success: false, message: "notes is required" });
     const atParam = normalizeDatetime(req.body?.consultation_at);
 
-    const existing = await loadOpportunityScoped(req, id);
+    const scope = await applyScope(req, "o");
+    const [[existing]] = await pool.execute(
+      `SELECT o.* FROM opportunities o WHERE o.id = ? AND ${scope.where}`,
+      [id, ...scope.params]
+    );
     if (!existing) return res.status(404).json({ success: false, message: "Opportunity not found" });
     if (existing.stage === "closed_won" || existing.stage === "closed_lost") {
       return res.status(400).json({ success: false, message: "Cannot log consultation on a closed opportunity" });
@@ -378,27 +337,34 @@ router.post("/:id/consultation", async (req, res) => {
       nextStage = "consultation_done";
     }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.opportunities.update({
-        where: { id },
-        data: {
-          consultation_at: atParam ? new Date(atParam) : new Date(),
-          consultation_notes: notes,
-          stage: nextStage,
-          updated_at: new Date()
-        }
-      });
-      await insertOpportunityActivity(tx, {
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.execute(
+        `UPDATE opportunities SET consultation_at = COALESCE(?, NOW()), consultation_notes = ?, stage = ?, updated_at = NOW() WHERE id = ?`,
+        [atParam, notes, nextStage, id]
+      );
+      await insertOpportunityActivity(conn, {
         opportunityId: id,
         tenantId: req.user?.tenantId ?? null,
         activityType: "consultation",
         notes,
         metadata: { consultation_at: atParam || null, stage_after: nextStage },
-        userId: req.user.id
+        userId: req.user.id,
       });
-    });
+      await conn.commit();
+    } catch (e) {
+      try {
+        await conn.rollback();
+      } catch {
+        /* ignore */
+      }
+      throw e;
+    } finally {
+      conn.release();
+    }
 
-    const row = await loadOpportunityScoped(req, id);
+    const [[row]] = await pool.execute("SELECT o.*, u.email AS owner_email FROM opportunities o LEFT JOIN users u ON u.id = o.owner_user_id WHERE o.id = ?", [id]);
     emitOppChanges(req, "consultation", { id });
     res.json({ success: true, data: row });
   } catch (err) {
@@ -426,35 +392,33 @@ router.post("/:id/close-won", async (req, res) => {
     }
 
     let clientPayload = null;
-    await prisma.$transaction(async (tx) => {
-      await tx.opportunities.update({
-        where: { id },
-        data: {
-          stage: 'closed_won',
-          closed_won_at: new Date(),
-          final_amount: new Prisma.Decimal(finalAmount),
-          updated_at: new Date()
-        }
-      });
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.execute(
+        `UPDATE opportunities SET stage = 'closed_won', closed_won_at = NOW(), final_amount = ?, updated_at = NOW() WHERE id = ?`,
+        [finalAmount, id]
+      );
 
       if (linkClientId) {
-        const link = await linkExistingClient(tx, id, linkClientId);
+        const link = await linkExistingClient(conn, id, linkClientId);
         if (!link.ok) {
-          throw new Error(link.message);
+          await conn.rollback();
+          return res.status(400).json({ success: false, message: link.message });
         }
         clientPayload = link.client;
       } else if (createClient) {
-        const created = await createClientFromOpportunity(tx, existing, req.user.id);
+        const created = await createClientFromOpportunity(conn, existing, req.user.id);
         if (created?.client_id) {
-          await tx.opportunities.update({
-            where: { id },
-            data: { client_id: created.client_id }
-          });
+          await conn.execute("UPDATE opportunities SET client_id = ? WHERE id = ?", [
+            created.client_id,
+            id,
+          ]);
           clientPayload = created.row;
         }
       }
 
-      await insertOpportunityActivity(tx, {
+      await insertOpportunityActivity(conn, {
         opportunityId: id,
         tenantId: tenantId(req),
         activityType: "close_won",
@@ -463,11 +427,21 @@ router.post("/:id/close-won", async (req, res) => {
           from_stage: existing.stage,
           final_amount: finalAmount,
           forecast_amount: Number(existing.amount) || 0,
-          client_id: clientPayload?.client_id || linkClientId || null
+          client_id: clientPayload?.client_id || linkClientId || null,
         },
-        userId: req.user.id
+        userId: req.user.id,
       });
-    });
+      await conn.commit();
+    } catch (e) {
+      try {
+        await conn.rollback();
+      } catch {
+        /* ignore */
+      }
+      throw e;
+    } finally {
+      conn.release();
+    }
 
     const row = await loadOpportunityScoped(req, id);
     emitOppChanges(req, "close_won", { id });
@@ -485,33 +459,44 @@ router.post("/:id/close-lost", async (req, res) => {
     if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
     const lossReason = req.body?.loss_reason != null ? String(req.body.loss_reason).slice(0, 255) : null;
 
-    const existing = await loadOpportunityScoped(req, id);
+    const scope = await applyScope(req, "o");
+    const [[existing]] = await pool.execute(
+      `SELECT o.* FROM opportunities o WHERE o.id = ? AND ${scope.where}`,
+      [id, ...scope.params]
+    );
     if (!existing) return res.status(404).json({ success: false, message: "Opportunity not found" });
     if (existing.stage === "closed_won" || existing.stage === "closed_lost") {
       return res.status(400).json({ success: false, message: "Opportunity is already closed" });
     }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.opportunities.update({
-        where: { id },
-        data: {
-          stage: 'closed_lost',
-          closed_lost_at: new Date(),
-          loss_reason: lossReason,
-          updated_at: new Date()
-        }
-      });
-      await insertOpportunityActivity(tx, {
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.execute(
+        `UPDATE opportunities SET stage = 'closed_lost', closed_lost_at = NOW(), loss_reason = ?, updated_at = NOW() WHERE id = ?`,
+        [lossReason, id]
+      );
+      await insertOpportunityActivity(conn, {
         opportunityId: id,
         tenantId: req.user?.tenantId ?? null,
         activityType: "close_lost",
         notes: lossReason,
         metadata: { from_stage: existing.stage },
-        userId: req.user.id
+        userId: req.user.id,
       });
-    });
+      await conn.commit();
+    } catch (e) {
+      try {
+        await conn.rollback();
+      } catch {
+        /* ignore */
+      }
+      throw e;
+    } finally {
+      conn.release();
+    }
 
-    const row = await loadOpportunityScoped(req, id);
+    const [[row]] = await pool.execute("SELECT o.*, u.email AS owner_email FROM opportunities o LEFT JOIN users u ON u.id = o.owner_user_id WHERE o.id = ?", [id]);
     emitOppChanges(req, "close_lost", { id });
     res.json({ success: true, data: row });
   } catch (err) {
@@ -553,39 +538,44 @@ router.post("/", async (req, res) => {
     const clientIdLink = req.body?.client_id ? String(req.body.client_id).trim().slice(0, 20) : null;
     const followupAt = normalizeDatetime(req.body?.followup_at);
 
-    const createdOpp = await prisma.opportunities.create({
-      data: {
-        tenant_id: tenantId(req),
+    const [r] = await pool.execute(
+      `INSERT INTO opportunities
+       (tenant_id, title, lead_id, contact_id, client_id, phone, visit_purpose, company_name, amount, currency, stage,
+        expected_close_date, owner_user_id, created_by, notes, product_category, quantity, external_quotation_url,
+        followup_at, followup_type, opportunity_type, lead_source, team, comments_history)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        tenantId(req),
         title,
-        lead_id: Number(req.body?.lead_id) || null,
-        contact_id: Number(req.body?.contact_id) || null,
-        client_id: clientIdLink || null,
+        Number(req.body?.lead_id) || null,
+        Number(req.body?.contact_id) || null,
+        clientIdLink || null,
         phone,
-        visit_purpose: visitPurpose,
-        company_name: req.body?.company_name ? String(req.body.company_name) : null,
-        amount: new Prisma.Decimal(Number(req.body?.amount) || 0),
-        currency: String(req.body?.currency || "INR").toUpperCase(),
+        visitPurpose,
+        req.body?.company_name ? String(req.body.company_name) : null,
+        Number(req.body?.amount) || 0,
+        String(req.body?.currency || "INR").toUpperCase(),
         stage,
-        expected_close_date: req.body?.expected_close_date ? new Date(req.body.expected_close_date) : null,
-        owner_user_id: ownerId || null,
-        created_by: req.user.id,
-        notes: req.body?.notes ? String(req.body.notes) : null,
-        product_category: productCategory ? productCategory : null,
-        quantity: Number(req.body?.quantity) || 0,
-        external_quotation_url: req.body?.external_quotation_url ? String(req.body.external_quotation_url).slice(0, 500) : null,
-        followup_at: followupAt ? new Date(followupAt) : null,
-        followup_type: followupType ? followupType : null,
-        opportunity_type: opportunityType ? opportunityType : null,
-        lead_source: leadSource ? leadSource : null,
-        team: req.body?.team ? String(req.body.team).slice(0, 160) : null,
-        comments_history: req.body?.comments_history ? String(req.body.comments_history) : null
-      }
-    });
+        req.body?.expected_close_date || null,
+        ownerId || null,
+        req.user.id,
+        req.body?.notes ? String(req.body.notes) : null,
+        productCategory ? productCategory : null,
+        Number(req.body?.quantity) || 0,
+        req.body?.external_quotation_url ? String(req.body.external_quotation_url).slice(0, 500) : null,
+        followupAt,
+        followupType ? followupType : null,
+        opportunityType ? opportunityType : null,
+        leadSource ? leadSource : null,
+        req.body?.team ? String(req.body.team).slice(0, 160) : null,
+        req.body?.comments_history ? String(req.body.comments_history) : null,
+      ]
+    );
 
-    const oppId = createdOpp.id;
+    const oppId = r.insertId;
     let row = await loadOpportunityScoped(req, oppId);
     if (followupAt && row) {
-      await syncFollowupReminder(prisma, row, req.user.id);
+      await syncFollowupReminder(pool, row, req.user.id);
       row = await loadOpportunityScoped(req, oppId);
       emitRemindersChanged({ reason: "opportunities" });
     }
@@ -601,7 +591,11 @@ router.put("/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
-    const existing = await loadOpportunityScoped(req, id);
+    const scope = await applyScope(req, "o");
+    const [[existing]] = await pool.execute(
+      `SELECT o.* FROM opportunities o WHERE o.id = ? AND ${scope.where}`,
+      [id, ...scope.params]
+    );
     if (!existing) return res.status(404).json({ success: false, message: "Opportunity not found" });
 
     const stageRaw = req.body?.stage != null ? String(req.body.stage).trim().toLowerCase() : existing.stage;
@@ -630,38 +624,50 @@ router.put("/:id", async (req, res) => {
     const nextFollowupAt =
       req.body?.followup_at != null ? normalizeDatetime(req.body.followup_at) : existing.followup_at;
 
-    await prisma.opportunities.update({
-      where: { id },
-      data: {
-        title: req.body?.title != null ? String(req.body.title).trim() : undefined,
-        company_name: req.body?.company_name !== undefined ? (req.body.company_name ? String(req.body.company_name) : null) : undefined,
-        amount: req.body?.amount !== undefined ? new Prisma.Decimal(Number(req.body.amount) || 0) : undefined,
-        currency: req.body?.currency !== undefined ? String(req.body.currency).toUpperCase() : undefined,
+    await pool.execute(
+      `UPDATE opportunities
+       SET title = ?, company_name = ?, amount = ?, currency = ?, stage = ?, expected_close_date = ?,
+           owner_user_id = ?, notes = ?, product_category = ?, quantity = ?, external_quotation_url = ?,
+           followup_at = ?, followup_type = ?, opportunity_type = ?, lead_source = ?, team = ?, comments_history = ?,
+           lead_id = ?, contact_id = ?, client_id = ?, phone = ?, visit_purpose = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [
+        req.body?.title != null ? String(req.body.title).trim() : existing.title,
+        req.body?.company_name != null ? String(req.body.company_name) : existing.company_name,
+        req.body?.amount != null ? Number(req.body.amount) || 0 : Number(existing.amount) || 0,
+        req.body?.currency != null ? String(req.body.currency).toUpperCase() : existing.currency,
         stage,
-        expected_close_date: req.body?.expected_close_date !== undefined ? (req.body.expected_close_date ? new Date(req.body.expected_close_date) : null) : undefined,
-        owner_user_id: req.body?.owner_user_id !== undefined ? (Number(req.body.owner_user_id) || null) : undefined,
-        notes: req.body?.notes !== undefined ? String(req.body.notes || "") : undefined,
-        product_category: req.body?.product_category !== undefined ? (nextProductCategory || null) : undefined,
-        quantity: req.body?.quantity !== undefined ? (Number(req.body.quantity) || 0) : undefined,
-        external_quotation_url: req.body?.external_quotation_url !== undefined ? (req.body.external_quotation_url ? String(req.body.external_quotation_url).slice(0, 500) : null) : undefined,
-        followup_at: nextFollowupAt !== undefined ? (nextFollowupAt ? new Date(nextFollowupAt) : null) : undefined,
-        followup_type: req.body?.followup_type !== undefined ? (nextFollowupType || null) : undefined,
-        opportunity_type: req.body?.opportunity_type !== undefined ? (nextOpportunityType || null) : undefined,
-        lead_source: req.body?.lead_source !== undefined ? (nextLeadSource || null) : undefined,
-        team: req.body?.team !== undefined ? (req.body.team ? String(req.body.team).slice(0, 160) : null) : undefined,
-        comments_history: req.body?.comments_history !== undefined ? String(req.body.comments_history || "") : undefined,
-        lead_id: req.body?.lead_id !== undefined ? (Number(req.body.lead_id) || null) : undefined,
-        contact_id: req.body?.contact_id !== undefined ? (Number(req.body.contact_id) || null) : undefined,
-        client_id: req.body?.client_id !== undefined ? (req.body.client_id ? String(req.body.client_id).trim().slice(0, 20) : null) : undefined,
-        phone: req.body?.phone !== undefined ? (req.body.phone ? String(req.body.phone).trim().slice(0, 20) : null) : undefined,
-        visit_purpose: req.body?.visit_purpose !== undefined ? (req.body.visit_purpose ? String(req.body.visit_purpose).trim() : null) : undefined,
-        updated_at: new Date()
-      }
-    });
-
+        req.body?.expected_close_date != null ? req.body.expected_close_date : existing.expected_close_date,
+        req.body?.owner_user_id != null ? Number(req.body.owner_user_id) || null : existing.owner_user_id,
+        req.body?.notes != null ? String(req.body.notes || "") : existing.notes,
+        req.body?.product_category != null
+          ? (nextProductCategory || null)
+          : existing.product_category,
+        req.body?.quantity != null ? Number(req.body.quantity) || 0 : Number(existing.quantity) || 0,
+        req.body?.external_quotation_url != null
+          ? String(req.body.external_quotation_url || "").slice(0, 500) || null
+          : existing.external_quotation_url,
+        nextFollowupAt,
+        req.body?.followup_type != null ? (nextFollowupType || null) : existing.followup_type,
+        req.body?.opportunity_type != null ? (nextOpportunityType || null) : existing.opportunity_type,
+        req.body?.lead_source != null ? (nextLeadSource || null) : existing.lead_source,
+        req.body?.team != null ? String(req.body.team || "").slice(0, 160) || null : existing.team,
+        req.body?.comments_history != null ? String(req.body.comments_history || "") : existing.comments_history,
+        req.body?.lead_id != null ? Number(req.body.lead_id) || null : existing.lead_id,
+        req.body?.contact_id != null ? Number(req.body.contact_id) || null : existing.contact_id,
+        req.body?.client_id != null
+          ? String(req.body.client_id || "").trim().slice(0, 20) || null
+          : existing.client_id,
+        req.body?.phone != null ? String(req.body.phone || "").trim().slice(0, 20) || null : existing.phone,
+        req.body?.visit_purpose != null
+          ? String(req.body.visit_purpose || "").trim() || null
+          : existing.visit_purpose,
+        id,
+      ]
+    );
     let row = await loadOpportunityScoped(req, id);
-    if (row && (req.body?.followup_at !== undefined || req.body?.followup_type !== undefined)) {
-      await syncFollowupReminder(prisma, row, req.user.id);
+    if (row && (req.body?.followup_at != null || req.body?.followup_type != null)) {
+      await syncFollowupReminder(pool, row, req.user.id);
       row = await loadOpportunityScoped(req, id);
       emitRemindersChanged({ reason: "opportunities" });
     }
@@ -680,26 +686,25 @@ router.patch("/:id/stage", async (req, res) => {
     if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
     if (!VALID_STAGE.has(stage)) return res.status(400).json({ success: false, message: "Invalid stage" });
     const normalizedStage = normalizeStage(stage);
-    
-    const existing = await loadOpportunityScoped(req, id);
+    const scope = await applyScope(req, "o");
+    const [[existing]] = await pool.execute(
+      `SELECT o.stage FROM opportunities o WHERE o.id = ? AND ${scope.where}`,
+      [id, ...scope.params]
+    );
     if (!existing) return res.status(404).json({ success: false, message: "Opportunity not found" });
-    
-    await prisma.opportunities.update({
-      where: { id },
-      data: {
-        stage: normalizedStage,
-        updated_at: new Date()
-      }
-    });
-
+    const [r] = await pool.execute(
+      `UPDATE opportunities o SET o.stage = ?, o.updated_at = NOW() WHERE o.id = ? AND ${scope.where}`,
+      [normalizedStage, id, ...scope.params]
+    );
+    if (!r.affectedRows) return res.status(404).json({ success: false, message: "Opportunity not found" });
     if (existing.stage !== normalizedStage) {
-      await insertOpportunityActivity(prisma, {
+      await insertOpportunityActivity(pool, {
         opportunityId: id,
         tenantId: req.user?.tenantId ?? null,
         activityType: "stage_change",
         notes: null,
         metadata: { from: existing.stage, to: normalizedStage },
-        userId: req.user.id
+        userId: req.user.id,
       });
     }
     emitOppChanges(req, "stage", { id, stage: normalizedStage });
@@ -717,26 +722,25 @@ router.put("/:id/stage", async (req, res) => {
     if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
     if (!VALID_STAGE.has(stage)) return res.status(400).json({ success: false, message: "Invalid stage" });
     const normalizedStage = normalizeStage(stage);
-    
-    const existing = await loadOpportunityScoped(req, id);
+    const scope = await applyScope(req, "o");
+    const [[existing]] = await pool.execute(
+      `SELECT o.stage FROM opportunities o WHERE o.id = ? AND ${scope.where}`,
+      [id, ...scope.params]
+    );
     if (!existing) return res.status(404).json({ success: false, message: "Opportunity not found" });
-    
-    await prisma.opportunities.update({
-      where: { id },
-      data: {
-        stage: normalizedStage,
-        updated_at: new Date()
-      }
-    });
-
+    const [r] = await pool.execute(
+      `UPDATE opportunities o SET o.stage = ?, o.updated_at = NOW() WHERE o.id = ? AND ${scope.where}`,
+      [normalizedStage, id, ...scope.params]
+    );
+    if (!r.affectedRows) return res.status(404).json({ success: false, message: "Opportunity not found" });
     if (existing.stage !== normalizedStage) {
-      await insertOpportunityActivity(prisma, {
+      await insertOpportunityActivity(pool, {
         opportunityId: id,
         tenantId: req.user?.tenantId ?? null,
         activityType: "stage_change",
         notes: null,
         metadata: { from: existing.stage, to: normalizedStage },
-        userId: req.user.id
+        userId: req.user.id,
       });
     }
     emitOppChanges(req, "stage", { id, stage: normalizedStage });
@@ -751,19 +755,13 @@ router.patch("/:id/star", async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
-    const starred = req.body?.starred ? true : false;
-    
-    const existing = await loadOpportunityScoped(req, id);
-    if (!existing) return res.status(404).json({ success: false, message: "Opportunity not found" });
-
-    await prisma.opportunities.update({
-      where: { id },
-      data: {
-        is_starred: starred,
-        updated_at: new Date()
-      }
-    });
-
+    const scope = await applyScope(req, "o");
+    const starred = req.body?.starred ? 1 : 0;
+    const [r] = await pool.execute(
+      `UPDATE opportunities o SET o.is_starred = ?, o.updated_at = NOW() WHERE o.id = ? AND ${scope.where}`,
+      [starred, id, ...scope.params]
+    );
+    if (!r.affectedRows) return res.status(404).json({ success: false, message: "Opportunity not found" });
     emitOppChanges(req, "star", { id, starred });
     res.json({ success: true });
   } catch (err) {
@@ -776,19 +774,13 @@ router.put("/:id/star", async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
-    const starred = req.body?.starred ? true : false;
-    
-    const existing = await loadOpportunityScoped(req, id);
-    if (!existing) return res.status(404).json({ success: false, message: "Opportunity not found" });
-
-    await prisma.opportunities.update({
-      where: { id },
-      data: {
-        is_starred: starred,
-        updated_at: new Date()
-      }
-    });
-
+    const scope = await applyScope(req, "o");
+    const starred = req.body?.starred ? 1 : 0;
+    const [r] = await pool.execute(
+      `UPDATE opportunities o SET o.is_starred = ?, o.updated_at = NOW() WHERE o.id = ? AND ${scope.where}`,
+      [starred, id, ...scope.params]
+    );
+    if (!r.affectedRows) return res.status(404).json({ success: false, message: "Opportunity not found" });
     emitOppChanges(req, "star", { id, starred });
     res.json({ success: true });
   } catch (err) {
@@ -801,19 +793,14 @@ router.delete("/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
-    
-    const existing = await loadOpportunityScoped(req, id);
-    if (!existing) return res.status(404).json({ success: false, message: "Opportunity not found" });
-
-    await prisma.opportunities.update({
-      where: { id },
-      data: {
-        is_deleted: true,
-        deleted_at: new Date(),
-        updated_at: new Date()
-      }
-    });
-
+    const scope = await applyScope(req, "o");
+    const [r] = await pool.execute(
+      `UPDATE opportunities o
+       SET o.is_deleted = 1, o.deleted_at = NOW(), o.updated_at = NOW()
+       WHERE o.id = ? AND ${scope.where}`,
+      [id, ...scope.params]
+    );
+    if (!r.affectedRows) return res.status(404).json({ success: false, message: "Opportunity not found" });
     emitOppChanges(req, "delete", { id });
     res.json({ success: true });
   } catch (err) {

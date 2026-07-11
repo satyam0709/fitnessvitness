@@ -227,7 +227,61 @@ function sortClientRows(rows, sortKey) {
   const list = [...rows];
   const sort = String(sortKey || '').toLowerCase();
 
+  const STATUS_ORDER = { 'Active': 1, 'Hold': 2, 'Inactive': 3 };
+  const PROGRESS_ORDER = { 'Very Good': 5, 'Good': 4, 'Neutral': 3, 'Poor': 2, 'Very Poor': 1 };
+  const PRIORITY_ORDER = { '🔴 OVERDUE': 1, '🟡 DUE SOON': 2, '✅ OK': 3 };
+
   switch (sort) {
+    case 'id_asc':
+      list.sort((a, b) => String(a.client_id || '').localeCompare(String(b.client_id || ''), 'en', { numeric: true }));
+      break;
+    case 'id_desc':
+      list.sort((a, b) => String(b.client_id || '').localeCompare(String(a.client_id || ''), 'en', { numeric: true }));
+      break;
+    case 'risk_asc': // high risk first
+      list.sort((a, b) => (b.is_high_risk ? 1 : 0) - (a.is_high_risk ? 1 : 0) || compareNames(a, b));
+      break;
+    case 'risk_desc': // low risk first (ok first)
+      list.sort((a, b) => (a.is_high_risk ? 1 : 0) - (b.is_high_risk ? 1 : 0) || compareNames(a, b));
+      break;
+    case 'status_asc': // Active -> Hold -> Inactive
+      list.sort((a, b) => (STATUS_ORDER[a.status] || 99) - (STATUS_ORDER[b.status] || 99) || compareNames(a, b));
+      break;
+    case 'status_desc': // Inactive -> Hold -> Active
+      list.sort((a, b) => (STATUS_ORDER[b.status] || 99) - (STATUS_ORDER[a.status] || 99) || compareNames(a, b));
+      break;
+    case 'progress_asc': // Very Good -> Very Poor
+      list.sort((a, b) => (PROGRESS_ORDER[b.progress] || 0) - (PROGRESS_ORDER[a.progress] || 0) || compareNames(a, b));
+      break;
+    case 'progress_desc': // Very Poor -> Very Good
+      list.sort((a, b) => (PROGRESS_ORDER[a.progress] || 0) - (PROGRESS_ORDER[b.progress] || 0) || compareNames(a, b));
+      break;
+    case 'follow_up_asc': // OVERDUE first
+      list.sort((a, b) => (PRIORITY_ORDER[a.follow_up_priority] || 99) - (PRIORITY_ORDER[b.follow_up_priority] || 99) || compareNames(a, b));
+      break;
+    case 'follow_up_desc': // OK first
+      list.sort((a, b) => (PRIORITY_ORDER[b.follow_up_priority] || 99) - (PRIORITY_ORDER[a.follow_up_priority] || 99) || compareNames(a, b));
+      break;
+    case 'days_asc':
+      list.sort((a, b) => {
+        const ad = a.days_remaining;
+        const bd = b.days_remaining;
+        if (ad == null && bd == null) return compareNames(a, b);
+        if (ad == null) return 1;
+        if (bd == null) return -1;
+        return ad - bd || compareNames(a, b);
+      });
+      break;
+    case 'days_desc':
+      list.sort((a, b) => {
+        const ad = a.days_remaining;
+        const bd = b.days_remaining;
+        if (ad == null && bd == null) return compareNames(a, b);
+        if (ad == null) return 1;
+        if (bd == null) return -1;
+        return bd - ad || compareNames(a, b);
+      });
+      break;
     case 'next_due':
       list.sort((a, b) => {
         const at = effectiveDateTimestamp(a.next_due_date);

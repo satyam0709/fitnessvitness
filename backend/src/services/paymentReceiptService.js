@@ -1,9 +1,20 @@
 const { pool } = require("../config/database");
+const prisma = require("../config/prisma");
 const { emitInvoicesChanged } = require("../realtime/meetingsRealtime");
 const { ensureInvoicesTable } = require("../config/ensureSchema");
 
 const SOURCE_COLLECTION_PAYMENT = "collection_payment";
 const SOURCE_FITNESS_TRANSACTION = "fitness_transaction";
+
+function formatIsoDate(val) {
+  if (!val) return new Date().toISOString().slice(0, 10);
+  const d = val instanceof Date ? val : new Date(val);
+  if (Number.isNaN(d.getTime())) return new Date().toISOString().slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dateStr = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dateStr}`;
+}
 
 async function hasInvoiceColumn(column) {
   const [rows] = await pool.execute(
@@ -178,7 +189,7 @@ async function createReceiptForCollectionPayment(paymentId, userId) {
   if (amount <= 0) return null;
 
   const party = await resolveCollectionParty(payment);
-  const paidAt = String(payment.paid_at || new Date().toISOString()).slice(0, 10);
+  const paidAt = formatIsoDate(payment.paid_at);
 
   const lineItems = [
     {
@@ -254,7 +265,7 @@ async function createReceiptForFitnessTransaction(transactionId, userId) {
   let customerPhone = tx.client_phone || tx.external_phone || null;
   let customerEmail = tx.client_email || null;
 
-  const txDate = String(tx.transaction_date || new Date().toISOString()).slice(0, 10);
+  const txDate = formatIsoDate(tx.transaction_date);
   const lineItems = [
     {
       product_name: tx.product_plan || tx.type || "Payment",
@@ -327,27 +338,41 @@ async function getReceiptPayload(invoiceId, user) {
   const id = Number(invoiceId);
   if (!Number.isFinite(id) || id < 1) return null;
 
-  const [rows] = await pool.execute(
-    `SELECT i.*, u.full_name AS creator_name, u.email AS creator_email
-     FROM invoices i
-     LEFT JOIN users u ON u.id = i.created_by
-     WHERE i.id = ? AND i.is_deleted = 0
-     LIMIT 1`,
-    [id]
-  );
-  const row = rows[0];
+  const row = await prisma.invoices.findFirst({
+    where: { id, is_deleted: false }
+  });
   if (!row) return null;
   if (user?.role !== "admin" && row.created_by !== user?.id) return { forbidden: true };
 
+  let creatorName = null;
+  let creatorEmail = null;
+  if (row.created_by) {
+    const creator = await prisma.users.findUnique({
+      where: { id: row.created_by },
+      select: { first_name: true, last_name: true, email: true }
+    });
+    if (creator) {
+      creatorName = [creator.first_name, creator.last_name].filter(Boolean).join(" ").trim() || null;
+      creatorEmail = creator.email || null;
+    }
+  }
+
   const invoice = {
     ...row,
+    subtotal: row.subtotal ? Number(row.subtotal).toFixed(2) : "0.00",
+    tax: row.tax ? Number(row.tax).toFixed(2) : "0.00",
+    total: row.total ? Number(row.total).toFixed(2) : "0.00",
+    creator_name: creatorName,
+    creator_email: creatorEmail,
     line_items: parseJsonField(row.line_items_json) || [],
     payment_meta: parseJsonField(row.payment_meta_json),
   };
   delete invoice.line_items_json;
   delete invoice.payment_meta_json;
 
-  const company = await getCompanySettingsRow();
+  const company = await prisma.company_settings.findUnique({
+    where: { id: 1 }
+  });
   return { invoice, company };
 }
 

@@ -1,7 +1,7 @@
-const prisma = require("../config/prisma");
-const { Prisma } = require("../generated/prisma");
+const { pool } = require("../config/database");
 const { getReceiptPayload } = require("../services/paymentReceiptService");
 const { emitInvoicesChanged } = require("../realtime/meetingsRealtime");
+const { getUsersColumns, userNameSelectSql } = require("../utils/userSchema");
 const { ensureInvoicesTable } = require("../config/ensureSchema");
 
 async function requireInvoicesTable(res) {
@@ -27,7 +27,15 @@ function safePageLimit(page, limit) {
   return { limit: lim, offset: off };
 }
 
-/** Express req.query values parsing */
+/** Never bind `undefined` to a prepared statement (ER_WRONG_ARGUMENTS / stmt_execute). */
+function n(v, fallback = null) {
+  return v === undefined ? fallback : v;
+}
+
+/**
+ * Express `req.query` values are usually strings, but duplicate keys (or some proxies)
+ * produce arrays. Binding a non-scalar to `?` causes "Incorrect arguments to mysqld_stmt_execute".
+ */
 function queryScalar(val, fallback = null) {
   if (val === undefined || val === null) return fallback;
   const v = Array.isArray(val) ? val[0] : val;
@@ -43,45 +51,6 @@ function queryDate(val) {
   if (!s) return null;
   const slice = s.slice(0, 10);
   return ISO_DATE_RE.test(slice) ? slice : null;
-}
-
-function parseJsonField(raw) {
-  if (raw == null || raw === "") return null;
-  if (typeof raw === "object") return raw;
-  try {
-    return JSON.parse(typeof raw === "string" ? raw : String(raw));
-  } catch {
-    return null;
-  }
-}
-
-function formatInvoice(inv) {
-  if (!inv) return null;
-  const res = { ...inv };
-  if (res.subtotal !== undefined && res.subtotal !== null) {
-    res.subtotal = Number(res.subtotal).toFixed(2);
-  }
-  if (res.tax !== undefined && res.tax !== null) {
-    res.tax = Number(res.tax).toFixed(2);
-  }
-  if (res.total !== undefined && res.total !== null) {
-    res.total = Number(res.total).toFixed(2);
-  }
-
-  if (res.line_items_json !== undefined) {
-    res.line_items = parseJsonField(res.line_items_json) || [];
-    delete res.line_items_json;
-  }
-  if (res.payment_meta_json !== undefined) {
-    res.payment_meta = parseJsonField(res.payment_meta_json);
-    delete res.payment_meta_json;
-  }
-
-  res.is_payment_receipt = Boolean(
-    res.source_type === "collection_payment" || res.source_type === "fitness_transaction"
-  );
-
-  return res;
 }
 
 async function getInvoices(req, res) {
@@ -109,105 +78,123 @@ async function getInvoices(req, res) {
     const gstBucket = (queryScalar(req.query.gst_bucket, "all") || "all").toLowerCase();
     const kind = (queryScalar(req.query.kind, "all") || "all").toLowerCase();
 
-    const andClauses = [
-      { type },
-      { is_deleted: false }
-    ];
-
-    if (status) {
-      andClauses.push({ status });
-    }
+    const conditions = ["i.type = ?", "i.is_deleted = 0"];
+    const params = [type];
 
     if (kind === "receipt") {
-      andClauses.push({ source_type: { in: ["collection_payment", "fitness_transaction"] } });
+      conditions.push("i.source_type IN ('collection_payment', 'fitness_transaction')");
     } else if (kind === "manual") {
-      andClauses.push({
-        OR: [
-          { source_type: null },
-          { source_type: { notIn: ["collection_payment", "fitness_transaction"] } }
-        ]
-      });
+      conditions.push(
+        "(i.source_type IS NULL OR i.source_type NOT IN ('collection_payment', 'fitness_transaction'))"
+      );
+    }
+
+    if (status) {
+      conditions.push("i.status = ?");
+      params.push(status);
     }
 
     if (qText) {
-      andClauses.push({
-        OR: [
-          { customer_name: { contains: qText } },
-          { invoice_number: { contains: qText } },
-          { notes: { contains: qText } }
-        ]
-      });
+      const like = `%${qText}%`;
+      conditions.push("(i.customer_name LIKE ? OR i.invoice_number LIKE ? OR i.notes LIKE ?)");
+      params.push(like, like, like);
     }
 
     if (staffIdRaw && staffIdRaw !== "all") {
       const sid = Number.parseInt(String(staffIdRaw), 10);
       if (Number.isFinite(sid) && sid > 0) {
-        andClauses.push({ created_by: sid });
+        conditions.push("i.created_by = ?");
+        params.push(sid);
       }
     }
 
-    if (dateFrom || dateTo) {
-      const dateRange = {};
-      if (dateFrom) {
-        dateRange.gte = new Date(dateFrom);
-      }
-      if (dateTo) {
-        dateRange.lte = new Date(dateTo);
-      }
-      andClauses.push({ invoice_date: dateRange });
+    if (dateFrom) {
+      conditions.push("i.invoice_date >= ?");
+      params.push(dateFrom);
+    }
+    if (dateTo) {
+      conditions.push("i.invoice_date <= ?");
+      params.push(dateTo);
     }
 
     if (gstBucket === "gst") {
-      andClauses.push({ gst_mode: { in: ["igst", "sgst_cgst"] } });
+      conditions.push("i.gst_mode IN ('igst','sgst_cgst')");
     } else if (gstBucket === "non_gst") {
-      andClauses.push({
-        OR: [
-          { gst_mode: null },
-          { gst_mode: "none" }
-        ]
-      });
+      conditions.push("(i.gst_mode IS NULL OR i.gst_mode = 'none')");
     }
 
-    const where = { AND: andClauses };
+    const whereSql = conditions.join(" AND ");
 
-    const total = await prisma.invoices.count({ where });
+    const [countRows] = await pool.query(
+      `SELECT COUNT(*) as total FROM invoices i WHERE ${whereSql}`,
+      params
+    );
+    const rawTotal = countRows?.[0]?.total;
+    const total = rawTotal != null ? Number(rawTotal) : 0;
 
-    const rows = await prisma.invoices.findMany({
-      where,
-      orderBy: { created_at: "desc" },
-      take: safeLimit,
-      skip: safeOffset,
-    });
+    const userCols = await getUsersColumns();
+    const creatorNameSql = userNameSelectSql(userCols, "u").replace(
+      / AS full_name$/i,
+      " AS creator_name"
+    );
 
-    const creatorIds = [...new Set(rows.map(r => r.created_by).filter(Boolean))];
-    const creators = await prisma.users.findMany({
-      where: { id: { in: creatorIds } },
-      select: { id: true, first_name: true, last_name: true, email: true }
-    });
+    const [rows] = await pool.query(
+      `SELECT i.*,
+              ${creatorNameSql},
+              u.email AS creator_email
+       FROM invoices i
+       LEFT JOIN users u ON u.id = i.created_by
+       WHERE ${whereSql}
+       ORDER BY i.created_at DESC
+       LIMIT ${safeLimit} OFFSET ${safeOffset}`,
+      params
+    );
 
-    const creatorMap = {};
-    for (const c of creators) {
-      const fullName = [c.first_name, c.last_name].filter(Boolean).join(" ").trim();
-      creatorMap[c.id] = {
-        creator_name: fullName || null,
-        creator_email: c.email || null,
-      };
-    }
-
-    const formattedInvoices = rows.map(r => {
-      const creatorInfo = creatorMap[r.created_by] || { creator_name: null, creator_email: null };
-      const formatted = formatInvoice(r);
-      return {
-        ...formatted,
-        ...creatorInfo
-      };
-    });
-
-    res.json({ success: true, total, invoices: formattedInvoices });
+    res.json({ success: true, total, invoices: rows });
   } catch (err) {
-    console.error("getInvoices", err);
+    console.error("getInvoices", err.code || "", err.sqlMessage || err.message);
     res.status(500).json({ success: false, message: err.message });
   }
+}
+
+function parseLineItemsJson(raw) {
+  if (raw == null || raw === "") return [];
+  if (Array.isArray(raw)) return raw;
+  if (Buffer.isBuffer(raw)) {
+    try {
+      return JSON.parse(raw.toString("utf8"));
+    } catch {
+      return [];
+    }
+  }
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function parseJsonObject(raw) {
+  if (raw == null || raw === "") return null;
+  if (typeof raw === "object" && !Array.isArray(raw)) return raw;
+  if (Buffer.isBuffer(raw)) {
+    try {
+      return JSON.parse(raw.toString("utf8"));
+    } catch {
+      return null;
+    }
+  }
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 async function getInvoiceById(req, res) {
@@ -221,9 +208,23 @@ async function getInvoiceById(req, res) {
     }
     if (!(await requireInvoicesTable(res))) return;
 
-    const row = await prisma.invoices.findFirst({
-      where: { id, is_deleted: false }
-    });
+    const userCols = await getUsersColumns();
+    const creatorNameSql = userNameSelectSql(userCols, "u").replace(
+      / AS full_name$/i,
+      " AS creator_name"
+    );
+
+    const [rows] = await pool.query(
+      `SELECT i.*,
+              ${creatorNameSql},
+              u.email AS creator_email
+       FROM invoices i
+       LEFT JOIN users u ON u.id = i.created_by
+       WHERE i.id = ? AND i.is_deleted = 0
+       LIMIT 1`,
+      [id]
+    );
+    const row = rows[0];
     if (!row) {
       return res.status(404).json({ success: false, message: "Not found" });
     }
@@ -231,26 +232,13 @@ async function getInvoiceById(req, res) {
       return res.status(403).json({ success: false, message: "Not allowed" });
     }
 
-    let creatorInfo = { creator_name: null, creator_email: null };
-    if (row.created_by) {
-      const creator = await prisma.users.findUnique({
-        where: { id: row.created_by },
-        select: { first_name: true, last_name: true, email: true }
-      });
-      if (creator) {
-        const fullName = [creator.first_name, creator.last_name].filter(Boolean).join(" ").trim();
-        creatorInfo = {
-          creator_name: fullName || null,
-          creator_email: creator.email || null
-        };
-      }
-    }
-
-    const formatted = formatInvoice(row);
-    const invoice = {
-      ...formatted,
-      ...creatorInfo
-    };
+    const invoice = { ...row, line_items: parseLineItemsJson(row.line_items_json) };
+    delete invoice.line_items_json;
+    invoice.payment_meta = parseJsonObject(row.payment_meta_json);
+    delete invoice.payment_meta_json;
+    invoice.is_payment_receipt = Boolean(
+      row.source_type === "collection_payment" || row.source_type === "fitness_transaction"
+    );
 
     res.json({ success: true, invoice });
   } catch (err) {
@@ -319,53 +307,46 @@ async function createInvoice(req, res) {
     }
 
     const year = new Date().getFullYear();
-    const startOfYear = new Date(`${year}-01-01T00:00:00.000Z`);
-    const endOfYear = new Date(`${year}-12-31T23:59:59.999Z`);
-    const cnt = await prisma.invoices.count({
-      where: {
-        created_at: {
-          gte: startOfYear,
-          lte: endOfYear
-        }
-      }
-    });
-
+    const [[{ cnt }]] = await pool.execute(
+      "SELECT COUNT(*) as cnt FROM invoices WHERE YEAR(created_at) = ?",
+      [year]
+    );
     const invoiceNumber = `${String(type).toUpperCase().slice(0, 3)}-${year}-${String(cnt + 1).padStart(4, "0")}`;
 
     let lineJson = null;
     if (line_items_json != null) {
-      try {
-        lineJson = typeof line_items_json === "string" ? JSON.parse(line_items_json) : line_items_json;
-      } catch {
-        lineJson = line_items_json;
-      }
+      lineJson = typeof line_items_json === "string" ? line_items_json : JSON.stringify(line_items_json);
     }
 
-    const result = await prisma.invoices.create({
-      data: {
-        invoice_number: invoiceNumber,
-        type: type || "sales",
-        customer_name: customer_name || null,
-        customer_email: customer_email || null,
-        customer_phone: customer_phone ? String(customer_phone).trim() : null,
-        vendor_name: vendor_name || null,
-        invoice_date: new Date(String(invoice_date).trim()),
-        due_date: due_date ? new Date(due_date) : null,
-        subtotal: subtotal ? new Prisma.Decimal(subtotal) : 0,
-        tax: tax ? new Prisma.Decimal(tax) : 0,
-        total: total ? new Prisma.Decimal(total) : 0,
-        status: status || "draft",
-        notes: notes || null,
-        created_by: uid,
-        gst_mode: gst_mode || "none",
-        currency: currency || "INR",
-        customer_id: customer_id ? Number(customer_id) : null,
-        line_items_json: lineJson
-      }
-    });
-
-    emitInvoicesChanged({ action: "created", id: result.id });
-    res.json({ success: true, id: result.id, invoice_number: invoiceNumber });
+    const [result] = await pool.execute(
+      `INSERT INTO invoices
+         (invoice_number, type, customer_name, customer_email, customer_phone, vendor_name,
+          invoice_date, due_date, subtotal, tax, total, status, notes, created_by,
+          gst_mode, currency, customer_id, line_items_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        invoiceNumber,
+        n(type, "sales"),
+        customer_name || null,
+        customer_email || null,
+        customer_phone ? String(customer_phone).trim() : null,
+        vendor_name || null,
+        String(invoice_date).trim(),
+        due_date || null,
+        subtotal || 0,
+        tax || 0,
+        total || 0,
+        n(status, "draft"),
+        notes || null,
+        uid,
+        n(gst_mode, "none"),
+        n(currency, "INR"),
+        customer_id ? Number(customer_id) : null,
+        lineJson,
+      ]
+    );
+    emitInvoicesChanged({ action: "created", id: result.insertId });
+    res.json({ success: true, id: result.insertId, invoice_number: invoiceNumber });
   } catch (err) {
     console.error("createInvoice", err);
     res.status(500).json({ success: false, message: err.message });
@@ -385,18 +366,18 @@ async function updateInvoiceStatus(req, res) {
     if (!Number.isFinite(id) || id < 1) {
       return res.status(400).json({ success: false, message: "Invalid id" });
     }
-    const row = await prisma.invoices.findFirst({
-      where: { id, is_deleted: false },
-      select: { created_by: true }
-    });
+    const [[row]] = await pool.execute(
+      "SELECT created_by FROM invoices WHERE id = ? AND is_deleted = 0",
+      [id]
+    );
     if (!row) return res.status(404).json({ success: false, message: "Not found" });
     if (req.user.role !== "admin" && row.created_by !== req.user.id) {
       return res.status(403).json({ success: false, message: "Not allowed" });
     }
-    await prisma.invoices.update({
-      where: { id },
-      data: { status: String(status) }
-    });
+    await pool.execute("UPDATE invoices SET status = ? WHERE id = ?", [
+      String(status),
+      id,
+    ]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -411,22 +392,20 @@ async function deleteInvoice(req, res) {
     if (!Number.isFinite(id) || id < 1) {
       return res.status(400).json({ success: false, message: "Invalid id" });
     }
-    const row = await prisma.invoices.findFirst({
-      where: { id, is_deleted: false },
-      select: { created_by: true }
-    });
+    const [[row]] = await pool.execute(
+      "SELECT created_by FROM invoices WHERE id = ? AND is_deleted = 0",
+      [id]
+    );
     if (!row) return res.status(404).json({ success: false, message: "Not found" });
     if (req.user.role !== "admin" && row.created_by !== req.user.id) {
       return res.status(403).json({ success: false, message: "Not allowed" });
     }
-    await prisma.invoices.update({
-      where: { id },
-      data: {
-        is_deleted: true,
-        deleted_at: new Date(),
-        updated_at: new Date()
-      }
-    });
+    await pool.execute(
+      `UPDATE invoices
+       SET is_deleted = 1, deleted_at = NOW(), updated_at = NOW()
+       WHERE id = ? AND is_deleted = 0`,
+      [id]
+    );
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

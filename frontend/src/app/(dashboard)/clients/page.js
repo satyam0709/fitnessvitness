@@ -5,7 +5,6 @@ import Link from "next/link";
 import { apiFetch, connectGlobalSocket } from "@/lib/api";
 import { updateClient } from "@/lib/fitnessApi";
 import { useUserRole } from "@/components/Dashboard/UserRoleContext";
-import ClientSortDropdown from "@/components/Clients/ClientSortDropdown";
 import styles from "./clients.module.css";
 
 const STATUS_COLORS = {
@@ -56,6 +55,18 @@ const SORT_OPTIONS = [
   { value: "tier_desc", label: "Tier high → low" },
   { value: "created", label: "Joined — newest" },
   { value: "created_asc", label: "Joined — oldest" },
+  { value: "id_asc", label: "ID lowest first" },
+  { value: "id_desc", label: "ID highest first" },
+  { value: "risk_asc", label: "High risk first" },
+  { value: "risk_desc", label: "Low risk first" },
+  { value: "status_asc", label: "Status: Active first" },
+  { value: "status_desc", label: "Status: Inactive/Hold first" },
+  { value: "progress_asc", label: "Progress: Best first" },
+  { value: "progress_desc", label: "Progress: Poor first" },
+  { value: "follow_up_asc", label: "Follow-up: Overdue first" },
+  { value: "follow_up_desc", label: "Follow-up: OK first" },
+  { value: "days_asc", label: "Days remaining: Least first" },
+  { value: "days_desc", label: "Days remaining: Most first" },
 ];
 
 const SORT_HINTS = {
@@ -73,6 +84,18 @@ const SORT_HINTS = {
   tier_desc: "Highest tier (5★) first — your top-rated clients rise to the top.",
   created: "Most recently added clients first.",
   created_asc: "Longest-standing clients first — who joined earliest in your portfolio.",
+  id_asc: "ID from lowest to highest numerical value.",
+  id_desc: "ID from highest to lowest numerical value.",
+  risk_asc: "Clients flagged as High Risk shown first.",
+  risk_desc: "Clients flagged as OK shown first.",
+  status_asc: "Active clients first, followed by On Hold and Inactive.",
+  status_desc: "Inactive and On Hold clients first, followed by Active.",
+  progress_asc: "Clients with Very Good progress first, going down to Very Poor.",
+  progress_desc: "Clients with Very Poor progress first, going up to Very Good.",
+  follow_up_asc: "Overdue follow-ups first, then Due Soon, then OK.",
+  follow_up_desc: "OK follow-ups first, then Due Soon, then Overdue.",
+  days_asc: "Clients with fewest plan days remaining first.",
+  days_desc: "Clients with most plan days remaining first.",
 };
 
 const SORT_STORAGE_KEY = "fitness_clients_sort";
@@ -173,11 +196,46 @@ function buildClientQueryParams(appliedFilters, search, sort) {
 
 export default function ClientsPage() {
   const { isAdmin } = useUserRole();
+
+  const handleSortClick = (ascKey, descKey) => {
+    if (sort === ascKey) {
+      setSort(descKey);
+    } else {
+      setSort(ascKey);
+    }
+  };
+
+  const renderSortHeader = (label, ascKey, descKey) => {
+    const isSortedAsc = sort === ascKey;
+    const isSortedDesc = sort === descKey;
+    const isSorted = isSortedAsc || isSortedDesc;
+
+    return (
+      <th
+        onClick={() => handleSortClick(ascKey, descKey)}
+        style={{ cursor: "pointer", userSelect: "none" }}
+      >
+        <div style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+          <span>{label}</span>
+          {isSorted ? (
+            isSortedAsc ? (
+              <i className="fa-solid fa-caret-up" style={{ color: "#10b981" }} />
+            ) : (
+              <i className="fa-solid fa-caret-down" style={{ color: "#10b981" }} />
+            )
+          ) : (
+            <i className="fa-solid fa-sort" style={{ opacity: 0.3 }} />
+          )}
+        </div>
+      </th>
+    );
+  };
+
   const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [searchDebounced, setSearchDebounced] = useState("");
-  const [sort, setSort] = useState(readStoredSort);
+  const [sort, setSort] = useState("next_due");
   const [sortMeta, setSortMeta] = useState(null);
   const [draftFilters, setDraftFilters] = useState(DEFAULT_FILTERS);
   const [appliedFilters, setAppliedFilters] = useState(DEFAULT_FILTERS);
@@ -187,6 +245,16 @@ export default function ClientsPage() {
     const t = setTimeout(() => setSearchDebounced(search), 300);
     return () => clearTimeout(t);
   }, [search]);
+
+  // Load stored sort from local storage on client mount
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const stored = window.localStorage.getItem(SORT_STORAGE_KEY);
+      if (stored && SORT_OPTIONS.some((o) => o.value === stored)) {
+        setSort(stored);
+      }
+    }
+  }, []);
 
   const loadClients = useCallback(async () => {
     try {
@@ -353,14 +421,6 @@ export default function ClientsPage() {
           ))}
         </div>
         <div className={styles.toolbarRight}>
-          <div className={styles.sortBlock}>
-            <span className={styles.sortBlockLabel}>Sort order</span>
-            <ClientSortDropdown
-              value={sort}
-              onChange={setSort}
-              options={SORT_OPTIONS}
-            />
-          </div>
           {isAdmin ? (
             <button
               type="button"
@@ -609,16 +669,16 @@ export default function ClientsPage() {
           <table className={styles.table}>
             <thead>
               <tr>
-                <th>ID</th>
-                <th>Client Name</th>
-                <th>Risk</th>
-                <th>Status</th>
-                <th>Progress</th>
-                <th>Next Due</th>
-                <th>Follow-up</th>
-                <th>Days</th>
-                <th>Expiry</th>
-                <th>Tier</th>
+                {renderSortHeader("ID", "id_asc", "id_desc")}
+                {renderSortHeader("Client Name", "name", "name_desc")}
+                {renderSortHeader("Risk", "risk_asc", "risk_desc")}
+                {renderSortHeader("Status", "status_asc", "status_desc")}
+                {renderSortHeader("Progress", "progress_asc", "progress_desc")}
+                {renderSortHeader("Next Due", "next_due", "next_due_desc")}
+                {renderSortHeader("Follow-up", "follow_up_asc", "follow_up_desc")}
+                {renderSortHeader("Days", "days_asc", "days_desc")}
+                {renderSortHeader("Expiry", "plan_expiry", "plan_expiry_desc")}
+                {renderSortHeader("Tier", "tier", "tier_desc")}
               </tr>
             </thead>
             <tbody>

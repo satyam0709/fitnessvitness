@@ -23,6 +23,7 @@
     "ops:health-snapshot": "node scripts/ops-health-snapshot.js"
   },
   "dependencies": {
+    "@prisma/client": "^6.19.3",
     "bcrypt": "^5.1.1",
     "cors": "^2.8.6",
     "dotenv": "^16.6.1",
@@ -43,6 +44,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2"
+    "nodemon": "^3.0.2",
+    "prisma": "^6.19.3"
   }
 }

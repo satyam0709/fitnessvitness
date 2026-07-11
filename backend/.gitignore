@@ -45,3 +45,4 @@ yarn-error.log*
 next-env.d.ts
 
 .frontend_fetch_examples.md
+/src/generated/prisma

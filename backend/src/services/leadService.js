@@ -1,6 +1,7 @@
 const path = require("path");
 const fs = require("fs");
-const { pool } = require("../config/database");
+const prisma = require("../config/prisma");
+const { Prisma } = require("../generated/prisma");
 const {
   emitAdminChanged,
   emitCalendarChanged,
@@ -70,17 +71,17 @@ async function resolveUserId(assignedTo) {
   if (assignedTo == null || assignedTo === "") return null;
   const num = Number(assignedTo);
   if (!isNaN(num) && Number.isInteger(num) && num > 0) {
-    const [rows] = await pool.execute(
-      "SELECT id FROM users WHERE id = ? AND is_active = 1",
-      [num]
-    );
-    if (rows.length) return rows[0].id;
+    const user = await prisma.users.findFirst({
+      where: { id: num, is_active: true },
+      select: { id: true }
+    });
+    if (user) return user.id;
   }
-  const [rows] = await pool.execute(
-    "SELECT id FROM users WHERE clerk_user_id = ? AND is_active = 1",
-    [assignedTo]
-  );
-  return rows.length ? rows[0].id : null;
+  const user = await prisma.users.findFirst({
+    where: { clerk_user_id: assignedTo, is_active: true },
+    select: { id: true }
+  });
+  return user ? user.id : null;
 }
 
 function normalizePhone(b) {
@@ -111,36 +112,32 @@ function emitLeadChanges(action) {
 }
 
 async function loadLeadScoped(req, leadId) {
-  const [rows] = await pool.execute(
-    `SELECT l.*,
-            TRIM(CONCAT(COALESCE(u.first_name,''), ' ', COALESCE(u.last_name,''))) AS assigned_name,
-            u.email AS assigned_email
-     FROM leads l
-     LEFT JOIN users u ON l.assigned_to = u.id
-     WHERE l.id = ? AND l.is_deleted = 0 AND l.tenant_id <=> ?`,
-    [leadId, tenantId(req)]
-  );
-  return rows[0] || null;
-}
+  const lead = await prisma.leads.findFirst({
+    where: {
+      id: Number(leadId),
+      is_deleted: false,
+      tenant_id: tenantId(req),
+    },
+    include: {
+      users_leads_assigned_toTousers: {
+        select: {
+          first_name: true,
+          last_name: true,
+          email: true,
+        }
+      }
+    }
+  });
 
-async function nextLeadNumber(conn, tid) {
-  const key = counterTenantKey(tid);
-  await conn.execute(
-    `INSERT INTO tenant_lead_counters (tenant_id, next_lead_number)
-     VALUES (?, 1)
-     ON DUPLICATE KEY UPDATE tenant_id = tenant_id`,
-    [key]
-  );
-  const [rows] = await conn.execute(
-    "SELECT next_lead_number FROM tenant_lead_counters WHERE tenant_id = ? FOR UPDATE",
-    [key]
-  );
-  const num = rows[0]?.next_lead_number || 1;
-  await conn.execute(
-    "UPDATE tenant_lead_counters SET next_lead_number = ? WHERE tenant_id = ?",
-    [num + 1, key]
-  );
-  return num;
+  if (!lead) return null;
+
+  const assigned = lead.users_leads_assigned_toTousers;
+  return {
+    ...lead,
+    amount: lead.amount ? lead.amount.toString() : null,
+    assigned_name: assigned ? [assigned.first_name, assigned.last_name].filter(Boolean).join(" ") : "",
+    assigned_email: assigned ? assigned.email : null,
+  };
 }
 
 async function logFieldChanges(leadId, oldRow, newValues, userId) {
@@ -149,11 +146,15 @@ async function logFieldChanges(leadId, oldRow, newValues, userId) {
     const oldVal = oldRow[field] != null ? String(oldRow[field]) : null;
     const newVal = newValues[field] != null ? String(newValues[field]) : null;
     if (oldVal === newVal) continue;
-    await pool.execute(
-      `INSERT INTO lead_change_log (lead_id, field_name, old_value, new_value, user_id)
-       VALUES (?, ?, ?, ?, ?)`,
-      [leadId, field, oldVal, newVal, userId]
-    );
+    await prisma.lead_change_log.create({
+      data: {
+        lead_id: Number(leadId),
+        field_name: field,
+        old_value: oldVal,
+        new_value: newVal,
+        user_id: userId,
+      }
+    });
   }
 }
 
@@ -164,7 +165,7 @@ function splitName(name) {
   return { first_name: parts[0], last_name: parts.slice(1).join(" ") };
 }
 
-function buildListConditions(req, query) {
+async function listLeads(req) {
   const {
     status,
     source,
@@ -174,86 +175,116 @@ function buildListConditions(req, query) {
     follow_up_from,
     follow_up_to,
     my,
-  } = query;
+  } = req.query;
 
-  const conditions = ["l.is_deleted = 0", "l.tenant_id <=> ?"];
-  const params = [tenantId(req)];
+  const where = {
+    is_deleted: false,
+    tenant_id: tenantId(req),
+  };
 
   if (!canSeeAllTeamRecords(req) || my === "true") {
-    conditions.push("(l.created_by = ? OR l.assigned_to = ?)");
-    params.push(req.user.id, req.user.id);
+    where.OR = [
+      { created_by: req.user.id },
+      { assigned_to: req.user.id }
+    ];
   }
 
   if (status) {
     const mapped = resolveStatusFilter(status);
     if (mapped) {
-      conditions.push("(l.status = ? OR l.status_v2 = ?)");
-      params.push(mapped.legacy, mapped.v2);
+      const statusCondition = {
+        OR: [
+          { status: mapped.legacy },
+          { status_v2: mapped.v2 }
+        ]
+      };
+      if (where.AND) {
+        where.AND.push(statusCondition);
+      } else {
+        where.AND = [statusCondition];
+      }
     }
   }
 
   if (source) {
-    conditions.push("l.source = ?");
-    params.push(source);
+    where.source = source;
   }
 
   if (follow_up_date) {
-    conditions.push("l.follow_up_date = ?");
-    params.push(follow_up_date);
+    where.follow_up_date = new Date(follow_up_date);
   } else {
-    if (follow_up_from) {
-      conditions.push("l.follow_up_date >= ?");
-      params.push(follow_up_from);
-    }
-    if (follow_up_to) {
-      conditions.push("l.follow_up_date <= ?");
-      params.push(follow_up_to);
+    if (follow_up_from || follow_up_to) {
+      where.follow_up_date = {};
+      if (follow_up_from) {
+        where.follow_up_date.gte = new Date(follow_up_from);
+      }
+      if (follow_up_to) {
+        where.follow_up_date.lte = new Date(follow_up_to);
+      }
     }
   }
 
   if (search) {
-    conditions.push(
-      "(l.name LIKE ? OR l.phone LIKE ? OR l.email LIKE ? OR l.company_name LIKE ?)"
-    );
-    const like = `%${search}%`;
-    params.push(like, like, like, like);
+    const searchCondition = {
+      OR: [
+        { name: { contains: search } },
+        { phone: { contains: search } },
+        { email: { contains: search } },
+        { company_name: { contains: search } }
+      ]
+    };
+    if (where.AND) {
+      where.AND.push(searchCondition);
+    } else {
+      where.AND = [searchCondition];
+    }
   }
 
   if (assigned_to === "me") {
-    conditions.push("l.assigned_to = ?");
-    params.push(req.user.id);
+    where.assigned_to = req.user.id;
   } else if (assigned_to) {
-    return resolveUserId(assigned_to).then((mapped) => {
-      if (mapped) {
-        conditions.push("l.assigned_to = ?");
-        params.push(mapped);
-      }
-      return { conditions, params };
-    });
+    const mapped = await resolveUserId(assigned_to);
+    if (mapped) {
+      where.assigned_to = mapped;
+    } else {
+      where.assigned_to = -1; // force empty
+    }
   }
 
-  return Promise.resolve({ conditions, params });
-}
+  const rows = await prisma.leads.findMany({
+    where,
+    orderBy: {
+      created_at: 'desc',
+    },
+    include: {
+      users_leads_assigned_toTousers: {
+        select: {
+          first_name: true,
+          last_name: true,
+          email: true,
+        }
+      },
+      users_leads_created_byTousers: {
+        select: {
+          first_name: true,
+          last_name: true,
+        }
+      }
+    }
+  });
 
-async function listLeads(req) {
-  const { conditions, params } = await buildListConditions(req, req.query);
-  const whereSql = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const data = rows.map(lead => {
+    const assigned = lead.users_leads_assigned_toTousers;
+    const creator = lead.users_leads_created_byTousers;
+    return formatRow({
+      ...lead,
+      amount: lead.amount ? lead.amount.toString() : null,
+      assigned_name: assigned ? [assigned.first_name, assigned.last_name].filter(Boolean).join(" ") : "",
+      assigned_email: assigned ? assigned.email : null,
+      created_by_name: creator ? [creator.first_name, creator.last_name].filter(Boolean).join(" ") : "",
+    });
+  });
 
-  const [rows] = await pool.execute(
-    `SELECT
-       l.*,
-       TRIM(CONCAT(COALESCE(u.first_name,''), ' ', COALESCE(u.last_name,''))) AS assigned_name,
-       u.email AS assigned_email,
-       TRIM(CONCAT(COALESCE(cb.first_name,''), ' ', COALESCE(cb.last_name,''))) AS created_by_name
-     FROM leads l
-     LEFT JOIN users u  ON l.assigned_to = u.id
-     LEFT JOIN users cb ON l.created_by  = cb.id
-     ${whereSql}
-     ORDER BY l.created_at DESC`,
-    params
-  );
-
-  const data = rows.map(formatRow);
   return { success: true, total: data.length, data };
 }
 
@@ -266,28 +297,29 @@ async function getCalendarMarkers(req) {
   }
 
   const conditions = [
-    "l.follow_up_date IS NOT NULL",
-    "l.follow_up_date >= ?",
-    "l.follow_up_date <= ?",
-    "l.is_deleted = 0",
-    "l.tenant_id <=> ?",
+    Prisma.sql`follow_up_date IS NOT NULL`,
+    Prisma.sql`follow_up_date >= ${from}`,
+    Prisma.sql`follow_up_date <= ${to}`,
+    Prisma.sql`is_deleted = 0`,
   ];
-  const params = [from, to, tenantId(req)];
-
-  if (!canSeeAllTeamRecords(req)) {
-    conditions.push("(l.created_by = ? OR l.assigned_to = ?)");
-    params.push(req.user.id, req.user.id);
+  if (tenantId(req) !== null) {
+    conditions.push(Prisma.sql`tenant_id = ${tenantId(req)}`);
+  } else {
+    conditions.push(Prisma.sql`tenant_id IS NULL`);
   }
 
-  const whereSql = `WHERE ${conditions.join(" AND ")}`;
+  if (!canSeeAllTeamRecords(req)) {
+    conditions.push(Prisma.sql`(created_by = ${req.user.id} OR assigned_to = ${req.user.id})`);
+  }
 
-  const [rows] = await pool.execute(
-    `SELECT DATE(l.follow_up_date) AS d, COUNT(*) AS cnt
-     FROM leads l
-     ${whereSql}
-     GROUP BY DATE(l.follow_up_date)`,
-    params
-  );
+  const whereSql = Prisma.join(conditions, ' AND ');
+
+  const rows = await prisma.$queryRaw`
+    SELECT DATE(follow_up_date) AS d, COUNT(*) AS cnt
+    FROM leads
+    WHERE ${whereSql}
+    GROUP BY DATE(follow_up_date)
+  `;
 
   function rowToYMD(v) {
     if (v instanceof Date) {
@@ -311,41 +343,70 @@ async function getCalendarMarkers(req) {
 }
 
 async function getLeadById(req, leadId) {
-  const [rows] = await pool.execute(
-    `SELECT
-       l.*,
-       TRIM(CONCAT(COALESCE(u.first_name,''), ' ', COALESCE(u.last_name,''))) AS assigned_name,
-       u.email AS assigned_email
-     FROM leads l
-     LEFT JOIN users u ON l.assigned_to = u.id
-     WHERE l.id = ? AND l.is_deleted = 0 AND l.tenant_id <=> ?`,
-    [leadId, tenantId(req)]
-  );
+  const lead = await prisma.leads.findFirst({
+    where: {
+      id: Number(leadId),
+      is_deleted: false,
+      tenant_id: tenantId(req),
+    },
+    include: {
+      users_leads_assigned_toTousers: {
+        select: {
+          first_name: true,
+          last_name: true,
+          email: true,
+        }
+      }
+    }
+  });
 
-  if (!rows.length) {
+  if (!lead) {
     const err = new Error("Lead not found");
     err.status = 404;
     throw err;
   }
 
-  const row = rows[0];
-  if (!canMutateLead(req, row)) {
+  if (!canMutateLead(req, lead)) {
     const err = new Error("Not allowed to view this lead");
     err.status = 403;
     throw err;
   }
 
-  const [timelineNotes] = await pool.execute(
-    `SELECT n.id, n.content, n.created_by, u.email AS creator_email, n.created_at
-     FROM notes n
-     LEFT JOIN users u ON n.created_by = u.id
-     WHERE n.lead_id = ? ORDER BY n.created_at ASC`,
-    [leadId]
-  );
+  const timelineNotes = await prisma.notes.findMany({
+    where: {
+      lead_id: Number(leadId),
+    },
+    include: {
+      users: {
+        select: {
+          email: true,
+        }
+      }
+    },
+    orderBy: {
+      created_at: 'asc',
+    }
+  });
+
+  const formattedNotes = timelineNotes.map(n => ({
+    id: n.id,
+    content: n.content,
+    created_by: n.created_by,
+    creator_email: n.users ? n.users.email : null,
+    created_at: n.created_at,
+  }));
+
+  const assigned = lead.users_leads_assigned_toTousers;
+  const leadData = formatRow({
+    ...lead,
+    amount: lead.amount ? lead.amount.toString() : null,
+    assigned_name: assigned ? [assigned.first_name, assigned.last_name].filter(Boolean).join(" ") : "",
+    assigned_email: assigned ? assigned.email : null,
+  });
 
   return {
     success: true,
-    data: { ...formatRow(row), timeline_notes: timelineNotes },
+    data: { ...leadData, timeline_notes: formattedNotes },
   };
 }
 
@@ -362,15 +423,28 @@ async function getFollowups(req, leadId) {
     throw err;
   }
 
-  const [rows] = await pool.execute(
-    `SELECT f.*, u.email AS creator_email
-     FROM lead_followups f
-     LEFT JOIN users u ON f.created_by = u.id
-     WHERE f.lead_id = ?
-     ORDER BY f.created_at DESC`,
-    [leadId]
-  );
-  return { success: true, data: rows };
+  const rows = await prisma.lead_followups.findMany({
+    where: {
+      lead_id: Number(leadId),
+    },
+    include: {
+      users: {
+        select: {
+          email: true,
+        }
+      }
+    },
+    orderBy: {
+      created_at: 'desc',
+    }
+  });
+
+  const formattedRows = rows.map(f => ({
+    ...f,
+    creator_email: f.users ? f.users.email : null,
+  }));
+
+  return { success: true, data: formattedRows };
 }
 
 async function createLead(req) {
@@ -405,81 +479,98 @@ async function createLead(req) {
 
   let attachmentsJson = null;
   if (req.files && req.files.length) {
-    attachmentsJson = JSON.stringify(
-      req.files.map((f) => `/uploads/leads/${f.filename}`)
-    );
+    attachmentsJson = req.files.map((f) => `/uploads/leads/${f.filename}`);
   }
 
   const { first_name, last_name } = splitName(name);
-  const conn = await pool.getConnection();
-  let insertId;
-  try {
-    await conn.beginTransaction();
-    const leadNumber = await nextLeadNumber(conn, tid);
 
-    const [result] = await conn.execute(
-      `INSERT INTO leads
-         (tenant_id, name, first_name, last_name, company_name, phone, phone_dial, email, source,
-          status, status_v2, label, cancel_reason, address, reference, attachments_json,
-          assigned_to, created_by, follow_up_date, followup_at, notes, lead_number,
-          amount, currency, product_category, team, last_touched_at, updated_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)`,
-      [
-        tid,
+  const result = await prisma.$transaction(async (tx) => {
+    const key = counterTenantKey(tid);
+    
+    await tx.$executeRaw`
+      INSERT INTO tenant_lead_counters (tenant_id, next_lead_number)
+      VALUES (${key}, 1)
+      ON DUPLICATE KEY UPDATE tenant_id = tenant_id
+    `;
+    
+    const rows = await tx.$queryRaw`
+      SELECT next_lead_number FROM tenant_lead_counters WHERE tenant_id = ${key} FOR UPDATE
+    `;
+    const num = rows[0]?.next_lead_number || 1;
+    
+    await tx.$executeRaw`
+      UPDATE tenant_lead_counters SET next_lead_number = ${num + 1} WHERE tenant_id = ${key}
+    `;
+
+    const created = await tx.leads.create({
+      data: {
+        tenant_id: tid,
         name,
-        b.first_name || first_name,
-        b.last_name || last_name,
-        b.company_name || null,
+        first_name: b.first_name || first_name,
+        last_name: b.last_name || last_name,
+        company_name: b.company_name || null,
         phone,
-        b.phone_dial || null,
-        b.email || null,
-        b.source || "other",
+        phone_dial: b.phone_dial || null,
+        email: b.email || null,
+        source: b.source || "other",
         status,
-        statusV2,
-        b.label || null,
-        b.cancel_reason || null,
-        b.address || null,
-        b.reference || null,
-        attachmentsJson,
-        assignedUserId,
-        req.user.id,
-        b.follow_up_date || null,
-        b.followup_at || null,
-        b.notes || b.comment || null,
-        leadNumber,
-        Number(b.amount) || 0,
-        String(b.currency || "INR").toUpperCase(),
-        b.product_category || null,
-        b.team || null,
-        req.user.id,
-      ]
-    );
-    insertId = result.insertId;
+        status_v2: statusV2,
+        label: b.label || null,
+        cancel_reason: b.cancel_reason || null,
+        address: b.address || null,
+        reference: b.reference || null,
+        attachments_json: attachmentsJson,
+        assigned_to: assignedUserId,
+        created_by: req.user.id,
+        follow_up_date: b.follow_up_date ? new Date(b.follow_up_date) : null,
+        followup_at: b.followup_at ? new Date(b.followup_at) : null,
+        notes: b.notes || b.comment || null,
+        lead_number: num,
+        amount: b.amount ? new Prisma.Decimal(b.amount) : 0,
+        currency: String(b.currency || "INR").toUpperCase(),
+        product_category: b.product_category || null,
+        team: b.team || null,
+        last_touched_at: new Date(),
+        updated_by: req.user.id,
+      }
+    });
 
-    await conn.execute(
-      `INSERT INTO lead_change_log (lead_id, field_name, old_value, new_value, user_id)
-       VALUES (?, 'status', NULL, ?, ?)`,
-      [insertId, status, req.user.id]
-    );
-    await conn.commit();
-  } catch (e) {
-    await conn.rollback();
-    throw e;
-  } finally {
-    conn.release();
-  }
+    await tx.lead_change_log.create({
+      data: {
+        lead_id: created.id,
+        field_name: 'status',
+        old_value: null,
+        new_value: status,
+        user_id: req.user.id,
+      }
+    });
 
-  const [created] = await pool.execute(
-    `SELECT l.*,
-            TRIM(CONCAT(COALESCE(u.first_name,''), ' ', COALESCE(u.last_name,''))) AS assigned_name,
-            u.email AS assigned_email
-     FROM leads l LEFT JOIN users u ON l.assigned_to = u.id
-     WHERE l.id = ? AND l.tenant_id <=> ?`,
-    [insertId, tid]
-  );
+    return created;
+  });
+
+  const createdRow = await prisma.leads.findFirst({
+    where: { id: result.id, tenant_id: tid },
+    include: {
+      users_leads_assigned_toTousers: {
+        select: {
+          first_name: true,
+          last_name: true,
+          email: true,
+        }
+      }
+    }
+  });
+
+  const assigned = createdRow.users_leads_assigned_toTousers;
+  const formattedRow = formatRow({
+    ...createdRow,
+    amount: createdRow.amount ? createdRow.amount.toString() : null,
+    assigned_name: assigned ? [assigned.first_name, assigned.last_name].filter(Boolean).join(" ") : "",
+    assigned_email: assigned ? assigned.email : null,
+  });
 
   emitLeadChanges("create");
-  return { success: true, data: formatRow(created[0]) };
+  return { success: true, data: formattedRow };
 }
 
 async function updateLead(req, leadId) {
@@ -524,7 +615,7 @@ async function updateLead(req, leadId) {
   if (req.files && req.files.length) {
     const prev = parseAttachments(existing);
     const added = req.files.map((f) => `/uploads/leads/${f.filename}`);
-    attachmentsJson = JSON.stringify([...prev, ...added]);
+    attachmentsJson = [...prev, ...added];
   }
 
   const newName =
@@ -561,79 +652,63 @@ async function updateLead(req, leadId) {
 
   await logFieldChanges(leadId, existing, updates, req.user.id);
 
-  await pool.execute(
-    `UPDATE leads SET
-       name             = COALESCE(?, name),
-       first_name       = COALESCE(?, first_name),
-       last_name        = COALESCE(?, last_name),
-       company_name     = COALESCE(?, company_name),
-       phone            = COALESCE(?, phone),
-       phone_dial       = COALESCE(?, phone_dial),
-       email            = COALESCE(?, email),
-       source           = COALESCE(?, source),
-       status           = COALESCE(?, status),
-       status_v2        = COALESCE(?, status_v2),
-       label            = COALESCE(?, label),
-       cancel_reason    = COALESCE(?, cancel_reason),
-       address          = COALESCE(?, address),
-       reference        = COALESCE(?, reference),
-       attachments_json = ?,
-       assigned_to      = COALESCE(?, assigned_to),
-       follow_up_date   = COALESCE(?, follow_up_date),
-       followup_at      = COALESCE(?, followup_at),
-       notes            = COALESCE(?, notes),
-       amount           = COALESCE(?, amount),
-       currency         = COALESCE(?, currency),
-       product_category = COALESCE(?, product_category),
-       team             = COALESCE(?, team),
-       industry         = COALESCE(?, industry),
-       department       = COALESCE(?, department),
-       last_touched_at  = NOW(),
-       updated_by       = ?,
-       updated_at       = NOW()
-     WHERE id = ?`,
-    [
-      updates.name,
-      updates.first_name,
-      updates.last_name,
-      updates.company_name,
-      updates.phone,
-      b.phone_dial != null ? b.phone_dial || null : null,
-      updates.email,
-      updates.source,
-      updates.status,
-      statusV2 || (status ? legacyToV2(status) : null),
-      updates.label,
-      b.cancel_reason != null ? b.cancel_reason || null : null,
-      updates.address,
-      b.reference != null ? b.reference || null : null,
-      attachmentsJson,
-      b.assigned_to !== undefined ? assignedUserId : null,
-      updates.follow_up_date,
-      updates.followup_at,
-      updates.notes,
-      updates.amount,
-      updates.currency,
-      updates.product_category,
-      updates.team,
-      updates.industry,
-      updates.department,
-      req.user.id,
-      leadId,
-    ]
-  );
+  await prisma.leads.update({
+    where: { id: Number(leadId) },
+    data: {
+      name: updates.name !== undefined ? updates.name : undefined,
+      first_name: updates.first_name !== undefined ? updates.first_name : undefined,
+      last_name: updates.last_name !== undefined ? updates.last_name : undefined,
+      company_name: updates.company_name !== undefined ? updates.company_name : undefined,
+      phone: updates.phone !== undefined ? updates.phone : undefined,
+      phone_dial: b.phone_dial !== undefined ? (b.phone_dial || null) : undefined,
+      email: updates.email !== undefined ? updates.email : undefined,
+      source: updates.source !== undefined ? updates.source : undefined,
+      status: updates.status !== undefined ? updates.status : undefined,
+      status_v2: statusV2 || (status ? legacyToV2(status) : undefined),
+      label: updates.label !== undefined ? updates.label : undefined,
+      cancel_reason: b.cancel_reason !== undefined ? (b.cancel_reason || null) : undefined,
+      address: updates.address !== undefined ? updates.address : undefined,
+      reference: b.reference !== undefined ? (b.reference || null) : undefined,
+      attachments_json: attachmentsJson !== undefined ? attachmentsJson : undefined,
+      assigned_to: b.assigned_to !== undefined ? assignedUserId : undefined,
+      follow_up_date: updates.follow_up_date !== undefined ? (updates.follow_up_date ? new Date(updates.follow_up_date) : null) : undefined,
+      followup_at: updates.followup_at !== undefined ? (updates.followup_at ? new Date(updates.followup_at) : null) : undefined,
+      notes: updates.notes !== undefined ? updates.notes : undefined,
+      amount: updates.amount !== undefined ? new Prisma.Decimal(updates.amount) : undefined,
+      currency: updates.currency !== undefined ? updates.currency : undefined,
+      product_category: updates.product_category !== undefined ? updates.product_category : undefined,
+      team: updates.team !== undefined ? updates.team : undefined,
+      industry: updates.industry !== undefined ? updates.industry : undefined,
+      department: updates.department !== undefined ? updates.department : undefined,
+      last_touched_at: new Date(),
+      updated_by: req.user.id,
+      updated_at: new Date(),
+    }
+  });
 
-  const [updated] = await pool.execute(
-    `SELECT l.*,
-            TRIM(CONCAT(COALESCE(u.first_name,''), ' ', COALESCE(u.last_name,''))) AS assigned_name,
-            u.email AS assigned_email
-     FROM leads l LEFT JOIN users u ON l.assigned_to = u.id
-     WHERE l.id = ?`,
-    [leadId]
-  );
+  const updatedRow = await prisma.leads.findFirst({
+    where: { id: Number(leadId) },
+    include: {
+      users_leads_assigned_toTousers: {
+        select: {
+          first_name: true,
+          last_name: true,
+          email: true,
+        }
+      }
+    }
+  });
+
+  const assigned = updatedRow.users_leads_assigned_toTousers;
+  const formattedRow = formatRow({
+    ...updatedRow,
+    amount: updatedRow.amount ? updatedRow.amount.toString() : null,
+    assigned_name: assigned ? [assigned.first_name, assigned.last_name].filter(Boolean).join(" ") : "",
+    assigned_email: assigned ? assigned.email : null,
+  });
 
   emitLeadChanges("update");
-  return { success: true, data: formatRow(updated[0]) };
+  return { success: true, data: formattedRow };
 }
 
 async function updateLeadStatus(req, leadId, status) {
@@ -664,17 +739,26 @@ async function updateLeadStatus(req, leadId, status) {
     v2 = legacyToV2(status);
   }
 
-  await pool.execute(
-    `INSERT INTO lead_change_log (lead_id, field_name, old_value, new_value, user_id)
-     VALUES (?, 'status', ?, ?, ?)`,
-    [leadId, existing.status, legacy, req.user.id]
-  );
+  await prisma.lead_change_log.create({
+    data: {
+      lead_id: Number(leadId),
+      field_name: 'status',
+      old_value: existing.status,
+      new_value: legacy,
+      user_id: req.user.id,
+    }
+  });
 
-  await pool.execute(
-    `UPDATE leads SET status = ?, status_v2 = ?, last_touched_at = NOW(), updated_by = ?, updated_at = NOW()
-     WHERE id = ?`,
-    [legacy, v2, req.user.id, leadId]
-  );
+  await prisma.leads.update({
+    where: { id: Number(leadId) },
+    data: {
+      status: legacy,
+      status_v2: v2,
+      last_touched_at: new Date(),
+      updated_by: req.user.id,
+      updated_at: new Date(),
+    }
+  });
 
   emitLeadChanges("status");
   return { success: true, message: "Status updated" };
@@ -701,10 +785,15 @@ async function softDeleteLead(req, leadId, uploadsBase) {
     }
   }
 
-  await pool.execute(
-    "UPDATE leads SET is_deleted = 1, deleted_at = NOW(), updated_at = NOW() WHERE id = ?",
-    [leadId]
-  );
+  await prisma.leads.update({
+    where: { id: Number(leadId) },
+    data: {
+      is_deleted: true,
+      deleted_at: new Date(),
+      updated_at: new Date(),
+    }
+  });
+
   emitLeadChanges("delete");
   return { success: true, message: "Lead deleted" };
 }
@@ -743,37 +832,30 @@ async function addFollowup(req, leadId) {
 
   let attachmentsJson = null;
   if (req.files && req.files.length) {
-    attachmentsJson = JSON.stringify(
-      req.files.map((f) => `/uploads/leads/${f.filename}`)
-    );
+    attachmentsJson = req.files.map((f) => `/uploads/leads/${f.filename}`);
   }
 
-  try {
-    await pool.execute(
-      `INSERT INTO lead_followups (lead_id, note, next_follow_up_date, next_follow_up_at, attachments_json, created_by)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [leadId, note, nextDate, nextAtSql, attachmentsJson, req.user.id]
-    );
-  } catch (e) {
-    if (e.code === "ER_BAD_FIELD_ERROR") {
-      await pool.execute(
-        `INSERT INTO lead_followups (lead_id, note, next_follow_up_date, created_by)
-         VALUES (?, ?, ?, ?)`,
-        [leadId, note, nextDate, req.user.id]
-      );
-    } else {
-      throw e;
+  await prisma.lead_followups.create({
+    data: {
+      lead_id: Number(leadId),
+      note,
+      next_follow_up_date: nextDate ? new Date(nextDate) : null,
+      next_follow_up_at: nextAtSql ? new Date(nextAtSql) : null,
+      attachments_json: attachmentsJson,
+      created_by: req.user.id,
     }
-  }
+  });
 
   if (nextDate || nextAtSql) {
-    await pool.execute(
-      `UPDATE leads SET follow_up_date = COALESCE(?, follow_up_date),
-         followup_at = COALESCE(?, followup_at),
-         last_touched_at = NOW(), updated_at = NOW()
-       WHERE id = ?`,
-      [nextDate, nextAtSql, leadId]
-    );
+    await prisma.leads.update({
+      where: { id: Number(leadId) },
+      data: {
+        follow_up_date: nextDate ? new Date(nextDate) : undefined,
+        followup_at: nextAtSql ? new Date(nextAtSql) : undefined,
+        last_touched_at: new Date(),
+        updated_at: new Date(),
+      }
+    });
   }
 
   const shouldSendEmail = b.send_email !== "false" && b.send_email !== false;
@@ -848,82 +930,82 @@ async function convertLeadToOpportunity(req, leadId) {
   const currency = String(b.currency || lead.currency || "INR").toUpperCase();
   const productCategory =
     b.product_category || lead.product_category || null;
-  const expectedClose = b.expected_close_date || null;
+  const expectedClose = b.expected_close_date ? new Date(b.expected_close_date) : null;
   const notes = b.notes || lead.notes || lead.comments_history || null;
   const title = leadTitle(lead);
-  const followupAt = lead.followup_at || lead.follow_up_date || null;
+  const followupAt = lead.followup_at ? new Date(lead.followup_at) : (lead.follow_up_date ? new Date(lead.follow_up_date) : null);
   const followupType = lead.followup_type || null;
   const tid = tenantId(req);
 
-  const conn = await pool.getConnection();
-  let oppId;
-  try {
-    await conn.beginTransaction();
-
-    const [oppResult] = await conn.execute(
-      `INSERT INTO opportunities
-         (tenant_id, title, lead_id, contact_id, company_name, amount, currency, stage,
-          expected_close_date, owner_user_id, created_by, notes, product_category,
-          followup_at, followup_type, lead_source, team, comments_history, phone)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'qualification_done', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        tid,
+  const result = await prisma.$transaction(async (tx) => {
+    const createdOpp = await tx.opportunities.create({
+      data: {
+        tenant_id: tid,
         title,
-        leadId,
-        lead.contact_id || null,
-        lead.company_name || null,
-        amount,
+        lead_id: Number(leadId),
+        contact_id: lead.contact_id || null,
+        company_name: lead.company_name || null,
+        amount: new Prisma.Decimal(amount),
         currency,
-        expectedClose,
-        lead.assigned_to || req.user.id,
-        req.user.id,
+        stage: 'qualification_done',
+        expected_close_date: expectedClose,
+        owner_user_id: lead.assigned_to || req.user.id,
+        created_by: req.user.id,
         notes,
-        productCategory,
-        followupAt,
-        followupType,
-        lead.source || null,
-        lead.team || null,
-        lead.comments_history || null,
-        lead.phone || null,
-      ]
-    );
-    oppId = oppResult.insertId;
+        product_category: productCategory,
+        followup_at: followupAt,
+        followup_type: followupType,
+        lead_source: lead.source || null,
+        team: lead.team || null,
+        comments_history: lead.comments_history || null,
+        phone: lead.phone || null,
+      }
+    });
 
-    await conn.execute(
-      `INSERT INTO lead_change_log (lead_id, field_name, old_value, new_value, user_id)
-       VALUES (?, 'status', ?, 'confirm', ?)`,
-      [leadId, lead.status, req.user.id]
-    );
+    await tx.lead_change_log.create({
+      data: {
+        lead_id: Number(leadId),
+        field_name: 'status',
+        old_value: lead.status,
+        new_value: 'confirm',
+        user_id: req.user.id,
+      }
+    });
 
-    await conn.execute(
-      `UPDATE leads SET status = 'confirm', status_v2 = 'converted',
-         converted_opportunity_id = ?, amount = ?, currency = ?,
-         product_category = COALESCE(?, product_category),
-         last_touched_at = NOW(), updated_by = ?, updated_at = NOW()
-       WHERE id = ?`,
-      [oppId, amount, currency, productCategory, req.user.id, leadId]
-    );
+    await tx.leads.update({
+      where: { id: Number(leadId) },
+      data: {
+        status: 'confirm',
+        status_v2: 'converted',
+        converted_opportunity_id: createdOpp.id,
+        amount: new Prisma.Decimal(amount),
+        currency,
+        product_category: productCategory || undefined,
+        last_touched_at: new Date(),
+        updated_by: req.user.id,
+        updated_at: new Date(),
+      }
+    });
 
-    await conn.commit();
-  } catch (e) {
-    await conn.rollback();
-    throw e;
-  } finally {
-    conn.release();
-  }
+    return createdOpp;
+  });
 
-  const [oppRows] = await pool.execute(
-    "SELECT * FROM opportunities WHERE id = ?",
-    [oppId]
-  );
+  const opp = await prisma.opportunities.findFirst({
+    where: { id: result.id }
+  });
 
   emitLeadChanges("convert");
   emitOpportunitiesChanged({ action: "create", tenantId: tid, leadId });
 
+  const formattedOpp = opp ? {
+    ...opp,
+    amount: opp.amount ? opp.amount.toString() : null,
+  } : null;
+
   return {
     success: true,
-    opportunity_id: oppId,
-    opportunity: oppRows[0] || null,
+    opportunity_id: result.id,
+    opportunity: formattedOpp,
     message: "Lead converted to opportunity",
   };
 }
@@ -943,10 +1025,10 @@ async function linkLeadToFitnessClient(req, leadId) {
 
   const clientId = Number(req.query?.client_id || req.body?.client_id) || null;
 
-  const [[dup]] = await pool.execute(
-    "SELECT id FROM customers WHERE lead_id = ? LIMIT 1",
-    [leadId]
-  );
+  const dup = await prisma.customers.findFirst({
+    where: { lead_id: Number(leadId) },
+    select: { id: true }
+  });
   if (dup) {
     const err = new Error("This lead is already linked to a customer");
     err.status = 400;
@@ -954,44 +1036,48 @@ async function linkLeadToFitnessClient(req, leadId) {
   }
 
   if (clientId) {
-    const [[fc]] = await pool.execute(
-      "SELECT id, name, email, phone FROM fitness_clients WHERE id = ? AND tenant_id <=> ? LIMIT 1",
-      [clientId, tenantId(req)]
-    );
+    const fc = await prisma.fitness_clients.findFirst({
+      where: {
+        id: clientId,
+        tenant_id: tenantId(req),
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        phone: true,
+      }
+    });
     if (!fc) {
       const err = new Error("Fitness client not found");
       err.status = 404;
       throw err;
     }
-    await pool.execute(
-      `INSERT INTO customers (tenant_id, name, email, phone, company, city, country, lead_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        tenantId(req),
-        fc.name || lead.name,
-        fc.email || lead.email || null,
-        fc.phone || lead.phone || null,
-        lead.company_name || null,
-        null,
-        "India",
-        leadId,
-      ]
-    );
+    await prisma.customers.create({
+      data: {
+        tenant_id: tenantId(req),
+        name: fc.name || lead.name,
+        email: fc.email || lead.email || null,
+        phone: fc.phone || lead.phone || null,
+        company: lead.company_name || null,
+        city: null,
+        country: "India",
+        lead_id: Number(leadId),
+      }
+    });
   } else {
-    await pool.execute(
-      `INSERT INTO customers (tenant_id, name, email, phone, company, city, country, lead_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        tenantId(req),
-        lead.name,
-        lead.email || null,
-        lead.phone || null,
-        lead.company_name || null,
-        null,
-        "India",
-        leadId,
-      ]
-    );
+    await prisma.customers.create({
+      data: {
+        tenant_id: tenantId(req),
+        name: lead.name,
+        email: lead.email || null,
+        phone: lead.phone || null,
+        company: lead.company_name || null,
+        city: null,
+        country: "India",
+        lead_id: Number(leadId),
+      }
+    });
   }
 
   emitLeadChanges("link-client");
@@ -1012,67 +1098,80 @@ async function duplicateLead(req, leadId) {
   }
 
   const tid = tenantId(req);
-  const conn = await pool.getConnection();
-  let newId;
-  try {
-    await conn.beginTransaction();
-    const leadNumber = await nextLeadNumber(conn, tid);
+  const result = await prisma.$transaction(async (tx) => {
+    const key = counterTenantKey(tid);
+    
+    await tx.$executeRaw`
+      INSERT INTO tenant_lead_counters (tenant_id, next_lead_number)
+      VALUES (${key}, 1)
+      ON DUPLICATE KEY UPDATE tenant_id = tenant_id
+    `;
+    const rows = await tx.$queryRaw`
+      SELECT next_lead_number FROM tenant_lead_counters WHERE tenant_id = ${key} FOR UPDATE
+    `;
+    const num = rows[0]?.next_lead_number || 1;
+    await tx.$executeRaw`
+      UPDATE tenant_lead_counters SET next_lead_number = ${num + 1} WHERE tenant_id = ${key}
+    `;
 
-    const [result] = await conn.execute(
-      `INSERT INTO leads
-         (tenant_id, name, first_name, last_name, company_name, phone, phone_dial, email, source,
-          status, status_v2, label, address, reference, attachments_json, assigned_to, created_by,
-          follow_up_date, followup_at, notes, lead_number, amount, currency, product_category, team,
-          industry, department, last_touched_at, updated_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', 'new', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)`,
-      [
-        tid,
-        lead.name,
-        lead.first_name,
-        lead.last_name,
-        lead.company_name,
-        lead.phone,
-        lead.phone_dial,
-        lead.email,
-        lead.source,
-        lead.label,
-        lead.address,
-        lead.reference,
-        lead.attachments_json,
-        lead.assigned_to,
-        req.user.id,
-        lead.follow_up_date,
-        lead.followup_at,
-        lead.notes ? `Duplicate of #${leadId}: ${lead.notes}` : `Duplicate of lead #${leadId}`,
-        leadNumber,
-        lead.amount,
-        lead.currency,
-        lead.product_category,
-        lead.team,
-        lead.industry,
-        lead.department,
-        req.user.id,
-      ]
-    );
-    newId = result.insertId;
-    await conn.commit();
-  } catch (e) {
-    await conn.rollback();
-    throw e;
-  } finally {
-    conn.release();
-  }
+    const created = await tx.leads.create({
+      data: {
+        tenant_id: tid,
+        name: lead.name,
+        first_name: lead.first_name,
+        last_name: lead.last_name,
+        company_name: lead.company_name,
+        phone: lead.phone,
+        phone_dial: lead.phone_dial,
+        email: lead.email,
+        source: lead.source,
+        status: 'new',
+        status_v2: 'new',
+        label: lead.label,
+        address: lead.address,
+        reference: lead.reference,
+        attachments_json: lead.attachments_json,
+        assigned_to: lead.assigned_to,
+        created_by: req.user.id,
+        follow_up_date: lead.follow_up_date ? new Date(lead.follow_up_date) : null,
+        followup_at: lead.followup_at ? new Date(lead.followup_at) : null,
+        notes: lead.notes ? `Duplicate of #${leadId}: ${lead.notes}` : `Duplicate of lead #${leadId}`,
+        lead_number: num,
+        amount: lead.amount ? new Prisma.Decimal(lead.amount) : 0,
+        currency: lead.currency,
+        product_category: lead.product_category,
+        team: lead.team,
+        industry: lead.industry,
+        department: lead.department,
+        last_touched_at: new Date(),
+        updated_by: req.user.id,
+      }
+    });
 
-  const [created] = await pool.execute(
-    `SELECT l.*,
-            TRIM(CONCAT(COALESCE(u.first_name,''), ' ', COALESCE(u.last_name,''))) AS assigned_name
-     FROM leads l LEFT JOIN users u ON l.assigned_to = u.id
-     WHERE l.id = ?`,
-    [newId]
-  );
+    return created;
+  });
+
+  const createdRow = await prisma.leads.findFirst({
+    where: { id: result.id },
+    include: {
+      users_leads_assigned_toTousers: {
+        select: {
+          first_name: true,
+          last_name: true,
+        }
+      }
+    }
+  });
+
+  const assigned = createdRow.users_leads_assigned_toTousers;
+  const formattedRow = formatRow({
+    ...createdRow,
+    amount: createdRow.amount ? createdRow.amount.toString() : null,
+    assigned_name: assigned ? [assigned.first_name, assigned.last_name].filter(Boolean).join(" ") : "",
+  });
 
   emitLeadChanges("duplicate");
-  return { success: true, data: formatRow(created[0]) };
+  return { success: true, data: formattedRow };
 }
 
 async function getChangeLog(req, leadId) {
@@ -1092,25 +1191,40 @@ async function getChangeLog(req, leadId) {
   const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 25));
   const offset = (page - 1) * limit;
 
-  const [[{ total }]] = await pool.execute(
-    "SELECT COUNT(*) AS total FROM lead_change_log WHERE lead_id = ?",
-    [leadId]
-  );
+  const total = await prisma.lead_change_log.count({
+    where: { lead_id: Number(leadId) }
+  });
 
-  const [rows] = await pool.execute(
-    `SELECT c.*, u.email AS user_email,
-            TRIM(CONCAT(COALESCE(u.first_name,''), ' ', COALESCE(u.last_name,''))) AS user_name
-     FROM lead_change_log c
-     LEFT JOIN users u ON c.user_id = u.id
-     WHERE c.lead_id = ?
-     ORDER BY c.created_at DESC
-     LIMIT ? OFFSET ?`,
-    [leadId, limit, offset]
-  );
+  const rows = await prisma.lead_change_log.findMany({
+    where: { lead_id: Number(leadId) },
+    include: {
+      users: {
+        select: {
+          first_name: true,
+          last_name: true,
+          email: true,
+        }
+      }
+    },
+    orderBy: {
+      created_at: 'desc',
+    },
+    take: limit,
+    skip: offset,
+  });
+
+  const formattedRows = rows.map(r => {
+    const user = r.users;
+    return {
+      ...r,
+      user_email: user ? user.email : null,
+      user_name: user ? [user.first_name, user.last_name].filter(Boolean).join(" ") : "",
+    };
+  });
 
   return {
     success: true,
-    data: rows,
+    data: formattedRows,
     pagination: { page, limit, total: Number(total) || 0 },
   };
 }
@@ -1131,56 +1245,77 @@ async function getHistory(req, leadId) {
   const tab = String(req.query.tab || "counts").toLowerCase();
 
   if (tab === "counts") {
-    const [[fu]] = await pool.execute(
-      "SELECT COUNT(*) AS cnt FROM lead_followups WHERE lead_id = ?",
-      [leadId]
-    );
-    const [[nt]] = await pool.execute(
-      "SELECT COUNT(*) AS cnt FROM notes WHERE lead_id = ?",
-      [leadId]
-    );
-    const [[cl]] = await pool.execute(
-      "SELECT COUNT(*) AS cnt FROM lead_change_log WHERE lead_id = ?",
-      [leadId]
-    );
+    const followups = await prisma.lead_followups.count({
+      where: { lead_id: Number(leadId) }
+    });
+    const notes = await prisma.notes.count({
+      where: { lead_id: Number(leadId) }
+    });
+    const change_log = await prisma.lead_change_log.count({
+      where: { lead_id: Number(leadId) }
+    });
     return {
       success: true,
       data: {
-        followups: Number(fu?.cnt) || 0,
-        notes: Number(nt?.cnt) || 0,
-        change_log: Number(cl?.cnt) || 0,
+        followups,
+        notes,
+        change_log,
       },
     };
   }
 
   if (tab === "followups") {
-    const [rows] = await pool.execute(
-      `SELECT f.*, u.email AS creator_email
-       FROM lead_followups f LEFT JOIN users u ON f.created_by = u.id
-       WHERE f.lead_id = ? ORDER BY f.created_at DESC LIMIT 50`,
-      [leadId]
-    );
-    return { success: true, data: rows };
+    const rows = await prisma.lead_followups.findMany({
+      where: { lead_id: Number(leadId) },
+      include: {
+        users: {
+          select: { email: true }
+        }
+      },
+      orderBy: { created_at: 'desc' },
+      take: 50
+    });
+    const formattedRows = rows.map(r => ({
+      ...r,
+      creator_email: r.users ? r.users.email : null,
+    }));
+    return { success: true, data: formattedRows };
   }
 
   if (tab === "notes") {
-    const [rows] = await pool.execute(
-      `SELECT n.*, u.email AS creator_email
-       FROM notes n LEFT JOIN users u ON n.created_by = u.id
-       WHERE n.lead_id = ? ORDER BY n.created_at DESC LIMIT 50`,
-      [leadId]
-    );
-    return { success: true, data: rows };
+    const rows = await prisma.notes.findMany({
+      where: { lead_id: Number(leadId) },
+      include: {
+        users: {
+          select: { email: true }
+        }
+      },
+      orderBy: { created_at: 'desc' },
+      take: 50
+    });
+    const formattedRows = rows.map(r => ({
+      ...r,
+      creator_email: r.users ? r.users.email : null,
+    }));
+    return { success: true, data: formattedRows };
   }
 
   if (tab === "change_log") {
-    const [rows] = await pool.execute(
-      `SELECT c.*, u.email AS user_email
-       FROM lead_change_log c LEFT JOIN users u ON c.user_id = u.id
-       WHERE c.lead_id = ? ORDER BY c.created_at DESC LIMIT 50`,
-      [leadId]
-    );
-    return { success: true, data: rows };
+    const rows = await prisma.lead_change_log.findMany({
+      where: { lead_id: Number(leadId) },
+      include: {
+        users: {
+          select: { email: true }
+        }
+      },
+      orderBy: { created_at: 'desc' },
+      take: 50
+    });
+    const formattedRows = rows.map(r => ({
+      ...r,
+      user_email: r.users ? r.users.email : null,
+    }));
+    return { success: true, data: formattedRows };
   }
 
   const err = new Error("Invalid tab");

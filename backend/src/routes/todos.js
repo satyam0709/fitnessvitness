@@ -3,7 +3,7 @@ const path = require("path");
 const fs = require("fs");
 const multer = require("multer");
 const { verifyToken } = require("../middleware/verifyToken");
-const { pool } = require("../config/database");
+const prisma = require("../config/prisma");
 const { emitTodosChanged, emitCalendarChanged } = require("../realtime/meetingsRealtime");
 const { createUserNotification } = require("../services/notificationService");
 const { formatYmd, parseYmdLocal, nextOccurrence } = require("../utils/todoRecurrence");
@@ -33,10 +33,6 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } });
 const allowedMimes = ["image/jpeg", "image/png", "image/webp", "text/csv", "application/pdf"];
-
-function visibilitySql(uid) {
-  return `(t.created_by = ? OR EXISTS (SELECT 1 FROM crm_todo_assignees a WHERE a.todo_id = t.id AND a.user_id = ?))`;
-}
 
 function readAssigneeIds(req) {
   const b = req.body || {};
@@ -71,71 +67,52 @@ function parseAttachmentJson(row) {
   }
 }
 
-async function attachAssignees(todos) {
-  if (!todos.length) {
-    return todos.map((t) => ({
-      ...t,
-      attachments: parseAttachmentJson(t),
-      assignees: [],
-    }));
-  }
-  const ids = todos.map((t) => t.id);
-  const placeholders = ids.map(() => "?").join(",");
-  const [rows] = await pool.query(
-    `SELECT a.todo_id, u.id, u.email, u.first_name, u.last_name, u.clerk_user_id
-     FROM crm_todo_assignees a
-     JOIN users u ON u.id = a.user_id
-     WHERE a.todo_id IN (${placeholders})`,
-    ids
-  );
-  const byTodo = {};
-  for (const r of rows) {
-    if (!byTodo[r.todo_id]) byTodo[r.todo_id] = [];
-    byTodo[r.todo_id].push({
-      id: r.id,
-      email: r.email,
-      first_name: r.first_name,
-      last_name: r.last_name,
-      clerk_user_id: r.clerk_user_id,
-    });
-  }
-  return todos.map((t) => ({
-    ...t,
-    attachments: parseAttachmentJson(t),
-    assignees: byTodo[t.id] || [],
-  }));
-}
-
 async function assertTodoAccess(todoId, userId, tenantId) {
-  const [fixed] = await pool.execute(
-    `SELECT t.* FROM crm_todos t
-     WHERE t.id = ?
-       AND t.is_deleted = 0
-       AND (? IS NULL OR t.tenant_id = ?)
-       AND (t.created_by = ? OR EXISTS (
-         SELECT 1 FROM crm_todo_assignees a WHERE a.todo_id = t.id AND a.user_id = ?
-       ))`,
-    [todoId, tenantId || null, tenantId || null, userId, userId]
-  );
-  return fixed[0] || null;
+  const todo = await prisma.crm_todos.findFirst({
+    where: {
+      id: todoId,
+      is_deleted: false,
+      tenant_id: tenantId,
+      OR: [
+        { created_by: userId },
+        {
+          crm_todo_assignees: {
+            some: {
+              user_id: userId,
+            },
+          },
+        },
+      ],
+    },
+  });
+  return todo;
 }
 
-async function replaceAssignees(conn, todoId, userIds, creatorId) {
-  await conn.execute(`DELETE FROM crm_todo_assignees WHERE todo_id = ?`, [todoId]);
-  const uniq = [...new Set(userIds)].filter((id) => id !== creatorId || true);
-  for (const uid of uniq) {
-    const [urows] = await conn.execute(
-      "SELECT id FROM users WHERE id = ? AND is_active = 1 LIMIT 1",
-      [uid]
-    );
-    if (urows.length) {
-      await conn.execute(
-        `INSERT INTO crm_todo_assignees (todo_id, user_id) VALUES (?, ?)`,
-        [todoId, uid]
-      );
-    }
-  }
-}
+const mapTodoRow = (t) => {
+  const creator = t.users;
+  const shaped = {
+    ...t,
+    todo_date: formatYmd(t.todo_date),
+    completed_at: t.completed_at ? t.completed_at.toISOString() : null,
+    created_at: t.created_at.toISOString(),
+    updated_at: t.updated_at.toISOString(),
+    deleted_at: t.deleted_at ? t.deleted_at.toISOString() : null,
+    creator_email: creator?.email || null,
+    creator_first_name: creator?.first_name || null,
+    creator_last_name: creator?.last_name || null,
+    attachments: parseAttachmentJson(t),
+    assignees: (t.crm_todo_assignees || []).map((asg) => ({
+      id: asg.users.id,
+      email: asg.users.email,
+      first_name: asg.users.first_name,
+      last_name: asg.users.last_name,
+      clerk_user_id: null,
+    })),
+  };
+  delete shaped.users;
+  delete shaped.crm_todo_assignees;
+  return shaped;
+};
 
 function maybeUpload(req, res, next) {
   const ct = String(req.headers["content-type"] || "");
@@ -167,81 +144,164 @@ router.get("/", async (req, res) => {
       order = "asc",
     } = req.query;
 
-    const conditions = ["t.is_deleted = 0", visibilitySql(uid), "(? IS NULL OR t.tenant_id = ?)"];
-    const params = [uid, uid, tenantId, tenantId];
+    const andConditions = [
+      { is_deleted: false },
+      { tenant_id: tenantId },
+      {
+        OR: [
+          { created_by: uid },
+          {
+            crm_todo_assignees: {
+              some: {
+                user_id: uid,
+              },
+            },
+          },
+        ],
+      },
+    ];
 
     const st = status ? String(status).toLowerCase() : "";
     if (st === "pending" || st === "completed") {
-      conditions.push("t.status = ?");
-      params.push(st);
+      andConditions.push({ status: st });
     }
 
     if (priority && ["low", "medium", "high"].includes(String(priority))) {
-      conditions.push("t.priority = ?");
-      params.push(priority);
+      andConditions.push({ priority: priority.toLowerCase() });
     }
 
     if (frequency && VALID_FREQ.has(String(frequency).toLowerCase())) {
-      conditions.push("t.frequency = ?");
-      params.push(String(frequency).toLowerCase());
+      andConditions.push({ frequency: String(frequency).toLowerCase() });
     }
 
     if (created_by) {
-      conditions.push("t.created_by = ?");
-      params.push(Number(created_by));
+      andConditions.push({ created_by: Number(created_by) });
     }
 
     if (assigned_to) {
-      conditions.push(
-        `EXISTS (SELECT 1 FROM crm_todo_assignees a2 WHERE a2.todo_id = t.id AND a2.user_id = ?)`
-      );
-      params.push(Number(assigned_to));
+      andConditions.push({
+        crm_todo_assignees: {
+          some: {
+            user_id: Number(assigned_to),
+          },
+        },
+      });
     }
 
     const qTrim = q != null ? String(q).trim() : "";
     if (qTrim) {
-      conditions.push("t.body LIKE ?");
-      params.push(`%${qTrim.replace(/[%_]/g, (c) => `\\${c}`)}%`);
+      andConditions.push({
+        body: {
+          contains: qTrim,
+        },
+      });
     }
 
-    const today = formatYmd(new Date());
+    const todayStr = formatYmd(new Date());
+    const todayDate = new Date(todayStr);
     const sc = String(scope || "all").toLowerCase();
+
     if (sc === "today") {
-      conditions.push(`(
-        (t.status = 'pending' AND DATE(t.todo_date) = ?)
-        OR (t.status = 'pending' AND t.carry_forward = 1 AND DATE(t.todo_date) < ?)
-        OR (t.status = 'completed' AND t.completed_at IS NOT NULL AND DATE(t.completed_at) = ?)
-      )`);
-      params.push(today, today, today);
+      andConditions.push({
+        OR: [
+          {
+            status: "pending",
+            todo_date: todayDate,
+          },
+          {
+            status: "pending",
+            carry_forward: true,
+            todo_date: { lt: todayDate },
+          },
+          {
+            status: "completed",
+            completed_at: {
+              gte: new Date(todayStr + "T00:00:00.000Z"),
+              lte: new Date(todayStr + "T23:59:59.999Z"),
+            },
+          },
+        ],
+      });
     } else if (sc === "pending") {
-      conditions.push("t.status = 'pending'");
+      andConditions.push({ status: "pending" });
     } else if (sc === "recursive") {
-      conditions.push("t.frequency <> 'once'");
-      conditions.push("t.status = 'pending'");
+      andConditions.push({
+        frequency: { not: "once" },
+        status: "pending",
+      });
     }
 
+    const todos = await prisma.crm_todos.findMany({
+      where: {
+        AND: andConditions,
+      },
+      include: {
+        users: {
+          select: {
+            email: true,
+            first_name: true,
+            last_name: true,
+          },
+        },
+        crm_todo_assignees: {
+          include: {
+            users: {
+              select: {
+                id: true,
+                email: true,
+                first_name: true,
+                last_name: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const shaped = todos.map(mapTodoRow);
+
+    // Apply Sorting in Javascript
     const sortKey = String(sort).toLowerCase();
-    const orderDir = String(order).toLowerCase() === "desc" ? "DESC" : "ASC";
-    let orderClause = `t.todo_date ${orderDir}, t.priority DESC, t.id DESC`;
+    const orderDir = String(order).toLowerCase() === "desc" ? "desc" : "asc";
+
     if (sortKey === "created_at") {
-      orderClause = `t.created_at ${orderDir}, t.id DESC`;
+      shaped.sort((a, b) => {
+        const dA = new Date(a.created_at);
+        const dB = new Date(b.created_at);
+        if (dA.getTime() !== dB.getTime()) {
+          return orderDir === "desc" ? dB - dA : dA - dB;
+        }
+        return b.id - a.id;
+      });
     } else if (sortKey === "priority") {
-      orderClause = `FIELD(t.priority,'high','medium','low') ${orderDir === "DESC" ? "DESC" : "ASC"}, t.todo_date ASC`;
+      const priorityWeight = { high: 3, medium: 2, low: 1 };
+      shaped.sort((a, b) => {
+        const wA = priorityWeight[a.priority] || 0;
+        const wB = priorityWeight[b.priority] || 0;
+        if (wA !== wB) {
+          return orderDir === "desc" ? wB - wA : wA - wB;
+        }
+        return new Date(a.todo_date) - new Date(b.todo_date);
+      });
+    } else {
+      // default: sort by todo_date
+      shaped.sort((a, b) => {
+        const dA = new Date(a.todo_date);
+        const dB = new Date(b.todo_date);
+        if (dA.getTime() !== dB.getTime()) {
+          return orderDir === "desc" ? dB - dA : dA - dB;
+        }
+        // secondary priority desc
+        const priorityWeight = { high: 3, medium: 2, low: 1 };
+        const wA = priorityWeight[a.priority] || 0;
+        const wB = priorityWeight[b.priority] || 0;
+        if (wA !== wB) {
+          return wB - wA;
+        }
+        return b.id - a.id;
+      });
     }
 
-    const [todos] = await pool.execute(
-      `SELECT t.*,
-              uc.email as creator_email,
-              uc.first_name as creator_first_name,
-              uc.last_name as creator_last_name
-       FROM crm_todos t
-       LEFT JOIN users uc ON t.created_by = uc.id
-       WHERE ${conditions.join(" AND ")}
-       ORDER BY ${orderClause}`,
-      params
-    );
-
-    const shaped = await attachAssignees(todos);
     res.json({ success: true, total: shaped.length, data: shaped });
   } catch (err) {
     console.error("GET /todos:", err);
@@ -249,7 +309,7 @@ router.get("/", async (req, res) => {
   }
 });
 
-router.post("/",  maybeUpload, async (req, res) => {
+router.post("/", maybeUpload, async (req, res) => {
   const b = req.body || {};
   const body = String(b.body || "").trim();
   if (!body) {
@@ -291,53 +351,87 @@ router.post("/",  maybeUpload, async (req, res) => {
   if (!assigneeIds.length) assigneeIds = [req.user.id];
   const tenantId = req.user?.tenantId || null;
 
-  const conn = await pool.getConnection();
   try {
-    await conn.beginTransaction();
+    const todo = await prisma.$transaction(async (tx) => {
+      const created = await tx.crm_todos.create({
+        data: {
+          tenant_id: tenantId,
+          body,
+          frequency: freq,
+          todo_date: new Date(todoDateRaw),
+          priority: pri,
+          carry_forward: carry,
+          status: "pending",
+          attachment_json: attachmentJson,
+          created_by: req.user.id,
+        },
+      });
 
-    const [result] = await conn.execute(
-      `INSERT INTO crm_todos
-        (tenant_id, body, frequency, todo_date, priority, carry_forward, status, attachment_json, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
-      [tenantId, body, freq, todoDateRaw, pri, carry ? 1 : 0, attachmentJson, req.user.id]
-    );
-    const todoId = result.insertId;
+      const uniq = [...new Set(assigneeIds)];
+      for (const uid of uniq) {
+        const u = await tx.users.findFirst({
+          where: { id: uid, is_active: true },
+        });
+        if (u) {
+          await tx.crm_todo_assignees.create({
+            data: {
+              todo_id: created.id,
+              user_id: uid,
+            },
+          });
+        }
+      }
+      return created;
+    });
 
-    await replaceAssignees(conn, todoId, assigneeIds, req.user.id);
-
-    await conn.commit();
-
-    emitTodosChanged({ action: "create", id: todoId });
+    emitTodosChanged({ action: "create", id: todo.id });
     emitCalendarChanged({ reason: "todos" });
+
     for (const asg of [...new Set(assigneeIds)]) {
       if (asg === req.user.id) continue;
       await createUserNotification({
         userId: asg,
         actorUserId: req.user.id,
         entityType: "todo",
-        entityId: todoId,
+        entityId: todo.id,
         title: "New to-do assigned",
         body,
       }).catch((e) => console.warn("todo notification(create):", e.message));
     }
-    const [full] = await pool.execute(
-      `SELECT t.*,
-              uc.email as creator_email,
-              uc.first_name as creator_first_name,
-              uc.last_name as creator_last_name
-       FROM crm_todos t
-       LEFT JOIN users uc ON t.created_by = uc.id
-       WHERE t.id = ? AND t.is_deleted = 0 AND (? IS NULL OR t.tenant_id = ?)`,
-      [todoId, tenantId, tenantId]
-    );
-    const [withAsg] = await attachAssignees(full);
-    res.status(201).json({ success: true, data: withAsg });
+
+    const full = await prisma.crm_todos.findFirst({
+      where: {
+        id: todo.id,
+        is_deleted: false,
+        tenant_id: tenantId,
+      },
+      include: {
+        users: {
+          select: {
+            email: true,
+            first_name: true,
+            last_name: true,
+          },
+        },
+        crm_todo_assignees: {
+          include: {
+            users: {
+              select: {
+                id: true,
+                email: true,
+                first_name: true,
+                last_name: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    res.status(201).json({ success: true, data: mapTodoRow(full) });
   } catch (err) {
-    await conn.rollback();
     console.error("POST /todos:", err);
     res.status(500).json({ success: false, message: err.message });
-  } finally {
-    conn.release();
   }
 });
 
@@ -356,103 +450,116 @@ router.put("/:id", async (req, res) => {
 
     const b = req.body || {};
     let newlyAssignedUserIds = [];
-    const conn = await pool.getConnection();
-    try {
-      await conn.beginTransaction();
 
-      const updates = [];
-      const params = [];
-
+    await prisma.$transaction(async (tx) => {
+      const updates = {};
       if (typeof b.body === "string" && b.body.trim()) {
-        updates.push("body = ?");
-        params.push(b.body.trim());
+        updates.body = b.body.trim();
       }
       if (b.priority && ["low", "medium", "high"].includes(String(b.priority))) {
-        updates.push("priority = ?");
-        params.push(String(b.priority).toLowerCase());
+        updates.priority = String(b.priority).toLowerCase();
       }
       if (b.todo_date && parseYmdLocal(String(b.todo_date).slice(0, 10))) {
-        updates.push("todo_date = ?");
-        params.push(String(b.todo_date).slice(0, 10));
+        updates.todo_date = new Date(String(b.todo_date).slice(0, 10));
       }
       if (b.frequency && VALID_FREQ.has(String(b.frequency).toLowerCase())) {
-        updates.push("frequency = ?");
-        params.push(String(b.frequency).toLowerCase());
+        updates.frequency = String(b.frequency).toLowerCase();
       }
       if (b.carry_forward !== undefined) {
-        const carry =
+        updates.carry_forward =
           b.carry_forward === true ||
           b.carry_forward === 1 ||
           b.carry_forward === "1";
-        updates.push("carry_forward = ?");
-        params.push(carry ? 1 : 0);
       }
 
-      if (updates.length) {
-        params.push(id);
-        await conn.execute(`UPDATE crm_todos SET ${updates.join(", ")} WHERE id = ?`, params);
+      if (Object.keys(updates).length > 0) {
+        await tx.crm_todos.update({
+          where: { id },
+          data: updates,
+        });
       }
 
       if (b.status === "completed" || b.status === "pending") {
-        const [freshRows] = await conn.execute(
-          "SELECT frequency, todo_date FROM crm_todos WHERE id = ? AND is_deleted = 0 AND (? IS NULL OR tenant_id = ?)",
-          [id, tenantId, tenantId]
-        );
-        const row = freshRows[0] || existing;
+        const row = await tx.crm_todos.findUnique({
+          where: { id },
+        });
         if (b.status === "completed") {
           const freq = String(row.frequency || "once").toLowerCase();
           if (freq === "once") {
-            await conn.execute(
-              `UPDATE crm_todos SET status = 'completed', completed_at = NOW() WHERE id = ?`,
-              [id]
-            );
+            await tx.crm_todos.update({
+              where: { id },
+              data: {
+                status: "completed",
+                completed_at: new Date(),
+              },
+            });
           } else {
-            const nextD = nextOccurrence(String(row.todo_date).slice(0, 10), freq);
-            await conn.execute(
-              `UPDATE crm_todos SET todo_date = ?, status = 'pending', completed_at = NULL WHERE id = ?`,
-              [nextD, id]
-            );
+            const nextD = nextOccurrence(formatYmd(row.todo_date), freq);
+            await tx.crm_todos.update({
+              where: { id },
+              data: {
+                todo_date: new Date(nextD),
+                status: "pending",
+                completed_at: null,
+              },
+            });
           }
         } else {
-          await conn.execute(
-            `UPDATE crm_todos SET status = 'pending', completed_at = NULL WHERE id = ?`,
-            [id]
-          );
+          await tx.crm_todos.update({
+            where: { id },
+            data: {
+              status: "pending",
+              completed_at: null,
+            },
+          });
         }
       }
 
       if (Array.isArray(b.assignee_ids)) {
-        const [prevRows] = await conn.execute(
-          "SELECT user_id FROM crm_todo_assignees WHERE todo_id = ?",
-          [id]
-        );
+        const prevRows = await tx.crm_todo_assignees.findMany({
+          where: { todo_id: id },
+          select: { user_id: true },
+        });
         const beforeAssignees = prevRows.map((r) => Number(r.user_id)).filter(Boolean);
         const ids = b.assignee_ids.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
         if (!ids.length) {
-          await conn.rollback();
-          return res.status(400).json({ success: false, message: "assignee_ids cannot be empty" });
+          throw new Error("assignee_ids cannot be empty");
         }
-        await replaceAssignees(conn, id, ids, req.user.id);
-        const beforeSet = new Set(beforeAssignees);
-        newlyAssignedUserIds = [...new Set(ids)].filter((uid) => !beforeSet.has(uid));
-      }
 
-      await conn.commit();
-    } catch (e) {
-      await conn.rollback();
-      throw e;
-    } finally {
-      conn.release();
-    }
+        // recreate assignees
+        await tx.crm_todo_assignees.deleteMany({
+          where: { todo_id: id },
+        });
+
+        const uniq = [...new Set(ids)];
+        for (const uid of uniq) {
+          const u = await tx.users.findFirst({
+            where: { id: uid, is_active: true },
+          });
+          if (u) {
+            await tx.crm_todo_assignees.create({
+              data: {
+                todo_id: id,
+                user_id: uid,
+              },
+            });
+          }
+        }
+
+        const beforeSet = new Set(beforeAssignees);
+        newlyAssignedUserIds = uniq.filter((uid) => !beforeSet.has(uid));
+      }
+    });
 
     emitTodosChanged({ action: "update", id });
     emitCalendarChanged({ reason: "todos" });
+
     if (Array.isArray(b.assignee_ids)) {
-      const [titleRows] = await pool.execute(
-        "SELECT body FROM crm_todos WHERE id = ? AND is_deleted = 0 AND (? IS NULL OR tenant_id = ?) LIMIT 1",
-        [id, tenantId, tenantId]
-      );
-      const todoBody = String(titleRows?.[0]?.body || "A to-do was assigned to you.");
+      const titleRows = await prisma.crm_todos.findFirst({
+        where: { id, is_deleted: false, tenant_id: tenantId },
+        select: { body: true },
+      });
+      const todoBody = String(titleRows?.body || "A to-do was assigned to you.");
       for (const uid of newlyAssignedUserIds) {
         if (uid === req.user.id) continue;
         await createUserNotification({
@@ -465,21 +572,40 @@ router.put("/:id", async (req, res) => {
         }).catch((e) => console.warn("todo notification(assign):", e.message));
       }
     }
-    const [full] = await pool.execute(
-      `SELECT t.*,
-              uc.email as creator_email,
-              uc.first_name as creator_first_name,
-              uc.last_name as creator_last_name
-       FROM crm_todos t
-       LEFT JOIN users uc ON t.created_by = uc.id
-       WHERE t.id = ? AND t.is_deleted = 0 AND (? IS NULL OR t.tenant_id = ?)`,
-      [id, tenantId, tenantId]
-    );
-    const [withAsg] = await attachAssignees(full);
-    res.json({ success: true, data: withAsg });
+
+    const full = await prisma.crm_todos.findFirst({
+      where: {
+        id,
+        is_deleted: false,
+        tenant_id: tenantId,
+      },
+      include: {
+        users: {
+          select: {
+            email: true,
+            first_name: true,
+            last_name: true,
+          },
+        },
+        crm_todo_assignees: {
+          include: {
+            users: {
+              select: {
+                id: true,
+                email: true,
+                first_name: true,
+                last_name: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    res.json({ success: true, data: mapTodoRow(full) });
   } catch (err) {
     console.error("PUT /todos/:id:", err);
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.message === "assignee_ids cannot be empty" ? 400 : 500).json({ success: false, message: err.message });
   }
 });
 
@@ -491,21 +617,28 @@ router.delete("/:id", async (req, res) => {
     }
 
     const tenantId = req.user?.tenantId || null;
-    const [rows] = await pool.execute(
-      "SELECT id, attachment_json, created_by FROM crm_todos WHERE id = ? AND is_deleted = 0 AND (? IS NULL OR tenant_id = ?)",
-      [id, tenantId, tenantId]
-    );
-    const row = rows[0];
+    const row = await prisma.crm_todos.findFirst({
+      where: {
+        id,
+        is_deleted: false,
+        tenant_id: tenantId,
+      },
+    });
+
     if (!row) return res.status(404).json({ success: false, message: "Todo not found" });
     if (row.created_by !== req.user.id) {
       return res.status(403).json({ success: false, message: "Only the creator can delete this todo" });
     }
 
     const paths = parseAttachmentJson(row);
-    await pool.execute(
-      "UPDATE crm_todos SET is_deleted = 1, deleted_at = NOW(), updated_at = NOW() WHERE id = ? AND is_deleted = 0 AND (? IS NULL OR tenant_id = ?)",
-      [id, tenantId, tenantId]
-    );
+    await prisma.crm_todos.update({
+      where: { id },
+      data: {
+        is_deleted: true,
+        deleted_at: new Date(),
+        updated_at: new Date(),
+      },
+    });
 
     for (const rel of paths) {
       if (rel && String(rel).includes("uploads/todos/")) {

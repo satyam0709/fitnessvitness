@@ -1,4 +1,5 @@
-const { pool } = require("../config/database");
+const prisma = require("../config/prisma");
+const { Prisma } = require("../generated/prisma");
 const { tableExists } = require("../utils/schemaHelpers");
 
 function monthKey(dateLike) {
@@ -39,57 +40,60 @@ function rowsToCsv(rows, headers) {
 async function getPipelineReport(req, res) {
   try {
     const { from, to } = rangeFromReq(req);
-    const where = ["1=1"];
-    const params = [];
-    if (from) {
-      where.push("created_at >= ?");
-      params.push(from);
-    }
-    if (to) {
-      where.push("created_at <= ?");
-      params.push(to);
-    }
 
     if (await tableExists("leads")) {
-      const [rows] = await pool.query(
-        `SELECT status, COUNT(*) AS count, COALESCE(SUM(0), 0) AS total_value
-         FROM leads
-         WHERE ${where.join(" AND ")}
-         GROUP BY status
-         ORDER BY count DESC`,
-        params
-      );
-      return res.json({ success: true, data: rows });
+      const conditions = [];
+      if (from) {
+        conditions.push(Prisma.sql`created_at >= ${from}`);
+      }
+      if (to) {
+        conditions.push(Prisma.sql`created_at <= ${to}`);
+      }
+      const whereSql = conditions.length > 0 ? Prisma.join(conditions, ' AND ') : Prisma.sql`1=1`;
+
+      const rows = await prisma.$queryRaw`
+        SELECT status, COUNT(*) AS count, COALESCE(SUM(0), 0) AS total_value
+        FROM leads
+        WHERE ${whereSql}
+        GROUP BY status
+        ORDER BY count DESC
+      `;
+
+      const formattedRows = rows.map(r => ({
+        status: r.status,
+        count: Number(r.count),
+        total_value: Number(r.total_value || 0),
+      }));
+
+      return res.json({ success: true, data: formattedRows });
     }
 
     if (await tableExists("opportunities")) {
       try {
-        const oppWhere = [];
-        const oppParams = [];
-        const [colRows] = await pool.execute(
-          `SELECT 1 FROM information_schema.COLUMNS
-           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'opportunities' AND COLUMN_NAME = 'is_deleted'
-           LIMIT 1`
-        );
-        if (colRows.length) oppWhere.push("is_deleted = 0");
+        const conditions = [Prisma.sql`is_deleted = 0`];
         if (from) {
-          oppWhere.push("created_at >= ?");
-          oppParams.push(from);
+          conditions.push(Prisma.sql`created_at >= ${from}`);
         }
         if (to) {
-          oppWhere.push("created_at <= ?");
-          oppParams.push(to);
+          conditions.push(Prisma.sql`created_at <= ${to}`);
         }
-        const whereSql = oppWhere.length ? oppWhere.join(" AND ") : "1=1";
-        const [rows] = await pool.query(
-          `SELECT stage AS status, COUNT(*) AS count, 0 AS total_value
-           FROM opportunities
-           WHERE ${whereSql}
-           GROUP BY stage
-           ORDER BY count DESC`,
-          oppParams
-        );
-        return res.json({ success: true, data: rows });
+        const whereSql = Prisma.join(conditions, ' AND ');
+
+        const rows = await prisma.$queryRaw`
+          SELECT stage AS status, COUNT(*) AS count, 0 AS total_value
+          FROM opportunities
+          WHERE ${whereSql}
+          GROUP BY stage
+          ORDER BY count DESC
+        `;
+
+        const formattedRows = rows.map(r => ({
+          status: r.status,
+          count: Number(r.count),
+          total_value: Number(r.total_value || 0),
+        }));
+
+        return res.json({ success: true, data: formattedRows });
       } catch (oppErr) {
         console.warn("getPipelineReport opportunities:", oppErr.message);
       }
@@ -112,18 +116,17 @@ async function getConversionReport(req, res) {
     const fromDate = range.from || sixMonthsAgo;
     const toDate = range.to || new Date();
 
-    const [rows] = await pool.query(
-      `SELECT DATE_FORMAT(created_at, '%Y-%m') AS ym,
-              COUNT(*) AS total_leads,
-              SUM(CASE WHEN status IN ('confirm') THEN 1 ELSE 0 END) AS won_leads
-       FROM leads
-       WHERE 1=1
-         AND created_at >= ?
-         AND created_at <= ?
-       GROUP BY DATE_FORMAT(created_at, '%Y-%m')
-       ORDER BY ym ASC`,
-      [fromDate, toDate]
-    );
+    const rows = await prisma.$queryRaw`
+      SELECT DATE_FORMAT(created_at, '%Y-%m') AS ym,
+             COUNT(*) AS total_leads,
+             SUM(CASE WHEN status IN ('confirm') THEN 1 ELSE 0 END) AS won_leads
+      FROM leads
+      WHERE created_at >= ${fromDate}
+        AND created_at <= ${toDate}
+      GROUP BY DATE_FORMAT(created_at, '%Y-%m')
+      ORDER BY ym ASC
+    `;
+
     const byMonth = new Map(rows.map((r) => [String(r.ym), r]));
     const data = [];
     const cursor = new Date(fromDate.getFullYear(), fromDate.getMonth(), 1);
@@ -153,54 +156,62 @@ async function getConversionReport(req, res) {
 async function getActivityReport(req, res) {
   try {
     const { from, to } = rangeFromReq(req);
-    const dateClause = from && to
-      ? "BETWEEN ? AND ?"
-      : from
-        ? ">= ?"
-        : to
-          ? "<= ?"
-          : ">= DATE_SUB(NOW(), INTERVAL 30 DAY)";
-    const dateParams = from && to ? [from, to] : from ? [from] : to ? [to] : [];
+    let dateCondition;
+    if (from && to) {
+      dateCondition = Prisma.sql`BETWEEN ${from} AND ${to}`;
+    } else if (from) {
+      dateCondition = Prisma.sql`>= ${from}`;
+    } else if (to) {
+      dateCondition = Prisma.sql`<= ${to}`;
+    } else {
+      dateCondition = Prisma.sql`>= DATE_SUB(NOW(), INTERVAL 30 DAY)`;
+    }
 
-    const [rows] = await pool.query(
-      `SELECT
-         u.id AS user_id,
-         u.full_name AS user_name,
-         u.email,
-         COALESCE(t.tasks_completed, 0) AS tasks_completed,
-         COALESCE(n.notes_added, 0) AS notes_added,
-         COALESCE(f.calls_logged, 0) AS calls_logged,
-         COALESCE(t.tasks_completed, 0) + COALESCE(n.notes_added, 0) + COALESCE(f.calls_logged, 0) AS total_activity
-       FROM users u
-       LEFT JOIN (
-         SELECT created_by AS user_id, COUNT(*) AS tasks_completed
-         FROM tasks
-         WHERE 1=1
-           AND status IN ('completed', 'done')
-           AND updated_at ${dateClause}
-         GROUP BY created_by
-       ) t ON t.user_id = u.id
-       LEFT JOIN (
-         SELECT created_by AS user_id, COUNT(*) AS notes_added
-         FROM notes
-         WHERE 1=1
-           AND created_at ${dateClause}
-         GROUP BY created_by
-       ) n ON n.user_id = u.id
-       LEFT JOIN (
-         SELECT lf.created_by AS user_id, COUNT(*) AS calls_logged
-         FROM lead_followups lf
-         INNER JOIN leads l ON l.id = lf.lead_id
-         WHERE 1=1
-           AND lf.created_at ${dateClause}
-         GROUP BY lf.created_by
-       ) f ON f.user_id = u.id
-       WHERE u.is_active = 1
-       ORDER BY total_activity DESC, user_name ASC`,
-      [...dateParams, ...dateParams, ...dateParams]
-    );
+    const rows = await prisma.$queryRaw`
+      SELECT
+        u.id AS user_id,
+        u.full_name AS user_name,
+        u.email,
+        COALESCE(t.tasks_completed, 0) AS tasks_completed,
+        COALESCE(n.notes_added, 0) AS notes_added,
+        COALESCE(f.calls_logged, 0) AS calls_logged,
+        COALESCE(t.tasks_completed, 0) + COALESCE(n.notes_added, 0) + COALESCE(f.calls_logged, 0) AS total_activity
+      FROM users u
+      LEFT JOIN (
+        SELECT created_by AS user_id, COUNT(*) AS tasks_completed
+        FROM tasks
+        WHERE status IN ('completed', 'done')
+          AND updated_at ${dateCondition}
+        GROUP BY created_by
+      ) t ON t.user_id = u.id
+      LEFT JOIN (
+        SELECT created_by AS user_id, COUNT(*) AS notes_added
+        FROM notes
+        WHERE created_at ${dateCondition}
+        GROUP BY created_by
+      ) n ON n.user_id = u.id
+      LEFT JOIN (
+        SELECT lf.created_by AS user_id, COUNT(*) AS calls_logged
+        FROM lead_followups lf
+        INNER JOIN leads l ON l.id = lf.lead_id
+        WHERE lf.created_at ${dateCondition}
+        GROUP BY lf.created_by
+      ) f ON f.user_id = u.id
+      WHERE u.is_active = 1
+      ORDER BY total_activity DESC, user_name ASC
+    `;
 
-    res.json({ success: true, data: rows });
+    const formattedRows = rows.map(r => ({
+      user_id: r.user_id,
+      user_name: r.user_name,
+      email: r.email,
+      tasks_completed: Number(r.tasks_completed),
+      notes_added: Number(r.notes_added),
+      calls_logged: Number(r.calls_logged),
+      total_activity: Number(r.total_activity),
+    }));
+
+    res.json({ success: true, data: formattedRows });
   } catch (err) {
     console.error("getActivityReport", err);
     res.status(500).json({ success: false, message: err.message });
@@ -217,17 +228,16 @@ async function getRevenueReport(req, res) {
     const fromDate = range.from || twelveMonthsAgo;
     const toDate = range.to || new Date();
 
-    const [rows] = await pool.query(
-      `SELECT DATE_FORMAT(created_at, '%Y-%m') AS ym,
+    const rows = await prisma.$queryRaw`
+      SELECT DATE_FORMAT(created_at, '%Y-%m') AS ym,
               COALESCE(SUM(total), 0) AS revenue_total
        FROM invoices
-       WHERE 1=1
-         AND created_at >= ?
-         AND created_at <= ?
+       WHERE created_at >= ${fromDate}
+         AND created_at <= ${toDate}
        GROUP BY DATE_FORMAT(created_at, '%Y-%m')
-       ORDER BY ym ASC`,
-      [fromDate, toDate]
-    );
+       ORDER BY ym ASC
+    `;
+
     const byMonth = new Map(rows.map((r) => [String(r.ym), Number(r.revenue_total || 0)]));
     const data = [];
     const cursor = new Date(fromDate.getFullYear(), fromDate.getMonth(), 1);
@@ -260,32 +270,31 @@ async function getInvoiceMixReport(req, res) {
     const fromDate = range.from || twelveMonthsAgo;
     const toDate = range.to || new Date();
 
-    const [byStatus] = await pool.query(
-      `SELECT COALESCE(status, 'unknown') AS key_label,
+    const byStatus = await prisma.$queryRaw`
+      SELECT COALESCE(status, 'unknown') AS key_label,
               COALESCE(SUM(total), 0) AS amount,
               COUNT(*) AS cnt
        FROM invoices
-       WHERE created_at >= ? AND created_at <= ?
+       WHERE created_at >= ${fromDate} AND created_at <= ${toDate}
        GROUP BY COALESCE(status, 'unknown')
-       ORDER BY amount DESC`,
-      [fromDate, toDate]
-    );
-    const [byType] = await pool.query(
-      `SELECT COALESCE(type, 'unknown') AS key_label,
+       ORDER BY amount DESC
+    `;
+
+    const byType = await prisma.$queryRaw`
+      SELECT COALESCE(type, 'unknown') AS key_label,
               COALESCE(SUM(total), 0) AS amount,
               COUNT(*) AS cnt
        FROM invoices
-       WHERE created_at >= ? AND created_at <= ?
+       WHERE created_at >= ${fromDate} AND created_at <= ${toDate}
        GROUP BY COALESCE(type, 'unknown')
-       ORDER BY amount DESC`,
-      [fromDate, toDate]
-    );
-    const [totRows] = await pool.query(
-      `SELECT COALESCE(SUM(total), 0) AS amount, COUNT(*) AS cnt
+       ORDER BY amount DESC
+    `;
+
+    const totRows = await prisma.$queryRaw`
+      SELECT COALESCE(SUM(total), 0) AS amount, COUNT(*) AS cnt
        FROM invoices
-       WHERE created_at >= ? AND created_at <= ?`,
-      [fromDate, toDate]
-    );
+       WHERE created_at >= ${fromDate} AND created_at <= ${toDate}
+    `;
     const totRow = totRows[0] || { amount: 0, cnt: 0 };
 
     const num = (v) => Number(v) || 0;
@@ -318,53 +327,56 @@ async function exportReportCsv(req, res) {
   try {
     const type = String(req.params.type || "").toLowerCase();
     const { from, to } = rangeFromReq(req);
-    const exports = {
-      leads: {
-        sql: `SELECT id, name, company_name, phone, email, source, status, created_at
-              FROM leads
-              WHERE 1=1
-                AND (? IS NULL OR created_at >= ?)
-                AND (? IS NULL OR created_at <= ?)
-              ORDER BY created_at DESC`,
-        params: [from, from, to, to],
-        headers: ["id", "name", "company_name", "phone", "email", "source", "status", "created_at"],
-      },
-      contacts: {
-        sql: `SELECT id, company_name, contact_name, designation, department, email, phone, city, state, created_at
-              FROM contacts
-              WHERE (? IS NULL OR created_at >= ?)
-                AND (? IS NULL OR created_at <= ?)
-              ORDER BY created_at DESC`,
-        params: [from, from, to, to],
-        headers: ["id", "company_name", "contact_name", "designation", "department", "email", "phone", "city", "state", "created_at"],
-      },
-      tasks: {
-        sql: `SELECT id, title, description, priority, status, due_date, created_at
-              FROM tasks
-              WHERE 1=1
-                AND (? IS NULL OR created_at >= ?)
-                AND (? IS NULL OR created_at <= ?)
-              ORDER BY created_at DESC`,
-        params: [from, from, to, to],
-        headers: ["id", "title", "description", "priority", "status", "due_date", "created_at"],
-      },
-      invoices: {
-        sql: `SELECT id, invoice_number, type, customer_name, invoice_date, due_date, total, status, created_at
-              FROM invoices
-              WHERE 1=1
-                AND (? IS NULL OR created_at >= ?)
-                AND (? IS NULL OR created_at <= ?)
-              ORDER BY created_at DESC`,
-        params: [from, from, to, to],
-        headers: ["id", "invoice_number", "type", "customer_name", "invoice_date", "due_date", "total", "status", "created_at"],
-      },
-    };
 
-    const cfg = exports[type];
-    if (!cfg) return res.status(400).json({ success: false, message: "Invalid export type" });
+    const conditions = [];
+    if (from) {
+      conditions.push(Prisma.sql`created_at >= ${from}`);
+    }
+    if (to) {
+      conditions.push(Prisma.sql`created_at <= ${to}`);
+    }
+    const whereSql = conditions.length > 0 ? Prisma.join(conditions, ' AND ') : Prisma.sql`1=1`;
 
-    const [rows] = await pool.query(cfg.sql, cfg.params);
-    const csv = rowsToCsv(rows, cfg.headers);
+    let rows = [];
+    let headers = [];
+
+    if (type === "leads") {
+      rows = await prisma.$queryRaw`
+        SELECT id, name, company_name, phone, email, source, status, created_at
+        FROM leads
+        WHERE ${whereSql}
+        ORDER BY created_at DESC
+      `;
+      headers = ["id", "name", "company_name", "phone", "email", "source", "status", "created_at"];
+    } else if (type === "contacts") {
+      rows = await prisma.$queryRaw`
+        SELECT id, company_name, contact_name, designation, department, email, phone, city, state, created_at
+        FROM contacts
+        WHERE ${whereSql}
+        ORDER BY created_at DESC
+      `;
+      headers = ["id", "company_name", "contact_name", "designation", "department", "email", "phone", "city", "state", "created_at"];
+    } else if (type === "tasks") {
+      rows = await prisma.$queryRaw`
+        SELECT id, title, description, priority, status, due_date, created_at
+        FROM tasks
+        WHERE ${whereSql}
+        ORDER BY created_at DESC
+      `;
+      headers = ["id", "title", "description", "priority", "status", "due_date", "created_at"];
+    } else if (type === "invoices") {
+      rows = await prisma.$queryRaw`
+        SELECT id, invoice_number, type, customer_name, invoice_date, due_date, total, status, created_at
+        FROM invoices
+        WHERE ${whereSql}
+        ORDER BY created_at DESC
+      `;
+      headers = ["id", "invoice_number", "type", "customer_name", "invoice_date", "due_date", "total", "status", "created_at"];
+    } else {
+      return res.status(400).json({ success: false, message: "Invalid export type" });
+    }
+
+    const csv = rowsToCsv(rows, headers);
 
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="reports-${type}.csv"`);

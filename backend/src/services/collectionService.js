@@ -1,4 +1,5 @@
-const { pool } = require("../config/database");
+const prisma = require("../config/prisma");
+const { Prisma } = require("../generated/prisma");
 const { emitFitnessChanged, emitCollectionsChanged } = require("../realtime/meetingsRealtime");
 const {
   createReceiptForCollectionPayment,
@@ -21,13 +22,6 @@ const VALID_PAY_MODES = new Set([
 ]);
 const VALID_STATUS = new Set(["open", "partial", "paid", "cancelled"]);
 
-/** This MySQL build rejects LIMIT/OFFSET as prepared-statement placeholders. */
-function sqlLimitOffset(limit, offset) {
-  const lim = Math.min(200, Math.max(1, Number.parseInt(String(limit), 10) || 50));
-  const off = Math.max(0, Number.parseInt(String(offset), 10) || 0);
-  return `LIMIT ${lim} OFFSET ${off}`;
-}
-
 function queryScalar(val, fallback = null) {
   if (val === undefined || val === null) return fallback;
   const v = Array.isArray(val) ? val[0] : val;
@@ -45,30 +39,20 @@ function roundMoney(n) {
   return Math.round(Number(n) * 100) / 100;
 }
 
-/** Normalize Date / ISO string / YYYY-MM-DD for MySQL DATE columns. */
-function toSqlDate(value, fallback) {
-  const fb =
-    fallback && /^\d{4}-\d{2}-\d{2}$/.test(String(fallback).slice(0, 10))
-      ? String(fallback).slice(0, 10)
-      : new Date().toISOString().slice(0, 10);
-  if (value == null || value === "") return fb;
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    const y = value.getFullYear();
-    const m = String(value.getMonth() + 1).padStart(2, "0");
-    const d = String(value.getDate()).padStart(2, "0");
-    return `${y}-${m}-${d}`;
-  }
-  const s = String(value).trim();
-  const iso = s.slice(0, 10);
-  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
-  const parsed = new Date(s);
-  if (!Number.isNaN(parsed.getTime())) {
-    const y = parsed.getFullYear();
-    const m = String(parsed.getMonth() + 1).padStart(2, "0");
-    const d = String(parsed.getDate()).padStart(2, "0");
-    return `${y}-${m}-${d}`;
-  }
-  return fb;
+function toSqlDate(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dateStr = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dateStr}`;
+}
+
+function toPrismaDate(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 function computeStatus(total, received) {
@@ -96,46 +80,58 @@ async function resolveExternalBuyer(eb) {
   const name = String(eb.full_name).trim();
   const phone = eb.phone ? String(eb.phone).replace(/\D/g, "") : null;
   if (phone) {
-    const [found] = await pool.execute(
-      "SELECT id FROM fitness_external_buyers WHERE phone = ? LIMIT 1",
-      [phone]
-    );
-    if (found.length) return found[0].id;
+    const found = await prisma.fitness_external_buyers.findUnique({
+      where: { phone }
+    });
+    if (found) return found.id;
   }
-  const [ins] = await pool.execute(
-    `INSERT INTO fitness_external_buyers (full_name, phone, referred_by_client_id, notes)
-     VALUES (?, ?, ?, ?)`,
-    [
-      name,
-      phone,
-      eb.referred_by_client_id || null,
-      eb.notes != null ? String(eb.notes) : null,
-    ]
-  );
-  return ins.insertId;
-}
-
-let paymentDueDateColExists = null;
-async function hasPaymentDueDateColumn(conn) {
-  if (paymentDueDateColExists !== null) return paymentDueDateColExists;
-  const db = conn || pool;
-  const [rows] = await db.execute(
-    `SELECT 1 FROM information_schema.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fitness_transactions' AND COLUMN_NAME = 'payment_due_date' LIMIT 1`
-  );
-  paymentDueDateColExists = rows.length > 0;
-  return paymentDueDateColExists;
+  const ins = await prisma.fitness_external_buyers.create({
+    data: {
+      full_name: name,
+      phone: phone || null,
+      referred_by_client_id: eb.referred_by_client_id || null,
+      notes: eb.notes != null ? String(eb.notes) : null
+    }
+  });
+  return ins.id;
 }
 
 function collectionPaymentDueDate(collection) {
   const pending = roundMoney(collection.pending_inr);
   if (pending <= 0) return null;
   return collection.next_followup_date
-    ? toSqlDate(collection.next_followup_date)
+    ? toPrismaDate(collection.next_followup_date)
     : null;
 }
 
-async function syncLinkedTransaction(conn, collection, payMode, transactionDate) {
+function formatCollection(col) {
+  if (!col) return col;
+  const res = { ...col };
+  if (res.total_inr !== undefined && res.total_inr !== null) {
+    res.total_inr = Number(res.total_inr).toFixed(2);
+  }
+  if (res.received_inr !== undefined && res.received_inr !== null) {
+    res.received_inr = Number(res.received_inr).toFixed(2);
+  }
+  if (res.pending_inr !== undefined && res.pending_inr !== null) {
+    res.pending_inr = Number(res.pending_inr).toFixed(2);
+  }
+  if (res.payments && Array.isArray(res.payments)) {
+    res.payments = res.payments.map(formatPayment);
+  }
+  return res;
+}
+
+function formatPayment(pay) {
+  if (!pay) return pay;
+  const res = { ...pay };
+  if (res.amount_inr !== undefined && res.amount_inr !== null) {
+    res.amount_inr = Number(res.amount_inr).toFixed(2);
+  }
+  return res;
+}
+
+async function syncLinkedTransaction(tx, collection, payMode, transactionDate) {
   const hasClient = Boolean(collection.client_id);
   const hasExternal = Boolean(collection.external_buyer_id);
   if (hasClient && hasExternal) {
@@ -146,156 +142,171 @@ async function syncLinkedTransaction(conn, collection, payMode, transactionDate)
   }
 
   const txType = mapTxType(collection.collection_type);
-  const today = new Date().toISOString().slice(0, 10);
-  const date = toSqlDate(transactionDate, toSqlDate(collection.created_at, today));
+  const today = new Date();
+  const date = toPrismaDate(transactionDate) || toPrismaDate(collection.created_at) || today;
   const paymentDue = collectionPaymentDueDate(collection);
-  const syncPaymentDue = await hasPaymentDueDateColumn(conn);
 
   if (collection.linked_transaction_id) {
-    if (syncPaymentDue) {
-      await conn.execute(
-        `UPDATE fitness_transactions
-         SET received_inr = ?, pending_inr = ?, rate_inr = ?, mrp_inr = ?, product_plan = ?, type = ?, pay_mode = ?, payment_due_date = ?
-         WHERE id = ?`,
-        [
-          collection.received_inr,
-          collection.pending_inr,
-          collection.total_inr,
-          collection.total_inr,
-          collection.title,
-          txType,
-          payMode || "GPay",
-          paymentDue,
-          collection.linked_transaction_id,
-        ]
-      );
-    } else {
-      await conn.execute(
-        `UPDATE fitness_transactions
-         SET received_inr = ?, pending_inr = ?, rate_inr = ?, mrp_inr = ?, product_plan = ?, type = ?, pay_mode = ?
-         WHERE id = ?`,
-        [
-          collection.received_inr,
-          collection.pending_inr,
-          collection.total_inr,
-          collection.total_inr,
-          collection.title,
-          txType,
-          payMode || "GPay",
-          collection.linked_transaction_id,
-        ]
-      );
-    }
+    await tx.fitness_transactions.update({
+      where: { id: collection.linked_transaction_id },
+      data: {
+        received_inr: new Prisma.Decimal(collection.received_inr),
+        pending_inr: new Prisma.Decimal(collection.pending_inr),
+        rate_inr: new Prisma.Decimal(collection.total_inr),
+        mrp_inr: new Prisma.Decimal(collection.total_inr),
+        product_plan: collection.title,
+        type: txType,
+        pay_mode: payMode || "GPay",
+        payment_due_date: paymentDue
+      }
+    });
     return collection.linked_transaction_id;
   }
 
-  const insertCols = [
-    "client_id",
-    "external_buyer_id",
-    "transaction_date",
-    "product_plan",
-    "type",
-    "mrp_inr",
-    "rate_inr",
-    "received_inr",
-    "pending_inr",
-    "cost_inr",
-    "pay_mode",
-    "notes",
-  ];
-  const insertVals = [
-    collection.client_id,
-    collection.external_buyer_id,
-    date,
-    collection.title,
-    txType,
-    collection.total_inr,
-    collection.total_inr,
-    collection.received_inr,
-    collection.pending_inr,
-    0,
-    payMode || "GPay",
-    collection.notes ? `Collection #${collection.id}: ${collection.notes}` : `Collection #${collection.id}`,
-  ];
-  if (syncPaymentDue) {
-    insertCols.push("payment_due_date");
-    insertVals.push(paymentDue);
-  }
+  const newTx = await tx.fitness_transactions.create({
+    data: {
+      client_id: collection.client_id,
+      external_buyer_id: collection.external_buyer_id,
+      transaction_date: date,
+      product_plan: collection.title,
+      type: txType,
+      mrp_inr: new Prisma.Decimal(collection.total_inr),
+      rate_inr: new Prisma.Decimal(collection.total_inr),
+      received_inr: new Prisma.Decimal(collection.received_inr),
+      pending_inr: new Prisma.Decimal(collection.pending_inr),
+      cost_inr: 0,
+      pay_mode: payMode || "GPay",
+      notes: collection.notes ? `Collection #${collection.id}: ${collection.notes}` : `Collection #${collection.id}`,
+      payment_due_date: paymentDue
+    }
+  });
 
-  const [result] = await conn.execute(
-    `INSERT INTO fitness_transactions (${insertCols.join(", ")})
-     VALUES (${insertCols.map(() => "?").join(", ")})`,
-    insertVals
-  );
-  const txId = result.insertId;
-  await conn.execute(
-    "UPDATE fitness_collections SET linked_transaction_id = ? WHERE id = ?",
-    [txId, collection.id]
-  );
-  return txId;
+  await tx.fitness_collections.update({
+    where: { id: collection.id },
+    data: { linked_transaction_id: newTx.id }
+  });
+
+  return newTx.id;
 }
 
-async function recalcCollection(conn, collectionId) {
-  const [[col]] = await conn.execute(
-    "SELECT * FROM fitness_collections WHERE id = ? FOR UPDATE",
-    [collectionId]
-  );
+async function recalcCollection(tx, collectionId) {
+  const col = await tx.fitness_collections.findUnique({
+    where: { id: collectionId }
+  });
   if (!col) return null;
 
-  const [payments] = await conn.execute(
-    "SELECT COALESCE(SUM(amount_inr), 0) AS total FROM fitness_collection_payments WHERE collection_id = ?",
-    [collectionId]
-  );
-  const received = roundMoney(payments[0]?.total || 0);
+  const payments = await tx.fitness_collection_payments.aggregate({
+    where: { collection_id: collectionId },
+    _sum: { amount_inr: true }
+  });
+  const received = roundMoney(payments._sum.amount_inr || 0);
   const total = roundMoney(col.total_inr);
   const { status, pending_inr, received_inr } = computeStatus(total, received);
 
-  await conn.execute(
-    `UPDATE fitness_collections SET received_inr = ?, pending_inr = ?, status = ?, updated_at = NOW() WHERE id = ?`,
-    [received_inr, pending_inr, status, collectionId]
-  );
+  const updated = await tx.fitness_collections.update({
+    where: { id: collectionId },
+    data: {
+      received_inr: new Prisma.Decimal(received_inr),
+      pending_inr: new Prisma.Decimal(pending_inr),
+      status,
+      updated_at: new Date()
+    }
+  });
 
-  const [[updated]] = await conn.execute("SELECT * FROM fitness_collections WHERE id = ?", [
-    collectionId,
-  ]);
   return updated;
 }
 
 async function getCollectionWithDetails(id) {
-  const receiptSubquery = `(SELECT i.id FROM invoices i
-     INNER JOIN fitness_collection_payments p ON p.id = i.source_id
-     WHERE i.source_type = 'collection_payment' AND p.collection_id = c.id AND i.is_deleted = 0
-     ORDER BY i.id DESC LIMIT 1)`;
+  const col = await prisma.fitness_collections.findUnique({
+    where: { id },
+  });
+  if (!col) return null;
 
-  const [rows] = await pool.execute(
-    `SELECT c.*,
-            fc.full_name AS client_name,
-            eb.full_name AS external_buyer_name,
-            TRIM(CONCAT_WS(' ', u.first_name, u.last_name)) AS assignee_name,
-            ${receiptSubquery} AS latest_receipt_invoice_id
-     FROM fitness_collections c
-     LEFT JOIN fitness_clients fc ON fc.client_id = c.client_id
-     LEFT JOIN fitness_external_buyers eb ON eb.id = c.external_buyer_id
-     LEFT JOIN users u ON u.id = c.assigned_to
-     WHERE c.id = ?`,
-    [id]
-  );
-  if (!rows.length) return null;
-  const [payments] = await pool.execute(
-    `SELECT p.*, TRIM(CONCAT_WS(' ', u.first_name, u.last_name)) AS created_by_name
-     FROM fitness_collection_payments p
-     LEFT JOIN users u ON u.id = p.created_by
-     WHERE p.collection_id = ?
-     ORDER BY p.paid_at DESC, p.id DESC`,
-    [id]
-  );
-  return { ...rows[0], payments };
+  let client_name = null;
+  if (col.client_id) {
+    const client = await prisma.fitness_clients.findFirst({
+      where: { client_id: col.client_id },
+      select: { full_name: true }
+    });
+    client_name = client?.full_name || null;
+  }
+
+  let external_buyer_name = null;
+  if (col.external_buyer_id) {
+    const ext = await prisma.fitness_external_buyers.findUnique({
+      where: { id: col.external_buyer_id },
+      select: { full_name: true }
+    });
+    external_buyer_name = ext?.full_name || null;
+  }
+
+  let assignee_name = null;
+  if (col.assigned_to) {
+    const user = await prisma.users.findUnique({
+      where: { id: col.assigned_to },
+      select: { first_name: true, last_name: true }
+    });
+    if (user) {
+      assignee_name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || null;
+    }
+  }
+
+  const payments = await prisma.fitness_collection_payments.findMany({
+    where: { collection_id: id },
+    orderBy: [
+      { paid_at: "desc" },
+      { id: "desc" }
+    ]
+  });
+
+  const paymentCreatorIds = [...new Set(payments.map(p => p.created_by).filter(Boolean))];
+  const paymentCreators = await prisma.users.findMany({
+    where: { id: { in: paymentCreatorIds } },
+    select: { id: true, first_name: true, last_name: true }
+  });
+  const creatorNameMap = {};
+  for (const u of paymentCreators) {
+    creatorNameMap[u.id] = [u.first_name, u.last_name].filter(Boolean).join(" ").trim() || null;
+  }
+
+  const paymentsWithCreator = payments.map(p => ({
+    ...p,
+    created_by_name: creatorNameMap[p.created_by] || null
+  }));
+
+  let latest_receipt_invoice_id = null;
+  if (payments.length > 0) {
+    const latestInvoice = await prisma.invoices.findFirst({
+      where: {
+        source_type: "collection_payment",
+        source_id: { in: payments.map(p => p.id) },
+        is_deleted: false
+      },
+      orderBy: { id: "desc" },
+      select: { id: true }
+    });
+    latest_receipt_invoice_id = latestInvoice?.id || null;
+  }
+
+  const result = {
+    ...col,
+    client_name,
+    external_buyer_name,
+    assignee_name,
+    latest_receipt_invoice_id,
+    payments: paymentsWithCreator
+  };
+  return formatCollection(result);
 }
 
-function buildListWhere(req, params) {
-  const clauses = ["1=1"];
-  const role = req.user?.role;
+async function listCollections(req) {
   const userId = Number(req.user?.id);
+  const role = req.user?.role;
+  const limit = Math.min(200, Math.max(1, bindInt(req.query?.limit, 50)));
+  const offset = Math.max(0, bindInt(req.query?.offset, 0));
+
+  const clauses = ["1=1"];
+  const params = [];
 
   if (!canViewAll(role)) {
     const uid = bindInt(userId, 0);
@@ -347,22 +358,14 @@ function buildListWhere(req, params) {
     params.push(like, like, like, like);
   }
 
-  return { where: clauses.join(" AND "), params };
-}
-
-async function listCollections(req) {
-  const limit = Math.min(200, Math.max(1, bindInt(req.query?.limit, 50)));
-  const offset = Math.max(0, bindInt(req.query?.offset, 0));
-  const { where, params } = buildListWhere(req, []);
-  const pageSql = sqlLimitOffset(limit, offset);
-
+  const whereSql = clauses.join(" AND ");
   const receiptSubquery = `(SELECT i.id FROM invoices i
      INNER JOIN fitness_collection_payments p ON p.id = i.source_id
      WHERE i.source_type = 'collection_payment' AND p.collection_id = c.id AND i.is_deleted = 0
      ORDER BY i.id DESC LIMIT 1)`;
 
-  const [rows] = await pool.execute(
-    `SELECT c.*,
+  const querySql = `
+     SELECT c.*,
             fc.full_name AS client_name,
             eb.full_name AS external_buyer_name,
             TRIM(CONCAT_WS(' ', u.first_name, u.last_name)) AS assignee_name,
@@ -371,48 +374,63 @@ async function listCollections(req) {
      LEFT JOIN fitness_clients fc ON fc.client_id = c.client_id
      LEFT JOIN fitness_external_buyers eb ON eb.id = c.external_buyer_id
      LEFT JOIN users u ON u.id = c.assigned_to
-     WHERE ${where}
+     WHERE ${whereSql}
      ORDER BY
        CASE WHEN c.status IN ('open','partial') AND c.next_followup_date IS NOT NULL AND c.next_followup_date < CURDATE() THEN 0
             WHEN c.status IN ('open','partial') AND c.next_followup_date = CURDATE() THEN 1
             ELSE 2 END,
        c.next_followup_date ASC,
        c.updated_at DESC
-     ${pageSql}`,
-    params
-  );
+     LIMIT ? OFFSET ?
+  `;
 
-  const [countRows] = await pool.execute(
-    `SELECT COUNT(*) AS total FROM fitness_collections c
+  const rows = await prisma.$queryRawUnsafe(querySql, ...params, limit, offset);
+
+  const countSql = `
+     SELECT COUNT(*) AS total FROM fitness_collections c
      LEFT JOIN fitness_clients fc ON fc.client_id = c.client_id
      LEFT JOIN fitness_external_buyers eb ON eb.id = c.external_buyer_id
-     WHERE ${where}`,
-    params
-  );
+     WHERE ${whereSql}
+  `;
+  const countRows = await prisma.$queryRawUnsafe(countSql, ...params);
+  const total = Number(countRows[0]?.total || 0);
 
-  return { rows, total: countRows[0]?.total || 0, limit, offset };
+  const formattedRows = rows.map(formatCollection);
+
+  return { rows: formattedRows, total, limit, offset };
 }
 
 async function getSummary(req) {
   const userId = Number(req.user?.id);
   const role = req.user?.role;
-  const scope =
-    canViewAll(role) ? "" : "AND (c.assigned_to = ? OR c.created_by = ?)";
+  const scope = canViewAll(role) ? "" : "AND (c.assigned_to = ? OR c.created_by = ?)";
   const scopeParams = canViewAll(role) ? [] : [userId, userId];
   const today = new Date().toISOString().slice(0, 10);
 
-  const [rows] = await pool.execute(
-    `SELECT
-       SUM(CASE WHEN c.status IN ('open','partial') THEN 1 ELSE 0 END) AS open_count,
-       SUM(CASE WHEN c.status IN ('open','partial') AND c.next_followup_date = ? THEN 1 ELSE 0 END) AS due_today,
-       SUM(CASE WHEN c.status IN ('open','partial') AND c.next_followup_date < ? THEN 1 ELSE 0 END) AS overdue,
-       SUM(CASE WHEN c.status IN ('open','partial') THEN c.pending_inr ELSE 0 END) AS total_pending_inr
-     FROM fitness_collections c
-     WHERE 1=1 ${scope}`,
-    [today, today, ...scopeParams]
-  );
-
+  let rows;
+  if (canViewAll(role)) {
+    rows = await prisma.$queryRaw`
+      SELECT
+        SUM(CASE WHEN c.status IN ('open','partial') THEN 1 ELSE 0 END) AS open_count,
+        SUM(CASE WHEN c.status IN ('open','partial') AND c.next_followup_date = ${today} THEN 1 ELSE 0 END) AS due_today,
+        SUM(CASE WHEN c.status IN ('open','partial') AND c.next_followup_date < ${today} THEN 1 ELSE 0 END) AS overdue,
+        SUM(CASE WHEN c.status IN ('open','partial') THEN c.pending_inr ELSE 0 END) AS total_pending_inr
+      FROM fitness_collections c
+      WHERE 1=1
+    `;
+  } else {
+    rows = await prisma.$queryRaw`
+      SELECT
+        SUM(CASE WHEN c.status IN ('open','partial') THEN 1 ELSE 0 END) AS open_count,
+        SUM(CASE WHEN c.status IN ('open','partial') AND c.next_followup_date = ${today} THEN 1 ELSE 0 END) AS due_today,
+        SUM(CASE WHEN c.status IN ('open','partial') AND c.next_followup_date < ${today} THEN 1 ELSE 0 END) AS overdue,
+        SUM(CASE WHEN c.status IN ('open','partial') THEN c.pending_inr ELSE 0 END) AS total_pending_inr
+      FROM fitness_collections c
+      WHERE (c.assigned_to = ${userId} OR c.created_by = ${userId})
+    `;
+  }
   const r = rows[0] || {};
+
   return {
     open_count: Number(r.open_count) || 0,
     due_today: Number(r.due_today) || 0,
@@ -442,11 +460,11 @@ async function createCollectionsFromVisit(req) {
   let finalExtId = null;
 
   if (finalClientId) {
-    const [c] = await pool.execute(
-      "SELECT client_id FROM fitness_clients WHERE client_id = ?",
-      [finalClientId]
-    );
-    if (!c.length) throw new Error("Client not found");
+    const c = await prisma.fitness_clients.findFirst({
+      where: { client_id: finalClientId },
+      select: { client_id: true }
+    });
+    if (!c) throw new Error("Client not found");
   } else if (external_buyer) {
     finalExtId = await resolveExternalBuyer(external_buyer);
     if (!finalExtId) throw new Error("external_buyer.full_name is required for walk-in");
@@ -456,18 +474,14 @@ async function createCollectionsFromVisit(req) {
 
   const assignee = Number(assigned_to) || userId;
   const payMode = VALID_PAY_MODES.has(pay_mode) ? pay_mode : "GPay";
-  const txDate = toSqlDate(transaction_date);
+  const txDate = toPrismaDate(transaction_date) || new Date();
 
-  const createdIds = [];
   const notifyQueue = [];
-  const conn = await pool.getConnection();
-  try {
-    await conn.beginTransaction();
 
+  const createdIds = await prisma.$transaction(async (tx) => {
+    const ids = [];
     for (const line of lines) {
-      const collectionType = VALID_TYPES.has(line.collection_type)
-        ? line.collection_type
-        : "other";
+      const collectionType = VALID_TYPES.has(line.collection_type) ? line.collection_type : "other";
       const title = String(line.title || line.product_name || "Collection").trim();
       if (!title) throw new Error("Each line requires a title");
 
@@ -478,111 +492,103 @@ async function createCollectionsFromVisit(req) {
 
       const { status, pending_inr, received_inr } = computeStatus(total, paidNow);
       let followup = next_followup_date || line.next_followup_date || null;
-      if (followup) followup = toSqlDate(followup);
+      if (followup) followup = toPrismaDate(followup);
       if (pending_inr > 0 && !followup) {
         throw new Error("next_followup_date is required when balance remains");
       }
       if (pending_inr <= 0) followup = null;
 
-      const [ins] = await conn.execute(
-        `INSERT INTO fitness_collections
-          (client_id, external_buyer_id, collection_type, title, total_inr, received_inr, pending_inr,
-           next_followup_date, assigned_to, status, notes, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          finalClientId,
-          finalExtId,
-          collectionType,
+      const collection = await tx.fitness_collections.create({
+        data: {
+          client_id: finalClientId,
+          external_buyer_id: finalExtId,
+          collection_type: collectionType,
           title,
-          total,
-          received_inr,
-          pending_inr,
-          followup,
-          assignee,
+          total_inr: new Prisma.Decimal(total),
+          received_inr: new Prisma.Decimal(received_inr),
+          pending_inr: new Prisma.Decimal(pending_inr),
+          next_followup_date: followup,
+          assigned_to: assignee,
           status,
-          notes || line.notes || null,
-          userId,
-        ]
-      );
-      const collectionId = ins.insertId;
+          notes: notes || line.notes || null,
+          created_by: userId,
+        }
+      });
+      const collectionId = collection.id;
 
       if (paidNow > 0) {
-        await conn.execute(
-          `INSERT INTO fitness_collection_payments (collection_id, amount_inr, pay_mode, paid_at, notes, created_by)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-          [collectionId, paidNow, payMode, txDate, "Initial payment", userId]
-        );
+        await tx.fitness_collection_payments.create({
+          data: {
+            collection_id: collectionId,
+            amount_inr: new Prisma.Decimal(paidNow),
+            pay_mode: payMode,
+            paid_at: txDate,
+            notes: "Initial payment",
+            created_by: userId
+          }
+        });
       }
 
       let linkedSupplementId = null;
       if (collectionType === "supplement" && finalClientId) {
-        const [sup] = await conn.execute(
-          `INSERT INTO fitness_supplements (client_id, product_name, prescribed_date, quantity, mrp_inr, rate_inr, notes)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [
-            finalClientId,
-            title,
-            txDate,
-            line.quantity || 1,
-            line.mrp_inr ?? total,
-            line.rate_inr ?? total,
-            line.notes || notes || null,
-          ]
-        );
-        linkedSupplementId = sup.insertId;
-        await conn.execute(
-          "UPDATE fitness_collections SET linked_supplement_id = ? WHERE id = ?",
-          [linkedSupplementId, collectionId]
-        );
+        const sup = await tx.fitness_supplements.create({
+          data: {
+            client_id: finalClientId,
+            product_name: title,
+            prescribed_date: txDate,
+            quantity: line.quantity || 1,
+            mrp_inr: new Prisma.Decimal(line.mrp_inr ?? total),
+            rate_inr: new Prisma.Decimal(line.rate_inr ?? total),
+            notes: line.notes || notes || null
+          }
+        });
+        linkedSupplementId = sup.id;
+        await tx.fitness_collections.update({
+          where: { id: collectionId },
+          data: { linked_supplement_id: linkedSupplementId }
+        });
       }
 
-      const [[colRow]] = await conn.execute(
-        "SELECT * FROM fitness_collections WHERE id = ?",
-        [collectionId]
-      );
-      await syncLinkedTransaction(conn, colRow, payMode, txDate);
-      createdIds.push(collectionId);
+      const colRow = await tx.fitness_collections.findUnique({
+        where: { id: collectionId }
+      });
+      await syncLinkedTransaction(tx, colRow, payMode, txDate);
+      ids.push(collectionId);
       notifyQueue.push({ collectionId, pending_inr });
     }
+    return ids;
+  });
 
-    await conn.commit();
-
-    const created = [];
-    for (const item of notifyQueue) {
-      const full = await getCollectionWithDetails(item.collectionId);
-      if (!full) continue;
-      created.push(full);
-      if (item.pending_inr > 0) {
-        await notifyCollectionCreated({ collection: full, actorUserId: userId });
-      } else {
-        await notifyCollectionPaid({ collection: full, actorUserId: userId });
-      }
+  const createdDetails = [];
+  for (const item of notifyQueue) {
+    const full = await getCollectionWithDetails(item.collectionId);
+    if (!full) continue;
+    createdDetails.push(full);
+    if (item.pending_inr > 0) {
+      await notifyCollectionCreated({ collection: full, actorUserId: userId });
+    } else {
+      await notifyCollectionPaid({ collection: full, actorUserId: userId });
     }
-
-    emitFitnessChanged();
-    emitCollectionsChanged({ action: "create", count: created.length });
-
-    for (const full of created) {
-      const payments = Array.isArray(full.payments) ? full.payments : [];
-      let receiptInvoiceId = null;
-      for (const p of payments) {
-        try {
-          const receipt = await createReceiptForCollectionPayment(p.id, userId);
-          if (receipt?.id) receiptInvoiceId = receipt.id;
-        } catch (receiptErr) {
-          console.warn("payment receipt (create visit):", receiptErr.message);
-        }
-      }
-      full.receipt_invoice_id = receiptInvoiceId;
-    }
-
-    return created;
-  } catch (e) {
-    await conn.rollback();
-    throw e;
-  } finally {
-    conn.release();
   }
+
+  emitFitnessChanged();
+  emitCollectionsChanged({ action: "create", count: createdDetails.length });
+
+  for (const full of createdDetails) {
+    const payments = Array.isArray(full.payments) ? full.payments : [];
+    let receiptInvoiceId = null;
+    for (const p of payments) {
+      try {
+        const receipt = await createReceiptForCollectionPayment(p.id, userId);
+        if (receipt?.id) receiptInvoiceId = receipt.id;
+      } catch (receiptErr) {
+        console.warn("payment receipt (create visit):", receiptErr.message);
+      }
+    }
+    full.receipt_invoice_id = receiptInvoiceId;
+  }
+
+  return createdDetails;
 }
 
 async function addPayment(req, collectionId, body) {
@@ -591,15 +597,13 @@ async function addPayment(req, collectionId, body) {
   if (amount <= 0) throw new Error("amount_inr must be > 0");
 
   const payMode = VALID_PAY_MODES.has(body.pay_mode) ? body.pay_mode : "GPay";
-  const paidAt = toSqlDate(body.paid_at);
+  const paidAt = toPrismaDate(body.paid_at) || new Date();
 
-  const conn = await pool.getConnection();
-  try {
-    await conn.beginTransaction();
-    const [[col]] = await conn.execute(
-      "SELECT * FROM fitness_collections WHERE id = ? FOR UPDATE",
-      [collectionId]
-    );
+  let newPaymentId = null;
+  const updated = await prisma.$transaction(async (tx) => {
+    const col = await tx.fitness_collections.findUnique({
+      where: { id: collectionId }
+    });
     if (!col) throw new Error("Collection not found");
     if (col.status === "cancelled") throw new Error("Collection is cancelled");
     if (col.status === "paid") throw new Error("Collection is already fully paid");
@@ -609,99 +613,88 @@ async function addPayment(req, collectionId, body) {
       throw new Error(`Payment exceeds remaining balance (₹${remaining})`);
     }
 
-    const [payIns] = await conn.execute(
-      `INSERT INTO fitness_collection_payments (collection_id, amount_inr, pay_mode, paid_at, notes, created_by)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [collectionId, amount, payMode, paidAt, body.notes || null, userId]
-    );
-    const newPaymentId = payIns.insertId;
+    const payIns = await tx.fitness_collection_payments.create({
+      data: {
+        collection_id: collectionId,
+        amount_inr: new Prisma.Decimal(amount),
+        pay_mode: payMode,
+        paid_at: paidAt,
+        notes: body.notes || null,
+        created_by: userId
+      }
+    });
+    newPaymentId = payIns.id;
 
-    const updated = await recalcCollection(conn, collectionId);
-    await syncLinkedTransaction(conn, updated, payMode, paidAt);
+    const upCol = await recalcCollection(tx, collectionId);
+    await syncLinkedTransaction(tx, upCol, payMode, paidAt);
 
-    if (updated.status === "paid") {
-      updated.next_followup_date = null;
-      await conn.execute(
-        "UPDATE fitness_collections SET next_followup_date = NULL WHERE id = ?",
-        [collectionId]
-      );
-      await notifyCollectionPaid({ collection: updated, actorUserId: userId });
+    if (upCol.status === "paid") {
+      await tx.fitness_collections.update({
+        where: { id: collectionId },
+        data: { next_followup_date: null }
+      });
+      upCol.next_followup_date = null;
+      await notifyCollectionPaid({ collection: upCol, actorUserId: userId });
     }
 
-    await conn.commit();
-    emitFitnessChanged();
-    emitCollectionsChanged({ action: "payment", id: collectionId });
+    return upCol;
+  });
 
-    let receipt_invoice_id = null;
-    try {
-      const receipt = await createReceiptForCollectionPayment(newPaymentId, userId);
-      receipt_invoice_id = receipt?.id || null;
-    } catch (receiptErr) {
-      console.warn("payment receipt (add payment):", receiptErr.message);
-    }
+  emitFitnessChanged();
+  emitCollectionsChanged({ action: "payment", id: collectionId });
 
-    const details = await getCollectionWithDetails(collectionId);
-    return { ...details, receipt_invoice_id };
-  } catch (e) {
-    await conn.rollback();
-    throw e;
-  } finally {
-    conn.release();
+  let receipt_invoice_id = null;
+  try {
+    const receipt = await createReceiptForCollectionPayment(newPaymentId, userId);
+    receipt_invoice_id = receipt?.id || null;
+  } catch (receiptErr) {
+    console.warn("payment receipt (add payment):", receiptErr.message);
   }
+
+  const details = await getCollectionWithDetails(collectionId);
+  return { ...details, receipt_invoice_id };
 }
 
 async function updateCollection(req, id, body) {
   const userId = Number(req.user?.id);
-  const [[existing]] = await pool.execute(
-    "SELECT * FROM fitness_collections WHERE id = ?",
-    [id]
-  );
+  const existing = await prisma.fitness_collections.findUnique({
+    where: { id }
+  });
   if (!existing) return null;
 
-  const fields = [];
-  const params = [];
-
+  const data = {};
   if (body.next_followup_date !== undefined) {
-    fields.push("next_followup_date = ?");
-    params.push(
-      body.next_followup_date ? toSqlDate(body.next_followup_date) : null
-    );
+    data.next_followup_date = body.next_followup_date ? toPrismaDate(body.next_followup_date) : null;
   }
   if (body.assigned_to !== undefined) {
-    fields.push("assigned_to = ?");
-    params.push(Number(body.assigned_to) || userId);
+    data.assigned_to = Number(body.assigned_to) || userId;
   }
   if (body.notes !== undefined) {
-    fields.push("notes = ?");
-    params.push(body.notes);
+    data.notes = body.notes;
   }
   if (body.status === "cancelled") {
-    fields.push("status = 'cancelled'");
+    data.status = "cancelled";
   }
 
-  if (!fields.length) return getCollectionWithDetails(id);
+  if (Object.keys(data).length > 0) {
+    data.updated_at = new Date();
+    await prisma.fitness_collections.update({
+      where: { id },
+      data
+    });
 
-  params.push(id);
-  await pool.execute(
-    `UPDATE fitness_collections SET ${fields.join(", ")}, updated_at = NOW() WHERE id = ?`,
-    params
-  );
-
-  if (body.next_followup_date !== undefined) {
-    const [[col]] = await pool.execute(
-      "SELECT * FROM fitness_collections WHERE id = ?",
-      [id]
-    );
-    if (col?.linked_transaction_id && (await hasPaymentDueDateColumn())) {
-      const due =
-        col.pending_inr > 0 && col.next_followup_date
-          ? toSqlDate(col.next_followup_date)
-          : null;
-      await pool.execute(
-        "UPDATE fitness_transactions SET payment_due_date = ? WHERE id = ?",
-        [due, col.linked_transaction_id]
-      );
-      emitFitnessChanged();
+    if (body.next_followup_date !== undefined) {
+      const col = await prisma.fitness_collections.findUnique({
+        where: { id }
+      });
+      if (col?.linked_transaction_id) {
+        const due = col.pending_inr > 0 && col.next_followup_date ? toPrismaDate(col.next_followup_date) : null;
+        await prisma.fitness_transactions.update({
+          where: { id: col.linked_transaction_id },
+          data: { payment_due_date: due }
+        });
+        emitFitnessChanged();
+      }
     }
   }
 
@@ -711,81 +704,107 @@ async function updateCollection(req, id, body) {
 
 async function markPaid(req, id, body) {
   const userId = Number(req.user?.id);
-  const conn = await pool.getConnection();
-  try {
-    await conn.beginTransaction();
-    const [[col]] = await conn.execute(
-      "SELECT * FROM fitness_collections WHERE id = ? FOR UPDATE",
-      [id]
-    );
+  const updated = await prisma.$transaction(async (tx) => {
+    const col = await tx.fitness_collections.findUnique({
+      where: { id }
+    });
     if (!col) throw new Error("Collection not found");
 
     const remaining = roundMoney(col.pending_inr);
     if (remaining > 0) {
       const payMode = VALID_PAY_MODES.has(body?.pay_mode) ? body.pay_mode : "GPay";
-      const paidAt = new Date().toISOString().slice(0, 10);
-      await conn.execute(
-        `INSERT INTO fitness_collection_payments (collection_id, amount_inr, pay_mode, paid_at, notes, created_by)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [id, remaining, payMode, paidAt, body?.notes || "Marked paid", userId]
-      );
+      const paidAt = new Date();
+      await tx.fitness_collection_payments.create({
+        data: {
+          collection_id: id,
+          amount_inr: new Prisma.Decimal(remaining),
+          pay_mode: payMode,
+          paid_at: paidAt,
+          notes: body?.notes || "Marked paid",
+          created_by: userId
+        }
+      });
     }
 
-    await conn.execute(
-      `UPDATE fitness_collections SET status = 'paid', pending_inr = 0, received_inr = total_inr, next_followup_date = NULL WHERE id = ?`,
-      [id]
-    );
-    const [[updated]] = await conn.execute("SELECT * FROM fitness_collections WHERE id = ?", [id]);
-    await syncLinkedTransaction(conn, updated, body?.pay_mode || "GPay", toSqlDate());
-    await conn.commit();
+    const up = await tx.fitness_collections.update({
+      where: { id },
+      data: {
+        status: "paid",
+        pending_inr: 0,
+        received_inr: col.total_inr,
+        next_followup_date: null,
+        updated_at: new Date()
+      }
+    });
 
-    await notifyCollectionPaid({ collection: updated, actorUserId: userId });
-    emitFitnessChanged();
-    emitCollectionsChanged({ action: "mark_paid", id });
+    await syncLinkedTransaction(tx, up, body?.pay_mode || "GPay", new Date());
+    await notifyCollectionPaid({ collection: up, actorUserId: userId });
 
-    let receipt_invoice_id = null;
-    try {
-      const receipt = await createReceiptForLatestCollectionPayment(id, userId);
-      receipt_invoice_id = receipt?.id || null;
-    } catch (receiptErr) {
-      console.warn("payment receipt (mark paid):", receiptErr.message);
-    }
+    return up;
+  });
 
-    const details = await getCollectionWithDetails(id);
-    return { ...details, receipt_invoice_id };
-  } catch (e) {
-    await conn.rollback();
-    throw e;
-  } finally {
-    conn.release();
+  emitFitnessChanged();
+  emitCollectionsChanged({ action: "mark_paid", id });
+
+  let receipt_invoice_id = null;
+  try {
+    const receipt = await createReceiptForLatestCollectionPayment(id, userId);
+    receipt_invoice_id = receipt?.id || null;
+  } catch (receiptErr) {
+    console.warn("payment receipt (mark paid):", receiptErr.message);
   }
+
+  const details = await getCollectionWithDetails(id);
+  return { ...details, receipt_invoice_id };
 }
 
 async function fetchCollectionFollowups(date, userId, role) {
-  const scope = canViewAll(role)
-    ? ""
-    : "AND (c.assigned_to = ? OR c.created_by = ?)";
+  const scope = canViewAll(role) ? "" : "AND (c.assigned_to = ? OR c.created_by = ?)";
   const scopeParams = canViewAll(role) ? [] : [userId, userId];
+  const formattedDate = toSqlDate(date);
 
-  const [rows] = await pool.execute(
-    `SELECT c.id, c.title, c.next_followup_date AS due_date, c.pending_inr, c.collection_type,
-            c.client_id, c.status, c.id AS source_id, 'collection_followup' AS source_type,
-            'high' AS priority,
-            COALESCE(fc.full_name, eb.full_name) AS client_name,
-            CASE WHEN c.next_followup_date < ? THEN 1 ELSE 0 END AS is_overdue
-     FROM fitness_collections c
-     LEFT JOIN fitness_clients fc ON fc.client_id = c.client_id
-     LEFT JOIN fitness_external_buyers eb ON eb.id = c.external_buyer_id
-     WHERE c.status IN ('open','partial')
-       AND c.pending_inr > 0
-       AND c.next_followup_date IS NOT NULL
-       AND c.next_followup_date <= ?
-       ${scope}
-     ORDER BY c.next_followup_date ASC
-     LIMIT 200`,
-    [date, date, ...scopeParams]
-  );
-  return rows.map((r) => ({ ...r, status: "pending" }));
+  let rows;
+  if (canViewAll(role)) {
+    rows = await prisma.$queryRaw`
+       SELECT c.id, c.title, c.next_followup_date AS due_date, c.pending_inr, c.collection_type,
+              c.client_id, c.status, c.id AS source_id, 'collection_followup' AS source_type,
+              'high' AS priority,
+              COALESCE(fc.full_name, eb.full_name) AS client_name,
+              CASE WHEN c.next_followup_date < ${formattedDate} THEN 1 ELSE 0 END AS is_overdue
+       FROM fitness_collections c
+       LEFT JOIN fitness_clients fc ON fc.client_id = c.client_id
+       LEFT JOIN fitness_external_buyers eb ON eb.id = c.external_buyer_id
+       WHERE c.status IN ('open','partial')
+         AND c.pending_inr > 0
+         AND c.next_followup_date IS NOT NULL
+         AND c.next_followup_date <= ${formattedDate}
+       ORDER BY c.next_followup_date ASC
+       LIMIT 200
+    `;
+  } else {
+    rows = await prisma.$queryRaw`
+       SELECT c.id, c.title, c.next_followup_date AS due_date, c.pending_inr, c.collection_type,
+              c.client_id, c.status, c.id AS source_id, 'collection_followup' AS source_type,
+              'high' AS priority,
+              COALESCE(fc.full_name, eb.full_name) AS client_name,
+              CASE WHEN c.next_followup_date < ${formattedDate} THEN 1 ELSE 0 END AS is_overdue
+       FROM fitness_collections c
+       LEFT JOIN fitness_clients fc ON fc.client_id = c.client_id
+       LEFT JOIN fitness_external_buyers eb ON eb.id = c.external_buyer_id
+       WHERE c.status IN ('open','partial')
+         AND c.pending_inr > 0
+         AND c.next_followup_date IS NOT NULL
+         AND c.next_followup_date <= ${formattedDate}
+         AND (c.assigned_to = ${userId} OR c.created_by = ${userId})
+       ORDER BY c.next_followup_date ASC
+       LIMIT 200
+    `;
+  }
+  return rows.map((r) => ({
+    ...r,
+    pending_inr: r.pending_inr ? r.pending_inr.toString() : "0.00",
+    status: "pending"
+  }));
 }
 
 async function markCollectionFollowupDone(id, userId, body) {
@@ -801,25 +820,31 @@ async function markCollectionFollowupDone(id, userId, body) {
     newDate = d.toISOString().slice(0, 10);
   }
 
-  const [result] = await pool.execute(
-    `UPDATE fitness_collections SET next_followup_date = ?, updated_at = NOW()
-     WHERE id = ? AND status IN ('open','partial')`,
-    [newDate, id]
-  );
-  if (result.affectedRows > 0) {
-    const [[col]] = await pool.execute(
-      "SELECT linked_transaction_id, pending_inr FROM fitness_collections WHERE id = ?",
-      [id]
-    );
-    if (col?.linked_transaction_id && (await hasPaymentDueDateColumn())) {
-      const due = col.pending_inr > 0 ? newDate : null;
-      await pool.execute(
-        "UPDATE fitness_transactions SET payment_due_date = ? WHERE id = ?",
-        [due, col.linked_transaction_id]
-      );
+  const result = await prisma.fitness_collections.updateMany({
+    where: {
+      id,
+      status: { in: ["open", "partial"] }
+    },
+    data: {
+      next_followup_date: toPrismaDate(newDate),
+      updated_at: new Date()
+    }
+  });
+
+  if (result.count > 0) {
+    const col = await prisma.fitness_collections.findUnique({
+      where: { id },
+      select: { linked_transaction_id: true, pending_inr: true }
+    });
+    if (col?.linked_transaction_id) {
+      const due = col.pending_inr > 0 ? toPrismaDate(newDate) : null;
+      await prisma.fitness_transactions.update({
+        where: { id: col.linked_transaction_id },
+        data: { payment_due_date: due }
+      });
     }
   }
-  return result.affectedRows > 0;
+  return result.count > 0;
 }
 
 module.exports = {

@@ -1,14 +1,11 @@
-const prisma = require("../config/prisma");
+const { pool } = require("../config/database");
 const { createUserNotification } = require("./notificationService");
 
 async function getAdminUserIds() {
-  const users = await prisma.users.findMany({
-    where: {
-      role: "admin"
-    },
-    select: { id: true }
-  });
-  return users.map((u) => Number(u.id)).filter((id) => id > 0);
+  const [rows] = await pool.execute(
+    `SELECT id FROM users WHERE LOWER(role) = 'admin' AND id IS NOT NULL`
+  );
+  return rows.map((r) => Number(r.id)).filter((id) => id > 0);
 }
 
 async function notifyUsers(userIds, payload) {
@@ -68,10 +65,9 @@ async function sweepCollectionFollowupNotifications(userId) {
   if (!uid) return;
 
   const today = new Date().toISOString().slice(0, 10);
-  const todayDate = new Date(today);
 
-  const rows = await prisma.$queryRaw`
-     SELECT c.id, c.title, c.pending_inr, c.next_followup_date,
+  const [rows] = await pool.execute(
+    `SELECT c.id, c.title, c.pending_inr, c.next_followup_date,
             COALESCE(fc.full_name, eb.full_name) AS client_name,
             c.assigned_to
      FROM fitness_collections c
@@ -80,20 +76,16 @@ async function sweepCollectionFollowupNotifications(userId) {
      WHERE c.status IN ('open','partial')
        AND c.pending_inr > 0
        AND c.next_followup_date IS NOT NULL
-       AND c.next_followup_date <= ${today}
-       AND (c.assigned_to = ${uid} OR c.created_by = ${uid})
-  `;
+       AND c.next_followup_date <= ?
+       AND (c.assigned_to = ? OR c.created_by = ?)`,
+    [today, uid, uid]
+  );
+
   const admins = await getAdminUserIds();
   const isAdmin = admins.includes(uid);
 
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const todayEnd = new Date();
-  todayEnd.setHours(23, 59, 59, 999);
-
   for (const row of rows) {
-    const nextFollowup = row.next_followup_date ? new Date(row.next_followup_date) : null;
-    const isOverdue = nextFollowup && nextFollowup < todayDate;
+    const isOverdue = String(row.next_followup_date) < today;
     const title = isOverdue
       ? `Overdue payment: ${row.client_name || "Client"}`
       : `Payment follow-up today: ${row.client_name || "Client"}`;
@@ -104,21 +96,15 @@ async function sweepCollectionFollowupNotifications(userId) {
     admins.forEach((id) => notifyIds.add(id));
 
     for (const nid of notifyIds) {
-      const exists = await prisma.notifications.findFirst({
-        where: {
-          user_id: nid,
-          entity_type: "collection_followup",
-          entity_id: BigInt(row.id),
-          is_read: false,
-          created_at: {
-            gte: todayStart,
-            lte: todayEnd
-          }
-        },
-        select: { id: true }
-      });
+      const [existsRows] = await pool.execute(
+        `SELECT id FROM notifications
+         WHERE user_id = ? AND entity_type = 'collection_followup' AND entity_id = ?
+           AND DATE(created_at) = CURDATE() AND is_read = 0
+         LIMIT 1`,
+        [nid, row.id]
+      );
+      const exists = existsRows[0];
       if (exists) continue;
-
       await createUserNotification({
         userId: nid,
         entityType: "collection_followup",
