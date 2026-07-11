@@ -1,4 +1,4 @@
-const { pool } = require("../config/database");
+const prisma = require("../config/prisma");
 const { emitNotificationReadState } = require("../realtime/meetingsRealtime");
 
 function toLimit(v, fallback = 25, max = 100) {
@@ -14,30 +14,55 @@ async function getNotifications(req, res) {
 
     const limit = toLimit(req.query?.limit, 25, 100);
 
-    const [rows] = await pool.query(
-      `SELECT n.*, TRIM(CONCAT_WS(' ', u.first_name, u.last_name)) AS actor_name
-       FROM notifications n
-       LEFT JOIN users u ON u.id = n.actor_user_id
-       WHERE n.user_id = ?
-       ORDER BY n.created_at DESC, n.id DESC
-       LIMIT ?`,
-      [uid, limit]
-    );
+    const rows = await prisma.notifications.findMany({
+      where: {
+        user_id: uid,
+      },
+      include: {
+        users_notifications_actor_user_idTousers: {
+          select: {
+            first_name: true,
+            last_name: true,
+          },
+        },
+      },
+      orderBy: [
+        { created_at: "desc" },
+        { id: "desc" },
+      ],
+      take: limit,
+    });
 
-    const [[counts]] = await pool.query(
-      `SELECT
-          COUNT(*) AS total,
-          SUM(CASE WHEN is_read = 0 THEN 1 ELSE 0 END) AS unread
-       FROM notifications
-       WHERE user_id = ?`,
-      [uid]
-    );
+    const unread = await prisma.notifications.count({
+      where: {
+        user_id: uid,
+        is_read: false,
+      },
+    });
+
+    const total = await prisma.notifications.count({
+      where: {
+        user_id: uid,
+      },
+    });
+
+    const notifications = rows.map((n) => {
+      const actor = n.users_notifications_actor_user_idTousers;
+      const formatted = {
+        ...n,
+        id: Number(n.id),
+        entity_id: n.entity_id != null ? Number(n.entity_id) : null,
+        actor_name: actor ? [actor.first_name, actor.last_name].filter(Boolean).join(" ").trim() : "",
+      };
+      delete formatted.users_notifications_actor_user_idTousers;
+      return formatted;
+    });
 
     res.json({
       success: true,
-      notifications: rows,
-      unread: Number(counts?.unread) || 0,
-      total: Number(counts?.total) || 0,
+      notifications,
+      unread,
+      total,
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -49,15 +74,21 @@ async function markAllNotificationsRead(req, res) {
     const uid = Number(req.user?.id);
     if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
 
-    const [result] = await pool.query(
-      `UPDATE notifications SET is_read = 1, read_at = NOW() WHERE user_id = ? AND is_read = 0`,
-      [uid]
-    );
+    const { count } = await prisma.notifications.updateMany({
+      where: {
+        user_id: uid,
+        is_read: false,
+      },
+      data: {
+        is_read: true,
+        read_at: new Date(),
+      },
+    });
 
     emitNotificationReadState(uid, { unread: 0, readAll: true, cleared: true });
     res.json({
       success: true,
-      updated: Number(result?.affectedRows) || 0,
+      updated: count,
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

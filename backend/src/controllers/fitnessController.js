@@ -332,6 +332,18 @@ const CLIENT_LIST_SORTS = new Set([
   "tier_desc",
   "created",
   "created_asc",
+  "id_asc",
+  "id_desc",
+  "risk_asc",
+  "risk_desc",
+  "status_asc",
+  "status_desc",
+  "progress_asc",
+  "progress_desc",
+  "follow_up_asc",
+  "follow_up_desc",
+  "days_asc",
+  "days_desc",
 ]);
 
 function parseClientListYmd(raw) {
@@ -480,6 +492,18 @@ const CLIENT_SORT_LABELS = {
   tier_desc: "Tier high → low",
   created: "Joined — newest",
   created_asc: "Joined — oldest",
+  id_asc: "ID lowest first",
+  id_desc: "ID highest first",
+  risk_asc: "High risk first",
+  risk_desc: "Low risk first",
+  status_asc: "Status: Active first",
+  status_desc: "Status: Inactive/Hold first",
+  progress_asc: "Progress: Best first",
+  progress_desc: "Progress: Poor first",
+  follow_up_asc: "Follow-up: Overdue first",
+  follow_up_desc: "Follow-up: OK first",
+  days_asc: "Days remaining: Least first",
+  days_desc: "Days remaining: Most first",
 };
 
 function buildClientListOrder(sortRaw, isNextDueView) {
@@ -489,6 +513,22 @@ function buildClientListOrder(sortRaw, isNextDueView) {
   }
 
   switch (sort) {
+    case "id_asc":
+      return "ORDER BY client_id ASC";
+    case "id_desc":
+      return "ORDER BY client_id DESC";
+    case "status_asc":
+      return "ORDER BY status ASC, full_name ASC";
+    case "status_desc":
+      return "ORDER BY status DESC, full_name ASC";
+    case "progress_asc":
+      return "ORDER BY progress ASC, full_name ASC";
+    case "progress_desc":
+      return "ORDER BY progress DESC, full_name ASC";
+    case "days_asc":
+      return "ORDER BY (plan_expiry_date IS NULL), plan_expiry_date ASC, full_name ASC";
+    case "days_desc":
+      return "ORDER BY (plan_expiry_date IS NULL), plan_expiry_date DESC, full_name ASC";
     case "next_due":
       return "ORDER BY (next_due_date IS NULL), next_due_date ASC, full_name ASC";
     case "next_due_desc":

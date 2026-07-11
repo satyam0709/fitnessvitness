@@ -2,6 +2,8 @@
 
 Full-stack CRM web application: **Next.js** frontend, **Express** API, **MySQL**, **Clerk** authentication, subscriptions/orders, leads, tasks, reminders, meetings, notes, invoices, and an **admin** control panel.
 
+This is a single-tenant deployment for one dietitian client. Multi-tenant infrastructure (tenant_id, subscription/billing tables) exists from an earlier SaaS-oriented build but is not active. Tenant isolation testing is not applicable.
+
 ---
 
 ## Tech stack

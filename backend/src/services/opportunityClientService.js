@@ -1,88 +1,94 @@
-const { pool } = require("../config/database");
+const prisma = require("../config/prisma");
 const { generateClientId } = require("./fitnessComputedFields");
+const { tableExists } = require("../utils/schemaHelpers");
 
 const PRODUCT_TO_PLAN = {
-  membership_or_program: "3 Month Plan",
-  personal_training: "1 Month Plan",
-  nutrition_or_supplements: "1 Month Plan",
-  initial_consultation: "1 Month Plan",
-  follow_up: "1 Month Plan",
+  membership_or_program: "Month_3_Plan",
+  personal_training: "Month_1_Plan",
+  nutrition_or_supplements: "Month_1_Plan",
+  initial_consultation: "Month_1_Plan",
+  follow_up: "Month_1_Plan",
 };
 
 const LEAD_SOURCE_TO_CLIENT_SOURCE = {
-  walk_in: "Walk-in",
-  referral: "Referral - Existing Client",
+  walk_in: "Walk_in",
+  referral: "Referral___Existing_Client",
   social_media: "Instagram",
-  website: "Online / Website",
-  partner: "Corporate / Company",
+  website: "Online___Website",
+  partner: "Corporate___Company",
 };
 
 async function fitnessTableExists() {
-  const [rows] = await pool.execute(
-    `SELECT 1 FROM information_schema.TABLES
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fitness_clients' LIMIT 1`
-  );
-  return rows.length > 0;
+  return await tableExists("fitness_clients");
 }
 
 /**
  * Create an Active fitness client from a won opportunity.
  * @returns {{ client_id: string, row: object } | null}
  */
-async function createClientFromOpportunity(executor, opportunity, userId) {
+async function createClientFromOpportunity(txOrPrisma, opportunity, userId) {
   if (!(await fitnessTableExists())) return null;
 
-  const db = executor || pool;
+  const client = txOrPrisma || prisma;
   const title = String(opportunity.title || "").trim() || "New client";
   const phone = opportunity.phone ? String(opportunity.phone).trim().slice(0, 20) : null;
   const visitPurpose = opportunity.visit_purpose ? String(opportunity.visit_purpose).trim() : null;
   const productKey = String(opportunity.product_category || "").toLowerCase();
-  const planType = PRODUCT_TO_PLAN[productKey] || "1 Month Plan";
+  const planType = PRODUCT_TO_PLAN[productKey] || "Month_1_Plan";
   const leadSource = String(opportunity.lead_source || "walk_in").toLowerCase();
-  const source = LEAD_SOURCE_TO_CLIENT_SOURCE[leadSource] || "Walk-in";
+  const source = LEAD_SOURCE_TO_CLIENT_SOURCE[leadSource] || "Walk_in";
   const healthGoal = visitPurpose || opportunity.notes || null;
 
-  const [[{ count }]] = await db.execute("SELECT COUNT(*) AS count FROM fitness_clients");
+  const count = await client.fitness_clients.count();
   const clientId = generateClientId(Number(count) || 0);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Date();
 
-  const [result] = await db.execute(
-    `INSERT INTO fitness_clients (
-      client_id, full_name, phone, email, status, source, health_goal, plan_type,
-      plan_start_date, follow_up_freq_days, coach_notes
-    ) VALUES (?, ?, ?, NULL, 'Active', ?, ?, ?, ?, 14, ?)`,
-    [
-      clientId,
-      title,
-      phone,
+  const newClient = await client.fitness_clients.create({
+    data: {
+      client_id: clientId,
+      full_name: title,
+      phone: phone || "",
+      email: null,
+      status: 'Active',
       source,
-      healthGoal,
-      planType,
-      today,
-      opportunity.notes ? `From opportunity #${opportunity.id}: ${String(opportunity.notes).slice(0, 500)}` : `From opportunity #${opportunity.id}`,
-    ]
-  );
+      health_goal: healthGoal,
+      plan_type: planType,
+      plan_start_date: today,
+      follow_up_freq_days: 14,
+      coach_notes: opportunity.notes ? `From opportunity #${opportunity.id}: ${String(opportunity.notes).slice(0, 500)}` : `From opportunity #${opportunity.id}`,
+    }
+  });
 
-  const [rows] = await db.execute("SELECT * FROM fitness_clients WHERE id = ?", [result.insertId]);
-  return { client_id: clientId, row: rows[0] || null };
+  return { client_id: clientId, row: newClient };
 }
 
-async function linkExistingClient(executor, opportunityId, clientId) {
-  const db = executor || pool;
+async function linkExistingClient(txOrPrisma, opportunityId, clientId) {
+  const client = txOrPrisma || prisma;
   const cid = String(clientId || "").trim();
   if (!cid) return { ok: false, message: "client_id is required" };
 
-  const [rows] = await db.execute(
-    "SELECT client_id, full_name FROM fitness_clients WHERE client_id = ? AND status = 'Active' LIMIT 1",
-    [cid]
-  );
-  if (!rows[0]) return { ok: false, message: "Active client not found" };
+  const existingClient = await client.fitness_clients.findFirst({
+    where: {
+      client_id: cid,
+      status: 'Active'
+    },
+    select: {
+      client_id: true,
+      full_name: true
+    }
+  });
 
-  await db.execute(
-    "UPDATE opportunities SET client_id = ?, updated_at = NOW() WHERE id = ?",
-    [cid, opportunityId]
-  );
-  return { ok: true, client: rows[0] };
+  if (!existingClient) return { ok: false, message: "Active client not found" };
+
+  await client.opportunities.update({
+    where: { id: Number(opportunityId) },
+    data: {
+      client_id: cid,
+      updated_at: new Date()
+    }
+  });
+
+  return { ok: true, client: existingClient };
 }
 
 module.exports = {

@@ -8,7 +8,7 @@ let tasksClientDuePatchesDone = false;
 let fitnessTransactionPaymentDuePatchesDone = false;
 let invoicesTablePatchesDone = false;
 let companySettingsPatchesDone = false;
-const CURRENT_SCHEMA_VERSION = 10;
+const CURRENT_SCHEMA_VERSION = 11;
 
 /** Lightweight patches that must run even when schema version is current. */
 async function ensureFitnessClientPatches() {

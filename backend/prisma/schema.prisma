@@ -1,0 +1,1209 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model schema_meta {
+  key   String  @id @db.VarChar(64)
+  value String? @db.VarChar(64)
+
+  @@map("_schema_meta")
+}
+
+model chat_direct_pairs {
+  pair_key     String       @id @db.VarChar(64)
+  thread_id    Int          @db.UnsignedInt
+  created_at   DateTime     @default(now()) @db.DateTime(0)
+  chat_threads chat_threads @relation(fields: [thread_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_cdp_thread")
+
+  @@index([thread_id], map: "fk_cdp_thread")
+}
+
+model chat_thread_members {
+  thread_id            Int                             @db.UnsignedInt
+  user_id              Int                             @db.UnsignedInt
+  member_role          chat_thread_members_member_role @default(member)
+  joined_at            DateTime                        @default(now()) @db.DateTime(0)
+  last_read_message_id Int?                            @db.UnsignedInt
+  last_read_at         DateTime?                       @db.DateTime(0)
+  chat_threads         chat_threads                    @relation(fields: [thread_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_ctm_thread")
+  users                users                           @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_ctm_user")
+
+  @@id([thread_id, user_id])
+  @@index([user_id], map: "idx_ctm_user")
+}
+
+model chat_thread_messages {
+  id               Int          @id @default(autoincrement()) @db.UnsignedInt
+  thread_id        Int          @db.UnsignedInt
+  sender_id        Int          @db.UnsignedInt
+  body             String       @db.Text
+  attachments_json Json?
+  created_at       DateTime     @default(now()) @db.DateTime(0)
+  users            users        @relation(fields: [sender_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_chat_msg_sender")
+  chat_threads     chat_threads @relation(fields: [thread_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_chat_msg_thread")
+
+  @@index([sender_id], map: "idx_ctm_sender")
+  @@index([thread_id, id], map: "idx_ctm_thread")
+}
+
+model chat_threads {
+  id                   Int                      @id @default(autoincrement()) @db.UnsignedInt
+  thread_type          chat_threads_thread_type @default(direct)
+  title                String?                  @db.VarChar(200)
+  created_by           Int?                     @db.UnsignedInt
+  created_at           DateTime                 @default(now()) @db.DateTime(0)
+  updated_at           DateTime                 @default(now()) @db.DateTime(0)
+  chat_direct_pairs    chat_direct_pairs[]
+  chat_thread_members  chat_thread_members[]
+  chat_thread_messages chat_thread_messages[]
+  users                users?                   @relation(fields: [created_by], references: [id], onUpdate: NoAction, map: "fk_chat_thread_creator")
+
+  @@index([created_by], map: "idx_created_by")
+  @@index([thread_type], map: "idx_thread_type")
+}
+
+model companies {
+  id                   Int        @id @default(autoincrement()) @db.UnsignedInt
+  account_name         String     @db.VarChar(180)
+  account_relationship String?    @default("Customer") @db.VarChar(80)
+  phone                String?    @db.VarChar(30)
+  email                String?    @db.VarChar(180)
+  industry             String?    @db.VarChar(120)
+  street               String?    @db.VarChar(255)
+  city                 String?    @db.VarChar(120)
+  state                String?    @db.VarChar(120)
+  country              String?    @db.VarChar(120)
+  postal_code          String?    @db.VarChar(20)
+  website              String?    @db.VarChar(255)
+  notes                String?    @db.Text
+  assigned_to          Int?       @db.UnsignedInt
+  created_by           Int?       @db.UnsignedInt
+  created_at           DateTime   @default(now()) @db.DateTime(0)
+  updated_at           DateTime   @default(now()) @db.DateTime(0)
+  is_starred           Boolean    @default(false)
+  is_deleted           Boolean    @default(false)
+  deleted_at           DateTime?  @db.DateTime(0)
+  contacts             contacts[]
+
+  @@index([assigned_to], map: "idx_companies_assigned")
+  @@index([city], map: "idx_companies_city")
+  @@index([created_by], map: "idx_companies_created_by")
+  @@index([is_deleted], map: "idx_companies_is_deleted")
+  @@index([is_starred], map: "idx_companies_is_starred")
+  @@index([account_name], map: "idx_companies_name")
+  @@index([account_relationship], map: "idx_companies_rel")
+  @@index([state], map: "idx_companies_state")
+}
+
+model company_settings {
+  id                 Int      @id @default(1) @db.UnsignedInt
+  company_name       String?  @db.VarChar(200)
+  website            String?  @db.VarChar(300)
+  phone              String?  @db.VarChar(20)
+  email              String?  @db.VarChar(150)
+  address            String?  @db.Text
+  city               String?  @db.VarChar(100)
+  state              String?  @db.VarChar(100)
+  country            String?  @default("India") @db.VarChar(100)
+  gst_number         String?  @db.VarChar(50)
+  pan_number         String?  @db.VarChar(50)
+  invoice_bank_name  String?  @db.VarChar(200)
+  invoice_account_no String?  @db.VarChar(64)
+  invoice_ifsc       String?  @db.VarChar(20)
+  invoice_currency   String   @default("INR") @db.VarChar(10)
+  invoice_gst_mode   String   @default("none") @db.VarChar(20)
+  updated_at         DateTime @default(now()) @db.DateTime(0)
+}
+
+model contacts {
+  id                                Int        @id @default(autoincrement()) @db.UnsignedInt
+  company_name                      String     @db.VarChar(180)
+  contact_name                      String     @db.VarChar(150)
+  designation                       String?    @db.VarChar(120)
+  account_relationship              String?    @db.VarChar(80)
+  department                        String?    @db.VarChar(120)
+  email                             String?    @db.VarChar(180)
+  phone                             String?    @db.VarChar(30)
+  street                            String?    @db.VarChar(255)
+  city                              String?    @db.VarChar(120)
+  state                             String?    @db.VarChar(120)
+  country                           String?    @db.VarChar(120)
+  postal_code                       String?    @db.VarChar(20)
+  website                           String?    @db.VarChar(255)
+  notes                             String?    @db.Text
+  assigned_to                       Int?       @db.UnsignedInt
+  created_by                        Int?       @db.UnsignedInt
+  created_at                        DateTime   @default(now()) @db.DateTime(0)
+  updated_at                        DateTime   @default(now()) @db.DateTime(0)
+  company_id                        Int?       @db.UnsignedInt
+  users_contacts_assigned_toTousers users?     @relation("contacts_assigned_toTousers", fields: [assigned_to], references: [id], onUpdate: NoAction, map: "fk_contacts_assigned")
+  companies                         companies? @relation(fields: [company_id], references: [id], onUpdate: NoAction, map: "fk_contacts_company")
+  users_contacts_created_byTousers  users?     @relation("contacts_created_byTousers", fields: [created_by], references: [id], onUpdate: NoAction, map: "fk_contacts_creator")
+
+  @@index([company_id], map: "fk_contacts_company")
+  @@index([assigned_to], map: "idx_contacts_assigned")
+  @@index([company_name], map: "idx_contacts_company")
+  @@index([created_by], map: "idx_contacts_created_by")
+  @@index([department], map: "idx_contacts_department")
+  @@index([designation], map: "idx_contacts_designation")
+  @@index([account_relationship], map: "idx_contacts_relationship")
+}
+
+model coupons {
+  id               Int       @id @default(autoincrement()) @db.UnsignedInt
+  code             String    @unique(map: "uk_coupons_code") @db.VarChar(40)
+  discount_percent Int       @db.UnsignedTinyInt
+  description      String?   @db.VarChar(255)
+  max_redemptions  Int?      @db.UnsignedInt
+  redemptions_used Int       @default(0) @db.UnsignedInt
+  valid_from       DateTime? @db.DateTime(0)
+  valid_until      DateTime? @db.DateTime(0)
+  is_active        Boolean   @default(true)
+  created_at       DateTime  @default(now()) @db.DateTime(0)
+  updated_at       DateTime  @default(now()) @db.DateTime(0)
+
+  @@index([is_active], map: "idx_coupons_active")
+}
+
+model crm_calendar_events {
+  id          Int       @id @default(autoincrement()) @db.UnsignedInt
+  user_id     Int       @db.UnsignedInt
+  title       String    @db.VarChar(220)
+  description String?   @db.Text
+  start_at    DateTime  @db.DateTime(0)
+  end_at      DateTime? @db.DateTime(0)
+  all_day     Boolean   @default(false)
+  category    String    @default("event") @db.VarChar(32)
+  created_at  DateTime  @default(now()) @db.DateTime(0)
+  updated_at  DateTime  @default(now()) @db.DateTime(0)
+  users       users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_cal_event_user")
+
+  @@index([user_id, start_at], map: "idx_cal_user_range")
+}
+
+model crm_todo_assignees {
+  todo_id   Int       @db.UnsignedInt
+  user_id   Int       @db.UnsignedInt
+  crm_todos crm_todos @relation(fields: [todo_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_todo_asg_todo")
+  users     users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_todo_asg_user")
+
+  @@id([todo_id, user_id])
+  @@index([user_id], map: "fk_todo_asg_user")
+}
+
+model crm_todos {
+  id                 Int                  @id @default(autoincrement()) @db.UnsignedInt
+  body               String               @db.Text
+  frequency          crm_todos_frequency  @default(once)
+  todo_date          DateTime             @db.Date
+  priority           crm_todos_priority   @default(medium)
+  carry_forward      Boolean              @default(false)
+  status             crm_todos_status     @default(pending)
+  completed_at       DateTime?            @db.DateTime(0)
+  attachment_json    Json?
+  created_by         Int                  @db.UnsignedInt
+  created_at         DateTime             @default(now()) @db.DateTime(0)
+  updated_at         DateTime             @default(now()) @db.DateTime(0)
+  client_id          String?              @db.VarChar(20)
+  todo_category      String?              @db.VarChar(50)
+  is_deleted         Boolean              @default(false)
+  deleted_at         DateTime?            @db.DateTime(0)
+  tenant_id          Int?                 @db.UnsignedInt
+  crm_todo_assignees crm_todo_assignees[]
+  users              users                @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_crm_todo_creator")
+
+  @@index([created_by], map: "idx_created_by")
+  @@index([is_deleted], map: "idx_crm_todos_is_deleted")
+  @@index([frequency], map: "idx_frequency")
+  @@index([status], map: "idx_status")
+  @@index([todo_date], map: "idx_todo_date")
+}
+
+model customers {
+  id         Int       @id @default(autoincrement()) @db.UnsignedInt
+  name       String    @db.VarChar(200)
+  email      String?   @db.VarChar(200)
+  phone      String?   @db.VarChar(50)
+  company    String?   @db.VarChar(200)
+  city       String?   @db.VarChar(100)
+  country    String?   @default("India") @db.VarChar(100)
+  lead_id    Int?      @unique(map: "lead_id") @db.UnsignedInt
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @default(now()) @db.DateTime(0)
+  is_deleted Boolean   @default(false)
+  deleted_at DateTime? @db.DateTime(0)
+
+  @@index([is_deleted], map: "idx_customers_is_deleted")
+  @@index([lead_id], map: "idx_lead_id")
+}
+
+model fitness_body_stats {
+  id             Int       @id @default(autoincrement()) @db.UnsignedInt
+  client_id      String    @db.VarChar(20)
+  recorded_date  DateTime  @db.Date
+  weight_kg      Decimal?  @db.Decimal(5, 2)
+  body_fat_pct   Decimal?  @db.Decimal(5, 2)
+  muscle_mass_kg Decimal?  @db.Decimal(5, 2)
+  waist_cm       Decimal?  @db.Decimal(5, 2)
+  notes          String?   @db.Text
+  created_at     DateTime? @default(now()) @db.Timestamp(0)
+
+  @@index([client_id], map: "idx_fitness_body_stats_client")
+  @@index([recorded_date], map: "idx_fitness_body_stats_date")
+}
+
+model fitness_client_tasks {
+  id               Int                            @id @default(autoincrement()) @db.UnsignedInt
+  client_id        String                         @db.VarChar(20)
+  task_description String                         @db.Text
+  due_date         DateTime?                      @db.Date
+  priority         fitness_client_tasks_priority? @default(Medium)
+  status           fitness_client_tasks_status?   @default(Open)
+  period           String?                        @db.VarChar(50)
+  completed_on     DateTime?                      @db.Date
+  notes            String?                        @db.Text
+  created_at       DateTime?                      @default(now()) @db.Timestamp(0)
+  updated_at       DateTime?                      @default(now()) @db.Timestamp(0)
+
+  @@index([client_id], map: "idx_fitness_client_tasks_client")
+  @@index([due_date], map: "idx_fitness_client_tasks_due")
+  @@index([status], map: "idx_fitness_client_tasks_status")
+}
+
+model fitness_clients {
+  id                      Int                        @id @default(autoincrement()) @db.UnsignedInt
+  client_id               String                     @unique(map: "client_id") @db.VarChar(20)
+  full_name               String                     @db.VarChar(255)
+  status                  fitness_clients_status?    @default(Active)
+  progress                fitness_clients_progress?  @default(Neutral)
+  phone                   String?                    @db.VarChar(20)
+  email                   String?                    @db.VarChar(255)
+  age                     Int?
+  city                    String?                    @db.VarChar(100)
+  address                 String?                    @db.Text
+  occupation              String?                    @db.VarChar(100)
+  emergency_contact       String?                    @db.VarChar(255)
+  referred_by_client_id   String?                    @db.VarChar(20)
+  referred_by_name        String?                    @db.VarChar(255)
+  source                  fitness_clients_source?    @default(Walk_in)
+  tier                    Int?                       @default(3) @db.TinyInt
+  health_goal             String?                    @db.VarChar(255)
+  plan_type               fitness_clients_plan_type?
+  plan_start_date         DateTime?                  @db.Date
+  plan_expiry_date        DateTime?                  @db.Date
+  follow_up_freq_days     Int?                       @default(14)
+  last_consultation_date  DateTime?                  @db.Date
+  next_due_date           DateTime?                  @db.Date
+  medical_conditions      String?                    @db.Text
+  allergies               String?                    @db.Text
+  activity_level          String?                    @db.VarChar(100)
+  current_medications     String?                    @db.Text
+  height_cm               Decimal?                   @db.Decimal(5, 2)
+  start_weight_kg         Decimal?                   @db.Decimal(5, 2)
+  current_weight_kg       Decimal?                   @db.Decimal(5, 2)
+  target_weight_kg        Decimal?                   @db.Decimal(5, 2)
+  bmi                     Decimal?                   @db.Decimal(5, 2)
+  coach_notes             String?                    @db.Text
+  created_at              DateTime?                  @default(now()) @db.Timestamp(0)
+  updated_at              DateTime?                  @default(now()) @db.Timestamp(0)
+  fitness_external_buyers fitness_external_buyers[]
+
+  @@index([client_id], map: "idx_fitness_clients_client_id")
+  @@index([next_due_date], map: "idx_fitness_clients_next_due")
+  @@index([status], map: "idx_fitness_clients_status")
+}
+
+model fitness_collection_payments {
+  id                  Int                                   @id @default(autoincrement()) @db.UnsignedInt
+  collection_id       Int                                   @db.UnsignedInt
+  amount_inr          Decimal                               @db.Decimal(10, 2)
+  pay_mode            fitness_collection_payments_pay_mode? @default(GPay)
+  paid_at             DateTime                              @db.Date
+  notes               String?                               @db.Text
+  created_by          Int?                                  @db.UnsignedInt
+  created_at          DateTime?                             @default(now()) @db.Timestamp(0)
+  fitness_collections fitness_collections                   @relation(fields: [collection_id], references: [id], onDelete: Cascade, map: "fk_fcp_collection")
+
+  @@index([collection_id], map: "idx_fcp_collection")
+}
+
+model fitness_collections {
+  id                          Int                                 @id @default(autoincrement()) @db.UnsignedInt
+  client_id                   String?                             @db.VarChar(20)
+  external_buyer_id           Int?                                @db.UnsignedInt
+  collection_type             fitness_collections_collection_type @default(other)
+  title                       String                              @db.VarChar(255)
+  total_inr                   Decimal                             @default(0.00) @db.Decimal(10, 2)
+  received_inr                Decimal                             @default(0.00) @db.Decimal(10, 2)
+  pending_inr                 Decimal                             @default(0.00) @db.Decimal(10, 2)
+  next_followup_date          DateTime?                           @db.Date
+  assigned_to                 Int?                                @db.UnsignedInt
+  status                      fitness_collections_status          @default(open)
+  linked_transaction_id       Int?                                @db.UnsignedInt
+  linked_supplement_id        Int?                                @db.UnsignedInt
+  notes                       String?                             @db.Text
+  created_by                  Int?                                @db.UnsignedInt
+  created_at                  DateTime?                           @default(now()) @db.Timestamp(0)
+  updated_at                  DateTime?                           @default(now()) @db.Timestamp(0)
+  fitness_collection_payments fitness_collection_payments[]
+  fitness_external_buyers     fitness_external_buyers?            @relation(fields: [external_buyer_id], references: [id], onDelete: Restrict, map: "fk_fc_coll_external")
+
+  @@index([assigned_to], map: "idx_fc_assigned")
+  @@index([client_id], map: "idx_fc_client")
+  @@index([external_buyer_id], map: "idx_fc_external")
+  @@index([next_followup_date], map: "idx_fc_followup")
+  @@index([linked_transaction_id], map: "idx_fc_linked_tx")
+  @@index([status], map: "idx_fc_status")
+}
+
+model fitness_consultations {
+  id               Int                                @id @default(autoincrement()) @db.UnsignedInt
+  client_id        String                             @db.VarChar(20)
+  consult_date     DateTime                           @db.Date
+  consult_type     fitness_consultations_consult_type
+  weight_kg        Decimal?                           @db.Decimal(5, 2)
+  key_observations String?                            @db.Text
+  diet_changes     String?                            @db.Text
+  next_steps       String?                            @db.Text
+  next_appointment String?                            @db.VarChar(100)
+  created_at       DateTime?                          @default(now()) @db.Timestamp(0)
+
+  @@index([client_id], map: "idx_fitness_consultations_client")
+  @@index([consult_date], map: "idx_fitness_consultations_date")
+}
+
+model fitness_external_buyers {
+  id                    Int                    @id @default(autoincrement()) @db.UnsignedInt
+  full_name             String                 @db.VarChar(255)
+  phone                 String?                @unique(map: "uk_fitness_external_buyers_phone") @db.VarChar(20)
+  referred_by_client_id String?                @db.VarChar(20)
+  notes                 String?                @db.Text
+  created_at            DateTime?              @default(now()) @db.Timestamp(0)
+  updated_at            DateTime?              @default(now()) @db.Timestamp(0)
+  fitness_collections   fitness_collections[]
+  fitness_clients       fitness_clients?       @relation(fields: [referred_by_client_id], references: [client_id], map: "fk_feb_referred_client")
+  fitness_transactions  fitness_transactions[]
+
+  @@index([referred_by_client_id], map: "idx_feb_referred")
+}
+
+model fitness_meal_plans {
+  id           Int       @id @default(autoincrement()) @db.UnsignedInt
+  client_id    String    @db.VarChar(20)
+  plan_name    String    @db.VarChar(255)
+  start_date   DateTime? @db.Date
+  end_date     DateTime? @db.Date
+  calories     Int?
+  protein_g    Int?
+  carbs_g      Int?
+  fats_g       Int?
+  plan_pdf_url String?   @db.Text
+  notes        String?   @db.Text
+  is_active    Boolean?  @default(true)
+  created_at   DateTime? @default(now()) @db.Timestamp(0)
+  updated_at   DateTime? @default(now()) @db.Timestamp(0)
+
+  @@index([client_id], map: "idx_fitness_meal_plans_client")
+}
+
+model fitness_referrals {
+  id                 Int       @id @default(autoincrement()) @db.UnsignedInt
+  referrer_client_id String    @db.VarChar(20)
+  referred_client_id String    @db.VarChar(20)
+  referral_date      DateTime? @db.Date
+  notes              String?   @db.Text
+  created_at         DateTime? @default(now()) @db.Timestamp(0)
+
+  @@index([referred_client_id], map: "idx_fitness_referrals_referred")
+  @@index([referrer_client_id], map: "idx_fitness_referrals_referrer")
+}
+
+model fitness_settings {
+  id            Int       @id @default(autoincrement()) @db.UnsignedInt
+  setting_key   String    @unique(map: "setting_key") @db.VarChar(100)
+  setting_value Json
+  created_at    DateTime? @default(now()) @db.Timestamp(0)
+  updated_at    DateTime? @default(now()) @db.Timestamp(0)
+}
+
+model fitness_supplements {
+  id              Int       @id @default(autoincrement()) @db.UnsignedInt
+  client_id       String    @db.VarChar(20)
+  product_name    String    @db.VarChar(255)
+  prescribed_date DateTime? @db.Date
+  quantity        Int?
+  mrp_inr         Decimal?  @db.Decimal(10, 2)
+  rate_inr        Decimal?  @db.Decimal(10, 2)
+  notes           String?   @db.Text
+  created_at      DateTime? @default(now()) @db.Timestamp(0)
+
+  @@index([client_id], map: "idx_fitness_supplements_client")
+}
+
+model fitness_transactions {
+  id                      Int                            @id @default(autoincrement()) @db.UnsignedInt
+  client_id               String?                        @db.VarChar(20)
+  external_buyer_id       Int?                           @db.UnsignedInt
+  transaction_date        DateTime                       @db.Date
+  product_plan            String                         @db.VarChar(255)
+  type                    fitness_transactions_type
+  mrp_inr                 Decimal?                       @db.Decimal(10, 2)
+  rate_inr                Decimal?                       @db.Decimal(10, 2)
+  received_inr            Decimal?                       @default(0.00) @db.Decimal(10, 2)
+  pending_inr             Decimal?                       @default(0.00) @db.Decimal(10, 2)
+  payment_due_date        DateTime?                      @db.Date
+  cost_inr                Decimal?                       @default(0.00) @db.Decimal(10, 2)
+  profit_inr              Decimal?                       @db.Decimal(10, 2)
+  pay_mode                fitness_transactions_pay_mode? @default(GPay)
+  notes                   String?                        @db.Text
+  created_at              DateTime?                      @default(now()) @db.Timestamp(0)
+  fitness_external_buyers fitness_external_buyers?       @relation(fields: [external_buyer_id], references: [id], onDelete: Restrict, map: "fk_fitness_transactions_external")
+
+  @@index([client_id], map: "idx_fitness_transactions_client")
+  @@index([transaction_date], map: "idx_fitness_transactions_date")
+  @@index([external_buyer_id], map: "idx_fitness_transactions_external")
+  @@index([payment_due_date], map: "idx_fitness_transactions_payment_due")
+  @@index([type], map: "idx_fitness_transactions_type")
+}
+
+model integration_webhooks {
+  id            Int                         @id @default(autoincrement()) @db.UnsignedInt
+  source_key    String                      @db.VarChar(100)
+  status        integration_webhooks_status @default(received)
+  payload_json  Json?
+  headers_json  Json?
+  lead_id       Int?                        @db.UnsignedInt
+  error_message String?                     @db.Text
+  created_at    DateTime                    @default(now()) @db.DateTime(0)
+
+  @@index([lead_id], map: "idx_lead_id")
+  @@index([source_key], map: "idx_source_key")
+  @@index([status], map: "idx_status")
+}
+
+model integrations {
+  id         Int      @id @default(autoincrement()) @db.UnsignedInt
+  key        String   @unique(map: "key") @db.VarChar(100)
+  name       String   @db.VarChar(200)
+  is_active  Boolean  @default(false)
+  created_at DateTime @default(now()) @db.DateTime(0)
+}
+
+model invoices {
+  id                Int             @id @default(autoincrement()) @db.UnsignedInt
+  invoice_number    String          @unique(map: "uk_invoice_number") @db.VarChar(50)
+  type              invoices_type   @default(sales)
+  customer_name     String?         @db.VarChar(150)
+  customer_email    String?         @db.VarChar(150)
+  customer_phone    String?         @db.VarChar(32)
+  vendor_name       String?         @db.VarChar(150)
+  invoice_date      DateTime        @db.Date
+  due_date          DateTime?       @db.Date
+  subtotal          Decimal?        @default(0.00) @db.Decimal(12, 2)
+  tax               Decimal?        @default(0.00) @db.Decimal(12, 2)
+  total             Decimal?        @default(0.00) @db.Decimal(12, 2)
+  status            invoices_status @default(draft)
+  notes             String?         @db.Text
+  gst_mode          String          @default("none") @db.VarChar(20)
+  currency          String          @default("INR") @db.VarChar(10)
+  customer_id       Int?            @db.UnsignedInt
+  line_items_json   Json?
+  source_type       String?         @db.VarChar(50)
+  source_id         Int?            @db.UnsignedInt
+  payment_meta_json Json?
+  is_deleted        Boolean         @default(false)
+  deleted_at        DateTime?       @db.DateTime(0)
+  created_by        Int?            @db.UnsignedInt
+  created_at        DateTime        @default(now()) @db.DateTime(0)
+  updated_at        DateTime        @default(now()) @db.DateTime(0)
+
+  @@index([created_by], map: "idx_invoices_created_by")
+  @@index([is_deleted], map: "idx_invoices_is_deleted")
+  @@index([status], map: "idx_status")
+  @@index([type], map: "idx_type")
+}
+
+model lead_change_log {
+  id         Int      @id @default(autoincrement()) @db.UnsignedInt
+  lead_id    Int      @db.UnsignedInt
+  field_name String   @db.VarChar(80)
+  old_value  String?  @db.Text
+  new_value  String?  @db.Text
+  user_id    Int?     @db.UnsignedInt
+  created_at DateTime @default(now()) @db.DateTime(0)
+
+  @@index([created_at], map: "idx_lead_change_log_created")
+  @@index([lead_id], map: "idx_lead_change_log_lead")
+}
+
+model lead_followups {
+  id                  Int       @id @default(autoincrement()) @db.UnsignedInt
+  lead_id             Int       @db.UnsignedInt
+  note                String    @db.Text
+  next_follow_up_date DateTime? @db.Date
+  next_follow_up_at   DateTime? @db.DateTime(0)
+  attachments_json    Json?
+  created_by          Int?      @db.UnsignedInt
+  created_at          DateTime  @default(now()) @db.DateTime(0)
+
+  @@index([created_by], map: "idx_created_by")
+  @@index([lead_id], map: "idx_lead_id")
+}
+
+model leads {
+  id                             Int          @id @default(autoincrement()) @db.UnsignedInt
+  name                           String       @db.VarChar(100)
+  company_name                   String?      @db.VarChar(150)
+  phone                          String       @default("") @db.VarChar(20)
+  email                          String?      @db.VarChar(150)
+  source                         String       @default("other") @db.VarChar(50)
+  status                         leads_status @default(new)
+  label                          String?      @db.VarChar(50)
+  cancel_reason                  String?      @db.VarChar(255)
+  assigned_to                    Int?         @db.UnsignedInt
+  created_by                     Int          @db.UnsignedInt
+  follow_up_date                 DateTime?    @db.Date
+  notes                          String?      @db.Text
+  is_deleted                     Boolean      @default(false)
+  deleted_at                     DateTime?    @db.DateTime(0)
+  attachments_json               Json?
+  tenant_id                      Int?         @db.UnsignedInt
+  created_at                     DateTime     @default(now()) @db.DateTime(0)
+  updated_at                     DateTime     @default(now()) @db.DateTime(0)
+  first_name                     String?      @db.VarChar(100)
+  last_name                      String?      @db.VarChar(100)
+  designation                    String?      @db.VarChar(120)
+  company_id                     Int?         @db.UnsignedInt
+  phones_json                    Json?
+  emails_json                    Json?
+  followup_at                    DateTime?    @db.DateTime(0)
+  followup_type                  String?      @db.VarChar(80)
+  comments_history               String?      @db.Text
+  account_relationship           String?      @db.VarChar(32)
+  industry                       String?      @db.VarChar(120)
+  department                     String?      @db.VarChar(120)
+  product_category               String?      @db.VarChar(80)
+  team                           String?      @db.VarChar(160)
+  contact_id                     Int?         @db.UnsignedInt
+  lead_number                    Int?         @db.UnsignedInt
+  amount                         Decimal?     @default(0.00) @db.Decimal(12, 2)
+  currency                       String?      @default("INR") @db.VarChar(8)
+  address_line1                  String?      @db.VarChar(255)
+  address_line2                  String?      @db.VarChar(255)
+  city                           String?      @db.VarChar(120)
+  state                          String?      @db.VarChar(120)
+  country                        String?      @db.VarChar(120)
+  postal_code                    String?      @db.VarChar(32)
+  converted_opportunity_id       Int?         @db.UnsignedInt
+  last_touched_at                DateTime?    @db.DateTime(0)
+  updated_by                     Int?         @db.UnsignedInt
+  status_v2                      String?      @db.VarChar(32)
+  phone_dial                     String?      @db.VarChar(10)
+  address                        String?      @db.Text
+  reference                      String?      @db.VarChar(255)
+  users_leads_assigned_toTousers users?       @relation("leads_assigned_toTousers", fields: [assigned_to], references: [id], onUpdate: NoAction, map: "fk_lead_assigned")
+  users_leads_created_byTousers  users        @relation("leads_created_byTousers", fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_lead_creator")
+  meetings                       meetings[]
+  reminders                      reminders[]
+  tasks                          tasks[]
+
+  @@index([created_by], map: "fk_lead_creator")
+  @@index([assigned_to], map: "idx_assigned")
+  @@index([follow_up_date], map: "idx_follow_up")
+  @@index([is_deleted], map: "idx_leads_is_deleted")
+  @@index([status], map: "idx_status")
+}
+
+model meeting_attendees {
+  meeting_id Int      @db.UnsignedInt
+  user_id    Int      @db.UnsignedInt
+  meetings   meetings @relation(fields: [meeting_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_ma_meeting")
+  users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_ma_user")
+
+  @@id([meeting_id, user_id])
+  @@index([user_id], map: "fk_ma_user")
+}
+
+model meetings {
+  id                                        Int                 @id @default(autoincrement()) @db.UnsignedInt
+  title                                     String              @db.VarChar(200)
+  description                               String?             @db.Text
+  start_time                                DateTime            @db.DateTime(0)
+  end_time                                  DateTime?           @db.DateTime(0)
+  location                                  String?             @db.VarChar(300)
+  meet_link                                 String?             @db.VarChar(500)
+  meeting_type                              String              @default("virtual") @db.VarChar(50)
+  status                                    String              @default("scheduled") @db.VarChar(50)
+  organizer_id                              Int                 @db.UnsignedInt
+  assigned_to_user_id                       Int?                @db.UnsignedInt
+  lead_id                                   Int?                @db.UnsignedInt
+  recurrence                                String              @default("once") @db.VarChar(50)
+  is_deleted                                Boolean             @default(false)
+  created_at                                DateTime            @default(now()) @db.DateTime(0)
+  deleted_at                                DateTime?           @db.DateTime(0)
+  consultation_type                         String?             @default("general") @db.VarChar(50)
+  client_id                                 String?             @db.VarChar(20)
+  meeting_attendees                         meeting_attendees[]
+  users_meetings_assigned_to_user_idTousers users?              @relation("meetings_assigned_to_user_idTousers", fields: [assigned_to_user_id], references: [id], onUpdate: NoAction, map: "fk_meeting_assignee")
+  leads                                     leads?              @relation(fields: [lead_id], references: [id], onUpdate: NoAction, map: "fk_meeting_lead")
+  users_meetings_organizer_idTousers        users               @relation("meetings_organizer_idTousers", fields: [organizer_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_meeting_organizer")
+
+  @@index([lead_id], map: "fk_meeting_lead")
+  @@index([assigned_to_user_id], map: "idx_meeting_assignee")
+  @@index([recurrence], map: "idx_meeting_recurrence")
+  @@index([status], map: "idx_meeting_status")
+  @@index([meeting_type], map: "idx_meeting_type")
+  @@index([organizer_id], map: "idx_organizer")
+  @@index([start_time], map: "idx_start_time")
+  @@index([is_deleted], map: "idx_meetings_is_deleted")
+}
+
+model notes {
+  id         Int       @id @default(autoincrement()) @db.UnsignedInt
+  lead_id    Int?      @db.UnsignedInt
+  title      String?   @db.VarChar(200)
+  content    String    @db.Text
+  created_by Int?      @db.UnsignedInt
+  created_at DateTime  @default(now()) @db.DateTime(0)
+  updated_at DateTime  @default(now()) @db.DateTime(0)
+  is_deleted Boolean   @default(false)
+  deleted_at DateTime? @db.DateTime(0)
+
+  @@index([created_by], map: "idx_created_by")
+  @@index([lead_id], map: "idx_lead_id")
+  @@index([is_deleted], map: "idx_notes_is_deleted")
+}
+
+model notifications {
+  id                                       BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  user_id                                  Int       @db.UnsignedInt
+  actor_user_id                            Int?      @db.UnsignedInt
+  entity_type                              String    @default("general") @db.VarChar(50)
+  entity_id                                BigInt?   @db.UnsignedBigInt
+  title                                    String    @db.VarChar(220)
+  body                                     String?   @db.Text
+  is_read                                  Boolean   @default(false)
+  read_at                                  DateTime? @db.DateTime(0)
+  created_at                               DateTime  @default(now()) @db.DateTime(0)
+  users_notifications_actor_user_idTousers users?    @relation("notifications_actor_user_idTousers", fields: [actor_user_id], references: [id], onUpdate: NoAction, map: "fk_notifications_actor")
+  users_notifications_user_idTousers       users     @relation("notifications_user_idTousers", fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_notifications_user")
+
+  @@index([actor_user_id], map: "fk_notifications_actor")
+  @@index([entity_type, entity_id], map: "idx_notifications_entity")
+  @@index([user_id, is_read, created_at], map: "idx_notifications_user_read")
+}
+
+model opportunities {
+  id                     Int                      @id @default(autoincrement()) @db.UnsignedInt
+  title                  String                   @db.VarChar(220)
+  lead_id                Int?                     @db.UnsignedInt
+  contact_id             Int?                     @db.UnsignedInt
+  company_name           String?                  @db.VarChar(180)
+  amount                 Decimal                  @default(0.00) @db.Decimal(12, 2)
+  currency               String                   @default("INR") @db.VarChar(10)
+  stage                  opportunities_stage      @default(qualification_done)
+  expected_close_date    DateTime?                @db.Date
+  owner_user_id          Int?                     @db.UnsignedInt
+  created_by             Int?                     @db.UnsignedInt
+  notes                  String?                  @db.Text
+  product_category       String?                  @db.VarChar(80)
+  quantity               Int                      @default(0) @db.UnsignedInt
+  external_quotation_url String?                  @db.VarChar(500)
+  followup_at            DateTime?                @db.DateTime(0)
+  followup_type          String?                  @db.VarChar(80)
+  opportunity_type       String?                  @db.VarChar(80)
+  lead_source            String?                  @db.VarChar(80)
+  team                   String?                  @db.VarChar(160)
+  comments_history       String?                  @db.Text
+  created_at             DateTime                 @default(now()) @db.DateTime(0)
+  updated_at             DateTime                 @default(now()) @db.DateTime(0)
+  consultation_at        DateTime?                @db.DateTime(0)
+  consultation_notes     String?                  @db.Text
+  closed_won_at          DateTime?                @db.DateTime(0)
+  final_amount           Decimal?                 @db.Decimal(12, 2)
+  closed_lost_at         DateTime?                @db.DateTime(0)
+  loss_reason            String?                  @db.VarChar(255)
+  tenant_id              Int?                     @db.UnsignedInt
+  client_id              String?                  @db.VarChar(20)
+  phone                  String?                  @db.VarChar(20)
+  visit_purpose          String?                  @db.Text
+  linked_reminder_id     Int?                     @db.UnsignedInt
+  is_starred             Boolean                  @default(false)
+  is_deleted             Boolean                  @default(false)
+  deleted_at             DateTime?                @db.DateTime(0)
+  opportunity_activities opportunity_activities[]
+
+  @@index([is_deleted], map: "idx_opportunities_is_deleted")
+  @@index([is_starred], map: "idx_opportunities_is_starred")
+  @@index([client_id], map: "idx_opps_client_id")
+  @@index([contact_id], map: "idx_opps_contact")
+  @@index([created_by], map: "idx_opps_created_by")
+  @@index([followup_at], map: "idx_opps_followup_at")
+  @@index([lead_id], map: "idx_opps_lead")
+  @@index([owner_user_id], map: "idx_opps_owner")
+  @@index([stage], map: "idx_opps_stage")
+  @@index([tenant_id], map: "idx_opps_tenant_id")
+}
+
+model opportunity_activities {
+  id             Int                                  @id @default(autoincrement()) @db.UnsignedInt
+  opportunity_id Int                                  @db.UnsignedInt
+  tenant_id      Int?                                 @db.UnsignedInt
+  activity_type  opportunity_activities_activity_type
+  notes          String?                              @db.Text
+  metadata       Json?
+  created_by     Int?                                 @db.UnsignedInt
+  created_at     DateTime                             @default(now()) @db.DateTime(0)
+  opportunities  opportunities                        @relation(fields: [opportunity_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_opp_act_opportunity")
+
+  @@index([opportunity_id, created_at], map: "idx_opp_act_opp")
+  @@index([tenant_id, created_at], map: "idx_opp_act_tenant")
+}
+
+model orders {
+  id            Int      @id @default(autoincrement()) @db.UnsignedInt
+  user_id       String   @db.VarChar(255)
+  package_name  String?  @db.VarChar(100)
+  package_price Decimal? @default(0.00) @db.Decimal(10, 2)
+  currency      String?  @default("INR") @db.VarChar(10)
+  addons        Json?
+  subtotal      Decimal? @default(0.00) @db.Decimal(10, 2)
+  gst           Decimal? @default(0.00) @db.Decimal(10, 2)
+  total         Decimal? @default(0.00) @db.Decimal(10, 2)
+  status        String?  @default("trial") @db.VarChar(50)
+  created_at    DateTime @default(now()) @db.DateTime(0)
+  updated_at    DateTime @default(now()) @db.DateTime(0)
+
+  @@index([status], map: "idx_status")
+  @@index([user_id], map: "idx_user_id")
+}
+
+model payment_sessions {
+  id                    Int                     @id @default(autoincrement()) @db.UnsignedInt
+  user_id               String                  @db.VarChar(100)
+  stripe_session_id     String                  @unique(map: "stripe_session_id") @db.VarChar(200)
+  stripe_payment_intent String?                 @db.VarChar(200)
+  package_name          String?                 @db.VarChar(100)
+  currency              String?                 @default("INR") @db.VarChar(10)
+  total_amount          Decimal?                @default(0.00) @db.Decimal(10, 2)
+  status                payment_sessions_status @default(pending)
+  created_at            DateTime                @default(now()) @db.DateTime(0)
+  updated_at            DateTime                @default(now()) @db.DateTime(0)
+  coupon_code           String?                 @db.VarChar(40)
+  coupon_id             Int?                    @db.UnsignedInt
+
+  @@index([user_id], map: "idx_payment_sessions_user")
+  @@index([stripe_session_id], map: "idx_stripe_session")
+}
+
+model refresh_tokens {
+  id         Int      @id @default(autoincrement()) @db.UnsignedInt
+  user_id    Int      @db.UnsignedInt
+  token_hash String   @db.VarChar(255)
+  expires_at DateTime @db.DateTime(0)
+  created_at DateTime @default(now()) @db.DateTime(0)
+  users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_refresh_tokens_user")
+
+  @@index([expires_at], map: "idx_refresh_tokens_expires")
+  @@index([user_id], map: "idx_refresh_tokens_user")
+}
+
+model reminders {
+  id                                         Int       @id @default(autoincrement()) @db.UnsignedInt
+  user_id                                    Int       @db.UnsignedInt
+  title                                      String    @db.VarChar(200)
+  note                                       String?   @db.Text
+  remind_at                                  DateTime  @db.DateTime(0)
+  lead_id                                    Int?      @db.UnsignedInt
+  assigned_to_user_id                        Int?      @db.UnsignedInt
+  reminder_type                              String    @default("general") @db.VarChar(50)
+  is_done                                    Boolean   @default(false)
+  created_at                                 DateTime  @default(now()) @db.DateTime(0)
+  is_deleted                                 Boolean   @default(false)
+  deleted_at                                 DateTime? @db.DateTime(0)
+  tenant_id                                  Int?      @db.UnsignedInt
+  users_reminders_assigned_to_user_idTousers users?    @relation("reminders_assigned_to_user_idTousers", fields: [assigned_to_user_id], references: [id], onUpdate: NoAction, map: "fk_reminder_assignee")
+  leads                                      leads?    @relation(fields: [lead_id], references: [id], onUpdate: NoAction, map: "fk_reminder_lead")
+  users_reminders_user_idTousers             users     @relation("reminders_user_idTousers", fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_reminder_user")
+
+  @@index([lead_id], map: "fk_reminder_lead")
+  @@index([assigned_to_user_id], map: "idx_assigned_to")
+  @@index([remind_at], map: "idx_remind_at")
+  @@index([reminder_type], map: "idx_reminder_type")
+  @@index([user_id], map: "idx_user_id")
+  @@index([is_deleted], map: "idx_reminders_is_deleted")
+}
+
+model subscription_addons {
+  id           Int      @id @default(autoincrement()) @db.UnsignedInt
+  slug         String   @unique(map: "uk_subscription_addons_slug") @db.VarChar(80)
+  name         String   @db.VarChar(120)
+  period_label String?  @db.VarChar(160)
+  price_inr    Decimal  @default(0.00) @db.Decimal(12, 2)
+  price_usd    Decimal  @default(0.00) @db.Decimal(12, 2)
+  icon         String?  @default("fas fa-circle") @db.VarChar(120)
+  sort_order   Int      @default(0)
+  is_active    Boolean  @default(true)
+  created_at   DateTime @default(now()) @db.DateTime(0)
+  updated_at   DateTime @default(now()) @db.DateTime(0)
+}
+
+model subscription_packages {
+  id             Int      @id @default(autoincrement()) @db.UnsignedInt
+  slug           String   @unique(map: "uk_subscription_packages_slug") @db.VarChar(80)
+  name           String   @db.VarChar(120)
+  description    String?  @db.Text
+  price_inr      Decimal  @default(0.00) @db.Decimal(12, 2)
+  price_usd      Decimal  @default(0.00) @db.Decimal(12, 2)
+  staff_seats    Int      @default(3) @db.UnsignedInt
+  billing_period String   @default("Year") @db.VarChar(40)
+  features_json  Json
+  sort_order     Int      @default(0)
+  is_active      Boolean  @default(true)
+  created_at     DateTime @default(now()) @db.DateTime(0)
+  updated_at     DateTime @default(now()) @db.DateTime(0)
+}
+
+model tasks {
+  id                             Int            @id @default(autoincrement()) @db.UnsignedInt
+  tenant_id                      Int?           @db.UnsignedInt
+  title                          String         @db.VarChar(200)
+  label                          String?        @db.VarChar(120)
+  description                    String?        @db.Text
+  lead_id                        Int?           @db.UnsignedInt
+  assigned_to                    Int?           @db.UnsignedInt
+  created_by                     Int            @db.UnsignedInt
+  due_date                       DateTime?      @db.Date
+  priority                       tasks_priority @default(medium)
+  status                         tasks_status   @default(new)
+  created_at                     DateTime       @default(now()) @db.DateTime(0)
+  updated_at                     DateTime       @default(now()) @db.DateTime(0)
+  client_id                      Int?           @db.UnsignedInt
+  task_category                  String?        @default("general") @db.VarChar(50)
+  task_type                      String?        @default("client") @db.VarChar(20)
+  frequency                      String?        @default("once") @db.VarChar(20)
+  is_deleted                     Boolean        @default(false)
+  deleted_at                     DateTime?      @db.DateTime(0)
+  users_tasks_assigned_toTousers users?         @relation("tasks_assigned_toTousers", fields: [assigned_to], references: [id], onUpdate: NoAction, map: "fk_task_assigned")
+  users_tasks_created_byTousers  users          @relation("tasks_created_byTousers", fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_task_creator")
+  leads                          leads?         @relation(fields: [lead_id], references: [id], onUpdate: NoAction, map: "fk_task_lead")
+
+  @@index([created_by], map: "fk_task_creator")
+  @@index([lead_id], map: "fk_task_lead")
+  @@index([assigned_to], map: "idx_assigned")
+  @@index([due_date], map: "idx_due_date")
+  @@index([label], map: "idx_label")
+  @@index([status], map: "idx_status")
+  @@index([is_deleted], map: "idx_tasks_is_deleted")
+}
+
+model tenant_lead_counters {
+  tenant_id        Int      @id @db.UnsignedInt
+  next_lead_number Int      @default(1) @db.UnsignedInt
+  updated_at       DateTime @default(now()) @db.DateTime(0)
+}
+
+model tickets {
+  id          Int              @id @default(autoincrement()) @db.UnsignedInt
+  subject     String           @db.VarChar(220)
+  description String?          @db.Text
+  priority    tickets_priority @default(medium)
+  status      tickets_status   @default(open)
+  source      String           @default("crm") @db.VarChar(40)
+  contact_id  Int?             @db.UnsignedInt
+  lead_id     Int?             @db.UnsignedInt
+  assigned_to Int?             @db.UnsignedInt
+  created_by  Int?             @db.UnsignedInt
+  due_at      DateTime?        @db.DateTime(0)
+  closed_at   DateTime?        @db.DateTime(0)
+  created_at  DateTime         @default(now()) @db.DateTime(0)
+  updated_at  DateTime         @default(now()) @db.DateTime(0)
+  is_deleted  Boolean          @default(false)
+  deleted_at  DateTime?        @db.DateTime(0)
+  tenant_id   Int?             @db.UnsignedInt
+
+  @@index([assigned_to], map: "idx_tickets_assigned")
+  @@index([contact_id], map: "idx_tickets_contact")
+  @@index([created_by], map: "idx_tickets_created_by")
+  @@index([is_deleted], map: "idx_tickets_is_deleted")
+  @@index([lead_id], map: "idx_tickets_lead")
+  @@index([priority], map: "idx_tickets_priority")
+  @@index([status], map: "idx_tickets_status")
+}
+
+model user_apple_calendar {
+  user_id         Int       @id @db.UnsignedInt
+  ical_url        String?   @db.Text
+  caldav_username String?   @db.VarChar(255)
+  caldav_password String?   @db.VarChar(255)
+  caldav_server   String    @default("https://caldav.icloud.com") @db.VarChar(255)
+  connected_at    DateTime? @db.DateTime(0)
+  last_sync_at    DateTime? @db.DateTime(0)
+  last_error      String?   @db.VarChar(500)
+  updated_at      DateTime  @default(now()) @db.DateTime(0)
+  users           users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_user_apple_calendar_user")
+}
+
+model users {
+  id                                               Int                    @id @default(autoincrement()) @db.UnsignedInt
+  email                                            String                 @unique(map: "uk_email") @db.VarChar(180)
+  password_hash                                    String?                @db.VarChar(255)
+  first_name                                       String?                @db.VarChar(100)
+  last_name                                        String?                @db.VarChar(100)
+  role                                             users_role             @default(staff)
+  is_active                                        Boolean                @default(true)
+  email_verified                                   Boolean                @default(false)
+  must_change_password                             Boolean                @default(false)
+  mobile_number                                    String?                @db.VarChar(20)
+  profile_image                                    String?                @db.VarChar(255)
+  password_reset_token                             String?                @db.VarChar(255)
+  password_reset_expires                           DateTime?              @db.DateTime(0)
+  created_at                                       DateTime               @default(now()) @db.DateTime(0)
+  updated_at                                       DateTime               @default(now()) @db.DateTime(0)
+  is_platform_admin                                Boolean                @default(false)
+  chat_thread_members                              chat_thread_members[]
+  chat_thread_messages                             chat_thread_messages[]
+  chat_threads                                     chat_threads[]
+  contacts_contacts_assigned_toTousers             contacts[]             @relation("contacts_assigned_toTousers")
+  contacts_contacts_created_byTousers              contacts[]             @relation("contacts_created_byTousers")
+  crm_calendar_events                              crm_calendar_events[]
+  crm_todo_assignees                               crm_todo_assignees[]
+  crm_todos                                        crm_todos[]
+  leads_leads_assigned_toTousers                   leads[]                @relation("leads_assigned_toTousers")
+  leads_leads_created_byTousers                    leads[]                @relation("leads_created_byTousers")
+  meeting_attendees                                meeting_attendees[]
+  meetings_meetings_assigned_to_user_idTousers     meetings[]             @relation("meetings_assigned_to_user_idTousers")
+  meetings_meetings_organizer_idTousers            meetings[]             @relation("meetings_organizer_idTousers")
+  notifications_notifications_actor_user_idTousers notifications[]        @relation("notifications_actor_user_idTousers")
+  notifications_notifications_user_idTousers       notifications[]        @relation("notifications_user_idTousers")
+  refresh_tokens                                   refresh_tokens[]
+  reminders_reminders_assigned_to_user_idTousers   reminders[]            @relation("reminders_assigned_to_user_idTousers")
+  reminders_reminders_user_idTousers               reminders[]            @relation("reminders_user_idTousers")
+  tasks_tasks_assigned_toTousers                   tasks[]                @relation("tasks_assigned_toTousers")
+  tasks_tasks_created_byTousers                    tasks[]                @relation("tasks_created_byTousers")
+  user_apple_calendar                              user_apple_calendar?
+}
+
+enum chat_threads_thread_type {
+  direct
+  group
+}
+
+enum chat_thread_members_member_role {
+  member
+  admin
+}
+
+enum crm_todos_frequency {
+  once
+  daily
+  weekly
+  monthly
+  quarterly
+  half_yearly
+  yearly
+}
+
+enum integration_webhooks_status {
+  received
+  processed
+  failed
+}
+
+enum invoices_type {
+  sales
+  purchase
+  proforma
+}
+
+enum fitness_clients_status {
+  Active
+  Hold
+  Inactive
+}
+
+enum fitness_collection_payments_pay_mode {
+  GPay
+  Cash
+  Online_Transfer @map("Online Transfer")
+  Cheque
+  UPI
+  NEFT
+}
+
+enum fitness_collections_collection_type {
+  diet_plan
+  supplement
+  bundle
+  other
+}
+
+enum fitness_consultations_consult_type {
+  Onboarding
+  Diet_Review @map("Diet Review")
+  Check_in    @map("Check-in")
+  Follow_up   @map("Follow-up")
+  Other
+}
+
+enum opportunity_activities_activity_type {
+  consultation
+  stage_change
+  close_won
+  close_lost
+  note
+}
+
+enum tickets_priority {
+  low
+  medium
+  high
+  urgent
+}
+
+enum crm_todos_priority {
+  low
+  medium
+  high
+}
+
+enum fitness_client_tasks_priority {
+  High
+  Medium
+  Low
+}
+
+enum fitness_clients_progress {
+  Very_Good @map("Very Good")
+  Good
+  Neutral
+  Poor
+  Very_Poor @map("Very Poor")
+}
+
+enum tickets_status {
+  open
+  in_progress
+  resolved
+  closed
+  reopened
+}
+
+enum fitness_client_tasks_status {
+  Open
+  In_Progress     @map("In Progress")
+  Done
+  Carried_Forward @map("Carried Forward")
+  Overdue
+}
+
+enum fitness_transactions_type {
+  Membership
+  Supplement
+  Other
+}
+
+enum users_role {
+  admin
+  manager
+  staff
+  owner
+}
+
+enum crm_todos_status {
+  pending
+  completed
+}
+
+enum leads_status {
+  new
+  processing
+  close_by
+  confirm
+  cancel
+}
+
+enum opportunities_stage {
+  open
+  proposal
+  negotiation
+  qualification_done
+  consultation_done
+  quotation_given
+  negotiation_review
+  on_hold
+  closed_won
+  closed_lost
+}
+
+enum payment_sessions_status {
+  pending
+  completed
+  expired
+  failed
+}
+
+enum tasks_priority {
+  low
+  medium
+  high
+}
+
+enum fitness_collections_status {
+  open
+  partial
+  paid
+  cancelled
+}
+
+enum tasks_status {
+  new
+  in_feedback
+  processing
+  completed
+  rejected
+  todo
+  in_progress
+  done
+  carried_forward
+}
+
+enum invoices_status {
+  draft
+  sent
+  paid
+  cancelled
+}
+
+enum fitness_transactions_pay_mode {
+  GPay
+  Cash
+  Online_Transfer @map("Online Transfer")
+  Cheque
+  UPI
+  NEFT
+}
+
+enum fitness_clients_source {
+  BNI
+  Instagram
+  Facebook
+  Referral___Existing_Client @map("Referral - Existing Client")
+  Friend___Family            @map("Friend / Family")
+  Walk_in                    @map("Walk-in")
+  Online___Website           @map("Online / Website")
+  Corporate___Company        @map("Corporate / Company")
+}
+
+enum fitness_clients_plan_type {
+  Month_1_Plan @map("1 Month Plan")
+  Month_3_Plan @map("3 Month Plan")
+  Month_6_Plan @map("6 Month Plan")
+  Year_1_Plan  @map("1 Year Plan")
+}
