@@ -27,6 +27,7 @@ import {
   formatLeadStatus,
   isCustomLeadStatus,
   statusChangeApiBody,
+  mergeCustomOptionsWithLeads,
 } from "@/components/Leads/leadConstants";
 import styles from "./leads.module.css";
 
@@ -44,6 +45,11 @@ export default function LeadsPage() {
   const statusColumns = useMemo(
     () => buildStatusColumns(customOptions.status || [], leads),
     [customOptions.status, leads]
+  );
+  /** Form / manage options: identical custom statuses as chips (registry + orphans). */
+  const formCustomOptions = useMemo(
+    () => mergeCustomOptionsWithLeads(customOptions, leads),
+    [customOptions, leads]
   );
   const sourceFilterOptions = useMemo(
     () => buildSourceFilterOptions(customOptions.source || []),
@@ -114,8 +120,18 @@ export default function LeadsPage() {
       const qs = params.toString();
       const res  = await apiFetch(`/leads${qs ? `?${qs}` : ""}`);
       const json = await res.json();
-      if (json.success && Array.isArray(json.data)) setLeads(json.data);
-      else setLeads([]);
+      if (json.success && Array.isArray(json.data)) {
+        // Deduplicate by id in case API/network glitch returns duplicates
+        const seen = new Set();
+        const unique = [];
+        for (const row of json.data) {
+          const id = row?.id;
+          if (id == null || seen.has(id)) continue;
+          seen.add(id);
+          unique.push(row);
+        }
+        setLeads(unique);
+      } else setLeads([]);
     } catch { setLeads([]); }
     finally  { if (!silent) setLoading(false); }
   }, [filterSource, filterDate, filterFollowUpFrom, filterFollowUpTo, filterSearch, filterAssignTo]);
@@ -842,11 +858,18 @@ export default function LeadsPage() {
       {/* ── Add Lead Modal ─────────────────────────────────────────────── */}
       <AddLeadModal
         open={addOpen}
-        customOptions={customOptions}
+        customOptions={formCustomOptions}
+        existingLeads={leads}
         onClose={() => setAddOpen(false)}
         onCreated={(newLead) => {
-          if (newLead) setLeads((prev) => [newLead, ...prev]);
-          else fetchLeads();
+          if (newLead) {
+            setLeads((prev) => {
+              if (!newLead?.id || prev.some((l) => l.id === newLead.id)) {
+                return [newLead, ...prev.filter((l) => l.id !== newLead?.id)];
+              }
+              return [newLead, ...prev];
+            });
+          } else fetchLeads();
           fetchCustomOptions();
           setAddOpen(false);
           showToast("Lead added successfully!");
@@ -858,7 +881,7 @@ export default function LeadsPage() {
         onClose={() => setActionModal(null)}
         users={users}
         statuses={statusColumns}
-        customOptions={customOptions}
+        customOptions={formCustomOptions}
         onDone={() => { fetchLeads(); fetchCustomOptions(); }}
         onLeadPatch={mergeLead}
         onConvertLead={openConvertFromStatus}
@@ -991,6 +1014,9 @@ function KanbanCard({ lead, statuses, customStatuses = [], onStatusChange, onDel
         <span className={styles.kcLabel}>{lead.label || "No Labels"}</span>
       </div>
       <div className={styles.kcMeta}>
+        <span className={styles.kcSource}>
+          {lead.lead_number != null ? `Lead #${lead.lead_number}` : `ID ${lead.id}`}
+        </span>
         <span><i className="fas fa-phone" /> {lead.phone}</span>
         {lead.source && <span className={styles.kcSource}>{lead.source}</span>}
       </div>
@@ -1100,9 +1126,10 @@ function ListRow({ lead, idx, statuses, customStatuses = [], selected, onToggle,
           <Link href={`/leads/${lead.id}`} className={styles.leadName}>
             {lead.name}
           </Link>
-          {lead.company_name && (
-            <span className={styles.leadCompany}>{lead.company_name}</span>
-          )}
+          <span className={styles.leadCompany}>
+            {lead.lead_number != null ? `Lead #${lead.lead_number}` : `ID ${lead.id}`}
+            {lead.company_name ? ` · ${lead.company_name}` : ""}
+          </span>
         </td>
         <td className={styles.tdMuted}>
           {new Date(lead.created_at).toLocaleDateString("en-IN", {

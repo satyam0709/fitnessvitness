@@ -92,6 +92,7 @@ export default function LeadForm({
   mode = "create",
   lead = null,
   customOptions: customOptionsProp = null,
+  existingLeads = [],
   onSuccess,
   onCancel,
   submitLabel,
@@ -99,6 +100,7 @@ export default function LeadForm({
   useAuth();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [dupAck, setDupAck] = useState(false);
   const [teamUsers, setTeamUsers] = useState([]);
   const [customOptions, setCustomOptions] = useState(customOptionsProp || {});
   const fileInputRef = useRef(null);
@@ -137,6 +139,9 @@ export default function LeadForm({
   );
   const [phoneDial, setPhoneDial] = useState(lead?.phone_dial || "+91");
   const [phone, setPhone] = useState(lead?.phone || "");
+  useEffect(() => {
+    setDupAck(false);
+  }, [phone]);
   const [companyName, setCompanyName] = useState(lead?.company_name || "");
   const [leadDate, setLeadDate] = useState(
     lead?.follow_up_date || new Date().toISOString().slice(0, 10)
@@ -162,18 +167,34 @@ export default function LeadForm({
   }, [customOptionsProp]);
 
   useEffect(() => {
-    if (customOptionsProp) return;
+    // Always refresh once so live picks up registry/discovered customs even if parent passed a stale empty object.
     async function loadOptions() {
       try {
         const res = await apiFetch("/leads/custom-options");
         const json = await res.json();
-        if (json.success && json.data) setCustomOptions(json.data);
+        if (json.success && json.data) {
+          setCustomOptions((prev) => {
+            const incoming = json.data || {};
+            const prevStatus = prev.status || [];
+            const nextStatus = incoming.status || [];
+            const byKey = new Map();
+            for (const o of [...prevStatus, ...nextStatus]) {
+              if (!o?.value) continue;
+              byKey.set(String(o.value).toLowerCase(), o);
+            }
+            return {
+              ...prev,
+              ...incoming,
+              status: [...byKey.values()],
+            };
+          });
+        }
       } catch {
         /* non-fatal */
       }
     }
     loadOptions();
-  }, [customOptionsProp]);
+  }, []);
 
   useEffect(() => {
     async function load() {
@@ -209,6 +230,21 @@ export default function LeadForm({
     if (!phone.trim()) {
       setError("Customer mobile number is required.");
       return;
+    }
+
+    const digits = String(phone).replace(/\D/g, "");
+    if (mode === "create" && digits && !dupAck) {
+      const matches = (existingLeads || []).filter((l) => {
+        const other = String(l.phone || "").replace(/\D/g, "");
+        return other && other === digits;
+      });
+      if (matches.length > 0) {
+        setDupAck(true);
+        setError(
+          `${matches.length} lead(s) already use this number (same person can have multiple leads with different status). Click Submit again to create another.`
+        );
+        return;
+      }
     }
 
     const resolvedStatus = resolveSelectWithOther(status, statusOther);
@@ -477,7 +513,14 @@ export default function LeadForm({
           </button>
         )}
         <button type="submit" className={styles.btnSubmit} disabled={submitting}>
-          {submitting ? "Saving…" : submitLabel || (mode === "edit" ? "Save Changes" : "Submit")}
+          {submitting
+            ? "Saving…"
+            : submitLabel ||
+              (mode === "edit"
+                ? "Save Changes"
+                : dupAck
+                  ? "Create anyway"
+                  : "Submit")}
         </button>
       </div>
     </form>

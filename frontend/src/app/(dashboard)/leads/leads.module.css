@@ -104,7 +104,7 @@
 /* Status summary row (like reference CRM) — built-ins + dynamic gray customs */
 .statusStrip {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
   gap: 10px;
 }
 
@@ -132,6 +132,7 @@
   text-align: left;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
   transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+  min-width: 0;
 }
 
 .statusChip:hover {
@@ -149,18 +150,26 @@
   font-size: 13px;
   font-weight: 800;
   line-height: 1.2;
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .statusChipCount {
   font-size: 15px;
   font-weight: 900;
+  flex: 0 0 auto;
   min-width: 28px;
   height: 28px;
+  padding: 0 6px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: rgba(255, 255, 255, 0.28);
   border-radius: 8px;
+  font-variant-numeric: tabular-nums;
 }
 
 .pageTitle {
