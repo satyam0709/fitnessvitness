@@ -49,7 +49,26 @@ function resolveStatusFilter(raw) {
 function parseStatusInput(body = {}, fallbackLegacy = "new") {
   const raw = body.status != null ? String(body.status).trim() : "";
   const rawV2 = body.status_v2 != null ? String(body.status_v2).trim() : "";
-  const candidate = raw || rawV2;
+
+  // Prefer status_v2 when present so clients can send enum-safe status + custom v2
+  // (needed for older APIs that only accept leads_status on `status`).
+  if (rawV2) {
+    const lowerV2 = rawV2.toLowerCase();
+    if (VALID_LEGACY.has(lowerV2)) {
+      return { legacy: lowerV2, v2: legacyToV2(lowerV2), custom: false };
+    }
+    if (VALID_V2.has(lowerV2)) {
+      return { legacy: v2ToLegacy(lowerV2), v2: lowerV2, custom: false };
+    }
+    const legacyFallback = VALID_LEGACY.has(raw.toLowerCase())
+      ? raw.toLowerCase()
+      : VALID_LEGACY.has(String(fallbackLegacy || "").toLowerCase())
+        ? String(fallbackLegacy).toLowerCase()
+        : "processing";
+    return { legacy: legacyFallback, v2: rawV2, custom: true };
+  }
+
+  const candidate = raw;
   if (!candidate) {
     const legacy = fallbackLegacy || "new";
     return { legacy, v2: legacyToV2(legacy), custom: false };
@@ -61,8 +80,7 @@ function parseStatusInput(body = {}, fallbackLegacy = "new") {
   if (VALID_V2.has(lower)) {
     return { legacy: v2ToLegacy(lower), v2: lower, custom: false };
   }
-  const customVal = raw || rawV2;
-  return { legacy: "processing", v2: customVal, custom: true };
+  return { legacy: "processing", v2: candidate, custom: true };
 }
 
 function enrichLeadStatus(row) {

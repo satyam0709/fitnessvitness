@@ -11,10 +11,23 @@ import {
   FOLLOWUP_TYPES,
   ACCOUNT_RELATIONSHIPS,
   OTHER_VALUE,
+  REFERENCE_STATUSES,
+  LEGACY_STATUSES,
   buildFieldOptions,
   getLeadStatusSelectValue,
 } from "./leadConstants";
 import styles from "./AddLeadModal.module.css";
+
+function isBuiltinStatusKey(value) {
+  const key = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (!key) return false;
+  if (FORM_STATUSES.some((s) => String(s.value || s.key || "").toLowerCase() === key)) return true;
+  if (REFERENCE_STATUSES.some((s) => s.key === key)) return true;
+  if (LEGACY_STATUSES.some((s) => s.key === key)) return true;
+  return false;
+}
 
 function initSelectWithOther(staticList, customList, currentValue) {
   const options = buildFieldOptions(staticList, customList, { includeOther: true });
@@ -232,7 +245,14 @@ export default function LeadForm({
       fd.append("name", customerName.trim());
       fd.append("phone", phone.trim());
       fd.append("phone_dial", phoneDial.trim());
-      fd.append("status", resolvedStatus);
+      // Custom Other statuses must NOT go in enum `status` — store in status_v2.
+      // Keep `status` as a valid leads_status so older backends don't return "invalid status".
+      if (status === OTHER_VALUE || (resolvedStatus && !isBuiltinStatusKey(resolvedStatus))) {
+        fd.append("status", "processing");
+        fd.append("status_v2", resolvedStatus);
+      } else {
+        fd.append("status", resolvedStatus);
+      }
       fd.append("source", resolvedSource || "other");
       if (leadDate) fd.append("follow_up_date", leadDate);
       if (companyName.trim()) fd.append("company_name", companyName.trim());
