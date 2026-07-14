@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { createPortal } from "react-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 import { subscribeTodayLive } from "@/lib/chatRealtime";
 import { useListHighlight, itemHighlightClass } from "@/lib/useListHighlight";
@@ -24,7 +24,9 @@ const STAGES = [
   { value: "closed_won", label: "Closed Won", color: "#16a34a" },
   { value: "closed_lost", label: "Closed Lost", color: "#9333ea" },
 ];
-const TABLE_STAGE_OPTIONS = STAGES.filter((s) => s.value !== "closed_won" && s.value !== "closed_lost");
+const OPEN_STAGES = STAGES.filter((s) => s.value !== "closed_won" && s.value !== "closed_lost");
+const CLOSED_STAGES = STAGES.filter((s) => s.value === "closed_won" || s.value === "closed_lost");
+const isClosedStage = (stage) => stage === "closed_won" || stage === "closed_lost";
 /** Intake / service detail for this CRM (stored in `product_category` for API compatibility). */
 const INTAKE_SERVICE_TYPES = [
   { value: "initial_consultation", label: "Initial consultation" },
@@ -145,17 +147,25 @@ async function opportunitiesRequest( suffix = "", options = {}) {
   return lastRes;
 }
 
+function initialListView(searchParams) {
+  const view = searchParams.get("view");
+  if (view && ["pipeline", "won", "lost", "all"].includes(view)) return view;
+  return "pipeline";
+}
+
 export default function OpportunitiesPage() {
   const { isLoaded } = useAuth();
   const { showToast } = useToast();
   const { confirm } = useConfirmDialog();
   const searchParams = useSearchParams();
-  const [listView, setListView] = useState("pipeline");
+  const router = useRouter();
+  const [listView, setListView] = useState(() => initialListView(searchParams));
   const [consultModal, setConsultModal] = useState({ open: false, opp: null, notes: "", at: "" });
   const [winModal, setWinModal] = useState(EMPTY_WIN_MODAL);
   const [stageBreakdown, setStageBreakdown] = useState(null);
   const [lossModal, setLossModal] = useState({ open: false, opp: null, reason: "" });
   const [actionSaving, setActionSaving] = useState(false);
+  const fetchSeqRef = useRef(0);
 
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -182,24 +192,42 @@ export default function OpportunitiesPage() {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
 
+  const applyListView = useCallback(
+    (nextView, { clearStage = true } = {}) => {
+      setListView(nextView);
+      if (clearStage) setStageFilter("");
+      const sp = new URLSearchParams(searchParams.toString());
+      if (nextView && nextView !== "pipeline") sp.set("view", nextView);
+      else sp.delete("view");
+      if (clearStage) sp.delete("stage");
+      const qs = sp.toString();
+      router.replace(qs ? `/opportunities?${qs}` : "/opportunities", { scroll: false });
+    },
+    [router, searchParams]
+  );
+
   const fetchItems = useCallback(async () => {
+    const seq = ++fetchSeqRef.current;
     setLoading(true);
     try {
       const p = new URLSearchParams();
       p.set("include_breakdown", "1");
       p.set("view", listView);
-      if (stageFilter) p.set("stage", stageFilter);
+      // Won/lost scope is the view itself — don't send a stage that can fight it
+      if (stageFilter && listView !== "won" && listView !== "lost") p.set("stage", stageFilter);
       if (q.trim()) p.set("q", q.trim());
       if (fromDate) p.set("expected_close_from", fromDate);
       if (toDate) p.set("expected_close_to", toDate);
       if (starredOnly) p.set("starred", "1");
-      const res = await opportunitiesRequest( `?${p.toString()}`);
+      const res = await opportunitiesRequest(`?${p.toString()}`);
+      if (seq !== fetchSeqRef.current) return;
       if (!res) {
         showToast("Opportunity service is temporarily unavailable", "error");
         setItems([]);
         return;
       }
       const json = await res.json().catch(() => ({}));
+      if (seq !== fetchSeqRef.current) return;
       if (!res.ok || !json.success) {
         showToast(json.message || "Could not load opportunities", "error");
         setItems([]);
@@ -208,10 +236,11 @@ export default function OpportunitiesPage() {
       setItems(Array.isArray(json.data) ? json.data : []);
       setStageBreakdown(Array.isArray(json.stageBreakdown) ? json.stageBreakdown : null);
     } catch {
+      if (seq !== fetchSeqRef.current) return;
       showToast("Could not load opportunities", "error");
       setItems([]);
     } finally {
-      setLoading(false);
+      if (seq === fetchSeqRef.current) setLoading(false);
     }
   }, [fromDate, q, showToast, stageFilter, starredOnly, toDate, listView]);
 
@@ -228,6 +257,9 @@ export default function OpportunitiesPage() {
     const view = searchParams.get("view");
     if (view && ["pipeline", "won", "lost", "all"].includes(view)) {
       setListView(view);
+    } else if (!view) {
+      // Keep current tab unless URL explicitly has no view and we arrived fresh —
+      // don't reset when replace() omitted view for pipeline
     }
     const stage = searchParams.get("stage");
     if (stage === "open") {
@@ -251,22 +283,23 @@ export default function OpportunitiesPage() {
   const stageCounts = useMemo(() => {
     const out = { all: 0 };
     for (const s of STAGES) out[s.value] = 0;
-    if (stageBreakdown?.length && (listView === "pipeline" || listView === "all")) {
+    if (stageBreakdown?.length) {
       for (const b of stageBreakdown) {
         const key = normalizeStageForUi(b.key);
         const n = Number(b.count) || 0;
         if (out[key] != null) out[key] = n;
-        out.all += n;
       }
+      // "All stages" = open pipeline only
+      out.all = OPEN_STAGES.reduce((sum, s) => sum + (out[s.value] || 0), 0);
       return out;
     }
-    out.all = items.length;
+    out.all = items.filter((it) => !isClosedStage(normalizeStageForUi(it.stage))).length;
     for (const it of items) {
       const stageKey = normalizeStageForUi(it.stage);
       if (out[stageKey] != null) out[stageKey] += 1;
     }
     return out;
-  }, [items, listView, stageBreakdown]);
+  }, [items, stageBreakdown]);
 
   const totalAmount = useMemo(() => {
     return items.reduce((acc, it) => {
@@ -411,8 +444,20 @@ export default function OpportunitiesPage() {
       if (opp) setLossModal({ open: true, opp, reason: "" });
       return;
     }
+
+    const current = items.find((x) => x.id === id);
+    const wasClosed = current && isClosedStage(normalizeStageForUi(current.stage));
+    if (wasClosed) {
+      const ok = await confirm({
+        title: "Reopen opportunity?",
+        description:
+          "This deal is Closed Won/Lost. Changing the stage moves it back into the open pipeline so you can continue working it.",
+      });
+      if (!ok) return;
+    }
+
     try {
-      const res = await opportunitiesRequest( `/${id}/stage`, {
+      const res = await opportunitiesRequest(`/${id}/stage`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ stage: nextStage }),
@@ -426,8 +471,12 @@ export default function OpportunitiesPage() {
         showToast(json.message || "Could not update stage", "error");
         return;
       }
-      showToast("Opportunity stage updated");
-      fetchItems();
+      showToast(wasClosed ? "Reopened — back in Pipeline" : "Opportunity stage updated");
+      if (wasClosed) {
+        applyListView("pipeline");
+      } else {
+        fetchItems();
+      }
     } catch {
       showToast("Could not update stage", "error");
     }
@@ -564,10 +613,11 @@ export default function OpportunitiesPage() {
       showToast(
         clientId
           ? `Marked won — client ${clientId} linked`
-          : "Marked won — appears under Revenue (won)"
+          : "Marked Closed Won — moved to Revenue (won)"
       );
       setWinModal(EMPTY_WIN_MODAL);
-      fetchItems();
+      applyListView("won");
+      // fetchItems runs via useEffect when listView changes to "won"
     } catch {
       showToast("Could not close as won", "error");
     } finally {
@@ -596,9 +646,10 @@ export default function OpportunitiesPage() {
         showToast(json.message || "Could not close as lost", "error");
         return;
       }
-      showToast("Marked lost");
+      showToast("Marked Closed Lost — moved to Closed lost");
       setLossModal({ open: false, opp: null, reason: "" });
-      fetchItems();
+      applyListView("lost");
+      // fetchItems runs via useEffect when listView changes to "lost"
     } catch {
       showToast("Could not close as lost", "error");
     } finally {
@@ -650,40 +701,57 @@ export default function OpportunitiesPage() {
             role="tab"
             aria-selected={listView === t.id}
             className={`${styles.listViewTab} ${listView === t.id ? styles.listViewTabActive : ""}`}
-            onClick={() => setListView(t.id)}
+            onClick={() => applyListView(t.id)}
           >
             {t.label}
           </button>
         ))}
       </div>
       <p className={styles.helpHint}>
-        Log a <strong>consultation</strong> before quoting. <strong>Mark won</strong> records booked revenue and moves the deal to{" "}
-        <strong>Revenue (won)</strong>. Start a <strong>new opportunity</strong> for each new sales cycle.
+        <strong>Closed Won / Closed Lost</strong> leave the Pipeline list on purpose — use those chips or the{" "}
+        <strong>Revenue (won)</strong> / <strong>Closed lost</strong> tabs to find them. Change stage back anytime
+        to reopen a deal closed by mistake.
       </p>
 
-      {(listView === "pipeline" || listView === "all") && (
       <div className={styles.stageStrip}>
         <button
           type="button"
-          className={`${styles.stageCard} ${!stageFilter && !fromLeadsOnly ? styles.stageCardActive : ""}`}
+          className={`${styles.stageCard} ${listView === "pipeline" && !stageFilter && !fromLeadsOnly ? styles.stageCardActive : ""}`}
           onClick={() => {
             setFromLeadsOnly(false);
-            setStageFilter("");
+            applyListView("pipeline");
           }}
         >
-          <span>All stages</span>
+          <span>Pipeline</span>
           <strong>{stageCounts.all || 0}</strong>
         </button>
-        {STAGES.map((s) => (
+        {OPEN_STAGES.map((s) => (
           <button
             key={s.value}
             type="button"
-            className={`${styles.stageCard} ${stageFilter === s.value ? styles.stageCardActive : ""}`}
+            className={`${styles.stageCard} ${listView === "pipeline" && stageFilter === s.value ? styles.stageCardActive : ""}`}
             style={{ borderTopColor: s.color }}
             onClick={() => {
               setFromLeadsOnly(false);
+              applyListView("pipeline", { clearStage: false });
               setStageFilter((prev) => (prev === s.value ? "" : s.value));
             }}
+          >
+            <span>{s.label}</span>
+            <strong>{stageCounts[s.value] || 0}</strong>
+          </button>
+        ))}
+        {CLOSED_STAGES.map((s) => (
+          <button
+            key={s.value}
+            type="button"
+            className={`${styles.stageCard} ${listView === (s.value === "closed_won" ? "won" : "lost") ? styles.stageCardActive : ""}`}
+            style={{ borderTopColor: s.color }}
+            onClick={() => {
+              setFromLeadsOnly(false);
+              applyListView(s.value === "closed_won" ? "won" : "lost");
+            }}
+            title={`View ${s.label} deals — change stage there to reopen`}
           >
             <span>{s.label}</span>
             <strong>{stageCounts[s.value] || 0}</strong>
@@ -694,7 +762,7 @@ export default function OpportunitiesPage() {
           className={`${styles.stageCard} ${fromLeadsOnly ? styles.stageCardActive : ""}`}
           style={{ borderTopColor: "#6366f1" }}
           onClick={() => {
-            setStageFilter("");
+            applyListView("pipeline");
             setFromLeadsOnly((v) => !v);
           }}
           title="Opportunities created from lead conversion"
@@ -703,7 +771,6 @@ export default function OpportunitiesPage() {
           <strong>{leadConversionCount}</strong>
         </button>
       </div>
-      )}
 
       <div className={styles.toolbar}>
         <input
@@ -724,10 +791,21 @@ export default function OpportunitiesPage() {
             setQ("");
             setFromDate("");
             setToDate("");
-            setStageFilter("");
             setStarredOnly(false);
             setFromLeadsOnly(false);
-            setListView("pipeline");
+            setColFilters({
+              title: "",
+              company: "",
+              category: "",
+              followupType: "",
+              opportunityType: "",
+              minAmount: "",
+              maxAmount: "",
+              expectedClose: "",
+              leadSource: "",
+              owner: "",
+            });
+            applyListView("pipeline");
           }}
         >
           Clear
@@ -755,7 +833,15 @@ export default function OpportunitiesPage() {
         {loading ? (
           <div className={styles.empty}>Loading opportunities...</div>
         ) : filteredRows.length === 0 ? (
-          <div className={styles.empty}>No opportunities found.</div>
+          <div className={styles.empty}>
+            {listView === "won"
+              ? "No closed-won deals yet. Mark a prospect Closed Won to see booked revenue here."
+              : listView === "lost"
+                ? "No closed-lost deals yet."
+                : fromLeadsOnly
+                  ? "No opportunities from leads match these filters."
+                  : "No opportunities found."}
+          </div>
         ) : (
           <table className={styles.table}>
             <thead>
@@ -778,9 +864,8 @@ export default function OpportunitiesPage() {
                     <th>Loss reason</th>
                     <th>Lost date</th>
                   </>
-                ) : !showWonCols ? (
-                  <th>Stage</th>
                 ) : null}
+                <th>Stage</th>
                 {!showWonCols && !showLostCols ? <th>Source</th> : null}
                 <th>Assigned</th>
                 <th />
@@ -944,27 +1029,39 @@ export default function OpportunitiesPage() {
                       <td>{it.loss_reason || "—"}</td>
                       <td>{it.closed_lost_at ? String(it.closed_lost_at).slice(0, 10) : "—"}</td>
                     </>
-                  ) : !showWonCols ? (
-                    <td>
-                      {it.stage === "closed_won" || it.stage === "closed_lost" ? (
-                        <span className={styles.stagePill}>
-                          {selectedStageMeta[normalizeStageForUi(it.stage)] || prettifyToken(it.stage)}
-                        </span>
-                      ) : (
-                        <select
-                          className={styles.stageSelect}
-                          value={normalizeStageForUi(it.stage)}
-                          onChange={(e) => updateStage(it.id, e.target.value)}
-                        >
-                          {TABLE_STAGE_OPTIONS.map((s) => (
-                            <option key={s.value} value={s.value}>
-                              {s.label}
-                            </option>
-                          ))}
-                        </select>
-                      )}
-                    </td>
                   ) : null}
+                  <td>
+                    <select
+                      className={styles.stageSelect}
+                      value={normalizeStageForUi(it.stage)}
+                      style={{
+                        color: STAGES.find((s) => s.value === normalizeStageForUi(it.stage))?.color,
+                        borderColor: STAGES.find((s) => s.value === normalizeStageForUi(it.stage))?.color,
+                        fontWeight: isClosedStage(normalizeStageForUi(it.stage)) ? 700 : undefined,
+                      }}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        e.target.value = normalizeStageForUi(it.stage);
+                        updateStage(it.id, next);
+                      }}
+                      aria-label="Opportunity stage"
+                    >
+                      <optgroup label="Pipeline">
+                        {OPEN_STAGES.map((s) => (
+                          <option key={s.value} value={s.value}>
+                            {s.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                      <optgroup label="Closed">
+                        {CLOSED_STAGES.map((s) => (
+                          <option key={s.value} value={s.value}>
+                            {s.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                    </select>
+                  </td>
                   {!showWonCols && !showLostCols ? (
                     <td>
                       {leadSourceLabels[String(it.lead_source || "").toLowerCase()] ||

@@ -1,12 +1,14 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useMemo, useEffect } from "react";
 import { apiFetch } from "@/lib/api";
 import ConvertLeadModal from "./ConvertLeadModal";
-import { isLeadConverted } from "./leadConstants";
+import {
+  isLeadConverted,
+  buildLabelFilterOptions,
+  getLeadPipelineKey,
+} from "./leadConstants";
 import styles from "./LeadQuickModals.module.css";
-
-const LABEL_PRESETS = ["Hot", "Warm", "Cold", "VIP", "Enterprise", "Partner", "Inbound"];
 
 const WHATSAPP_TEMPLATES = [
   { id: "greet", label: "Greeting", body: "Hello {{name}}, thank you for contacting us. How may we help you today?" },
@@ -64,6 +66,7 @@ export default function LeadQuickModals({
   onClose,
   users = [],
   statuses = [],
+  customOptions = {},
   onDone,
   onLeadPatch,
   onConvertLead,
@@ -75,7 +78,13 @@ export default function LeadQuickModals({
   return (
     <>
       {type === "label" && (
-        <LabelModal lead={lead} onClose={onClose} onDone={onDone} onLeadPatch={onLeadPatch} />
+        <LabelModal
+          lead={lead}
+          customLabels={customOptions.label || []}
+          onClose={onClose}
+          onDone={onDone}
+          onLeadPatch={onLeadPatch}
+        />
       )}
       {type === "assign" && (
         <AssignModal lead={lead} users={users} onClose={onClose} onDone={onDone} onLeadPatch={onLeadPatch} />
@@ -227,14 +236,40 @@ function SendWhatsappModal({ lead, onClose }) {
   );
 }
 
-function LabelModal({ lead, onClose, onDone, onLeadPatch }) {
+function LabelModal({ lead, customLabels = [], onClose, onDone, onLeadPatch }) {
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(lead.label || "");
   const [custom, setCustom] = useState("");
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
+  const [remoteLabels, setRemoteLabels] = useState(customLabels);
 
-  const filtered = LABEL_PRESETS.filter((l) => l.toLowerCase().includes(q.toLowerCase()));
+  useEffect(() => {
+    setRemoteLabels(customLabels || []);
+  }, [customLabels]);
+
+  useEffect(() => {
+    if (customLabels?.length) return;
+    async function load() {
+      try {
+        const res = await apiFetch("/leads/custom-options");
+        const json = await res.json();
+        if (json.success) setRemoteLabels(json.data?.label || []);
+      } catch {
+        /* non-fatal */
+      }
+    }
+    load();
+  }, [customLabels]);
+
+  const allLabels = useMemo(
+    () => buildLabelFilterOptions(remoteLabels),
+    [remoteLabels]
+  );
+
+  const filtered = allLabels.filter((l) =>
+    l.label.toLowerCase().includes(q.toLowerCase())
+  );
 
   async function save() {
     const label = (custom.trim() || sel || "").trim() || null;
@@ -284,15 +319,15 @@ function LabelModal({ lead, onClose, onDone, onLeadPatch }) {
             ) : (
               filtered.map((l) => (
                 <button
-                  key={l}
+                  key={l.value}
                   type="button"
-                  className={`${styles.labelOption} ${sel === l ? styles.labelOptionSel : ""}`}
+                  className={`${styles.labelOption} ${sel === l.value ? styles.labelOptionSel : ""}`}
                   onClick={() => {
-                    setSel(l);
+                    setSel(l.value);
                     setCustom("");
                   }}
                 >
-                  {l}
+                  {l.label}
                 </button>
               ))
             )}
@@ -488,9 +523,10 @@ function StatusModal({ lead, statuses, onClose, onDone, onLeadPatch, onConvertLe
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
   const alreadyConverted = isLeadConverted(lead);
+  const currentKey = getLeadPipelineKey(lead);
 
   async function pick(st) {
-    if (st === lead.status) {
+    if (st === currentKey) {
       onClose();
       return;
     }
@@ -507,7 +543,7 @@ function StatusModal({ lead, statuses, onClose, onDone, onLeadPatch, onConvertLe
         setErr(json.message || "Failed");
         return;
       }
-      onLeadPatch?.({ id: lead.id, status: st });
+      onLeadPatch?.(json.data || { id: lead.id, status: st });
       onDone?.();
       onClose();
     } catch (e) {
@@ -533,13 +569,13 @@ function StatusModal({ lead, statuses, onClose, onDone, onLeadPatch, onConvertLe
               <button
                 key={s.key}
                 type="button"
-                className={`${styles.statusBtn} ${lead.status === s.key ? styles.statusBtnActive : ""}`}
+                className={`${styles.statusBtn} ${currentKey === s.key ? styles.statusBtnActive : ""}`}
                 style={{ background: s.color }}
                 onClick={() => pick(s.key)}
                 disabled={saving}
               >
                 {s.label}
-                {lead.status === s.key ? <i className="fas fa-check" /> : <span />}
+                {currentKey === s.key ? <i className="fas fa-check" /> : <span />}
               </button>
             ))}
           </div>

@@ -106,6 +106,26 @@ function formatOpp(opp) {
   };
 }
 
+/** Resolve owner emails without a Prisma relation (schema has no opportunities↔users relation). */
+async function attachOwnerEmails(opps) {
+  const list = Array.isArray(opps) ? opps : opps ? [opps] : [];
+  const ids = [...new Set(list.map((o) => o.owner_user_id).filter((id) => id != null))];
+  const emailById = new Map();
+  if (ids.length) {
+    const users = await prisma.users.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, email: true },
+    });
+    for (const u of users) emailById.set(u.id, u.email || null);
+  }
+  return list.map((opp) =>
+    formatOpp({
+      ...opp,
+      owner_email: opp.owner_user_id != null ? emailById.get(opp.owner_user_id) || null : null,
+    })
+  );
+}
+
 async function loadOpportunityScoped(req, id) {
   const scope = applyScope(req);
   const where = {
@@ -113,22 +133,10 @@ async function loadOpportunityScoped(req, id) {
     ...scope
   };
   
-  const opp = await prisma.opportunities.findFirst({
-    where,
-    include: {
-      users_opportunities_owner_user_idTousers: {
-        select: {
-          email: true
-        }
-      }
-    }
-  });
+  const opp = await prisma.opportunities.findFirst({ where });
   if (!opp) return null;
-  const owner = opp.users_opportunities_owner_user_idTousers;
-  return formatOpp({
-    ...opp,
-    owner_email: owner ? owner.email : null
-  });
+  const [formatted] = await attachOwnerEmails(opp);
+  return formatted;
 }
 
 async function syncFollowupReminder(txOrPrisma, opportunity, userId) {
@@ -229,12 +237,12 @@ router.get("/", async (req, res) => {
       return res.status(400).json({ success: false, message: "view must be pipeline, won, lost, or all" });
     }
 
-    if (stage) {
+    // Stage chip filters open pipeline only — never overwrite won/lost view scope
+    if (stage && viewNorm !== "won" && viewNorm !== "lost") {
       if (!VALID_STAGE.has(String(stage).trim().toLowerCase())) {
         return res.status(400).json({ success: false, message: "Invalid stage" });
       }
-      const normalizedStage = normalizeStage(stage);
-      where.stage = normalizedStage;
+      where.stage = normalizeStage(stage);
     }
     
     if (q && String(q).trim()) {
@@ -256,12 +264,19 @@ router.get("/", async (req, res) => {
     }
     
     if (expected_close_from || expected_close_to) {
-      where.expected_close_date = {};
+      // Won/lost tabs: date range is closed date (expected_close is often null after close)
+      const dateField =
+        viewNorm === "won" ? "closed_won_at" : viewNorm === "lost" ? "closed_lost_at" : "expected_close_date";
+      where[dateField] = {};
       if (expected_close_from) {
-        where.expected_close_date.gte = new Date(expected_close_from);
+        where[dateField].gte = new Date(expected_close_from);
       }
       if (expected_close_to) {
-        where.expected_close_date.lte = new Date(expected_close_to);
+        const end = new Date(expected_close_to);
+        if (viewNorm === "won" || viewNorm === "lost") {
+          end.setHours(23, 59, 59, 999);
+        }
+        where[dateField].lte = end;
       }
     }
     
@@ -285,41 +300,47 @@ router.get("/", async (req, res) => {
     const rows = await prisma.opportunities.findMany({
       where,
       orderBy,
-      include: {
-        users_opportunities_owner_user_idTousers: {
-          select: {
-            email: true
-          }
-        }
-      }
     });
 
-    const formattedRows = rows.map(opp => {
-      const owner = opp.users_opportunities_owner_user_idTousers;
-      return formatOpp({
-        ...opp,
-        owner_email: owner ? owner.email : null
-      });
-    });
+    const formattedRows = await attachOwnerEmails(rows);
 
     let stageBreakdown = null;
     if (String(include_breakdown || "") === "1") {
+      // Full pipeline counts (all stages) so Closed Won / Closed Lost strip cards stay accurate
+      const breakdownWhere = { ...scope };
+      if (String(starred || "") === "1") breakdownWhere.is_starred = true;
       const buckets = await prisma.opportunities.groupBy({
-        by: ['stage'],
-        where,
-        _count: {
-          _all: true
-        }
+        by: ["stage"],
+        where: breakdownWhere,
+        _count: { _all: true },
       });
-      stageBreakdown = buckets.map(b => ({
-        key: String(b.stage),
-        count: Number(b._count._all)
-      })).sort((a, b) => b.count - a.count);
+      stageBreakdown = buckets
+        .map((b) => ({
+          key: String(b.stage),
+          count: Number(b._count._all),
+        }))
+        .sort((a, b) => b.count - a.count);
     }
 
     res.json({ success: true, total: formattedRows.length, data: formattedRows, stageBreakdown });
   } catch (err) {
     console.error("GET /api/opportunities", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.get("/revenue-summary", async (req, res) => {
+  try {
+    const {
+      getRevenueSummary,
+      parseYmd,
+    } = require("../services/opportunityRevenueStats");
+    const from = parseYmd(req.query.from || req.query.date_from);
+    const to = parseYmd(req.query.to || req.query.date_to);
+    const data = await getRevenueSummary(req, { from, to });
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error("GET /api/opportunities/revenue-summary", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -673,6 +694,82 @@ router.put("/:id", async (req, res) => {
   }
 });
 
+function isClosedStageValue(stage) {
+  const s = String(stage || "").toLowerCase();
+  return s === "closed_won" || s === "closed_lost";
+}
+
+/** Prisma update data when moving stages — clears close metadata on reopen. */
+function stageTransitionData(fromStage, toStage) {
+  const data = {
+    stage: toStage,
+    updated_at: new Date(),
+  };
+  if (isClosedStageValue(fromStage) && !isClosedStageValue(toStage)) {
+    data.closed_won_at = null;
+    data.closed_lost_at = null;
+    data.loss_reason = null;
+    // Keep final_amount as historical; reopen sends deal back to open pipeline
+  }
+  if (toStage === "closed_won" || toStage === "closed_lost") {
+    // Direct stage→closed without close-won/close-lost endpoints is allowed for reopen→reclose path
+    // but prefer dedicated close endpoints from UI.
+  }
+  return data;
+}
+
+async function applyStageChange(req, id, normalizedStage) {
+  const existing = await loadOpportunityScoped(req, id);
+  if (!existing) {
+    const err = new Error("Opportunity not found");
+    err.status = 404;
+    throw err;
+  }
+
+  // Closing must go through /close-won or /close-lost (amount / reason)
+  if (
+    !isClosedStageValue(existing.stage) &&
+    isClosedStageValue(normalizedStage)
+  ) {
+    const err = new Error(
+      normalizedStage === "closed_won"
+        ? "Use Mark Won to close as Closed Won (booked amount required)"
+        : "Use Mark Lost to close as Closed Lost"
+    );
+    err.status = 400;
+    throw err;
+  }
+
+  const data = stageTransitionData(existing.stage, normalizedStage);
+  await prisma.opportunities.update({
+    where: { id },
+    data,
+  });
+
+  if (existing.stage !== normalizedStage) {
+    await insertOpportunityActivity(prisma, {
+      opportunityId: id,
+      tenantId: req.user?.tenantId ?? null,
+      activityType: "stage_change",
+      notes: isClosedStageValue(existing.stage) && !isClosedStageValue(normalizedStage)
+        ? "Reopened to pipeline"
+        : null,
+      metadata: {
+        from: existing.stage,
+        to: normalizedStage,
+        reopened: isClosedStageValue(existing.stage) && !isClosedStageValue(normalizedStage),
+      },
+      userId: req.user.id,
+    });
+  }
+
+  emitOppChanges(req, "stage", { id, stage: normalizedStage });
+  const [updated] = await attachOwnerEmails(
+    await prisma.opportunities.findFirst({ where: { id } })
+  );
+  return updated;
+}
+
 router.patch("/:id/stage", async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -680,33 +777,11 @@ router.patch("/:id/stage", async (req, res) => {
     if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
     if (!VALID_STAGE.has(stage)) return res.status(400).json({ success: false, message: "Invalid stage" });
     const normalizedStage = normalizeStage(stage);
-    
-    const existing = await loadOpportunityScoped(req, id);
-    if (!existing) return res.status(404).json({ success: false, message: "Opportunity not found" });
-    
-    await prisma.opportunities.update({
-      where: { id },
-      data: {
-        stage: normalizedStage,
-        updated_at: new Date()
-      }
-    });
-
-    if (existing.stage !== normalizedStage) {
-      await insertOpportunityActivity(prisma, {
-        opportunityId: id,
-        tenantId: req.user?.tenantId ?? null,
-        activityType: "stage_change",
-        notes: null,
-        metadata: { from: existing.stage, to: normalizedStage },
-        userId: req.user.id
-      });
-    }
-    emitOppChanges(req, "stage", { id, stage: normalizedStage });
-    res.json({ success: true });
+    const data = await applyStageChange(req, id, normalizedStage);
+    res.json({ success: true, data });
   } catch (err) {
     console.error("PATCH /api/opportunities/:id/stage", err);
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 });
 
@@ -717,33 +792,11 @@ router.put("/:id/stage", async (req, res) => {
     if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
     if (!VALID_STAGE.has(stage)) return res.status(400).json({ success: false, message: "Invalid stage" });
     const normalizedStage = normalizeStage(stage);
-    
-    const existing = await loadOpportunityScoped(req, id);
-    if (!existing) return res.status(404).json({ success: false, message: "Opportunity not found" });
-    
-    await prisma.opportunities.update({
-      where: { id },
-      data: {
-        stage: normalizedStage,
-        updated_at: new Date()
-      }
-    });
-
-    if (existing.stage !== normalizedStage) {
-      await insertOpportunityActivity(prisma, {
-        opportunityId: id,
-        tenantId: req.user?.tenantId ?? null,
-        activityType: "stage_change",
-        notes: null,
-        metadata: { from: existing.stage, to: normalizedStage },
-        userId: req.user.id
-      });
-    }
-    emitOppChanges(req, "stage", { id, stage: normalizedStage });
-    res.json({ success: true });
+    const data = await applyStageChange(req, id, normalizedStage);
+    res.json({ success: true, data });
   } catch (err) {
     console.error("PUT /api/opportunities/:id/stage", err);
-    res.status(500).json({ success: false, message: err.message });
+    res.status(err.status || 500).json({ success: false, message: err.message });
   }
 });
 

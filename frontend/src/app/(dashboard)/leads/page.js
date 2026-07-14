@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSearchParams } from "next/navigation";
@@ -9,21 +9,25 @@ import { subscribeCrmLive } from "@/lib/chatRealtime";
 import AddLeadModal from "@/components/Leads/AddLeadModal";
 import LeadDateRangeModal from "@/components/Leads/LeadDateRangeModal";
 import LeadQuickModals from "@/components/Leads/LeadQuickModals";
+import ManageCustomOptionsModal from "@/components/Leads/ManageCustomOptionsModal";
+import ConvertLeadModal from "@/components/Leads/ConvertLeadModal";
 import {
   useConfirmDialog,
   buildDeleteMessage,
 } from "@/components/ConfirmDialog/ConfirmDialogContext";
 import LeadChangeLogModal from "@/components/Leads/LeadChangeLogModal";
 import {
-  LEGACY_STATUSES,
-  SOURCES,
   CONVERT_OPTION_VALUE,
   isLeadConverted,
+  buildStatusColumns,
+  buildSourceFilterOptions,
+  buildLabelFilterOptions,
+  getLeadStatusSelectValue,
+  getLeadPipelineKey,
+  formatLeadStatus,
+  isCustomLeadStatus,
 } from "@/components/Leads/leadConstants";
 import styles from "./leads.module.css";
-
-const STATUSES = LEGACY_STATUSES;
-const SOURCE_ITEMS = SOURCES;
 
 export default function LeadsPage() {
   const { confirm } = useConfirmDialog();
@@ -31,9 +35,27 @@ export default function LeadsPage() {
   const searchParams = useSearchParams();
 
   // ── data state ─────────────────────────────────────────────────────────
-  const [leads,      setLeads]      = useState([]);
-  const [users,      setUsers]      = useState([]);
-  const [loading,    setLoading]    = useState(true);
+  const [leads,         setLeads]         = useState([]);
+  const [users,         setUsers]         = useState([]);
+  const [loading,       setLoading]       = useState(true);
+  const [customOptions, setCustomOptions] = useState({});
+
+  const statusColumns = useMemo(
+    () => buildStatusColumns(customOptions.status || []),
+    [customOptions.status]
+  );
+  const customStatusKeys = useMemo(
+    () => new Set((customOptions.status || []).map((o) => o.value)),
+    [customOptions.status]
+  );
+  const sourceFilterOptions = useMemo(
+    () => buildSourceFilterOptions(customOptions.source || []),
+    [customOptions.source]
+  );
+  const labelFilterOptions = useMemo(
+    () => buildLabelFilterOptions(customOptions.label || []),
+    [customOptions.label]
+  );
 
   // ── view / filter state ────────────────────────────────────────────────
   const [viewMode,       setViewMode]       = useState("list"); // "kanban" | "list"
@@ -48,14 +70,16 @@ export default function LeadsPage() {
   const [filterStatus,   setFilterStatus]   = useState(searchParams.get("status") || "");
 
   // ── modal state ────────────────────────────────────────────────────────
-  const [addOpen,       setAddOpen]       = useState(false);
-  const [dateRangeOpen, setDateRangeOpen] = useState(false);
-  const [menuOpen,      setMenuOpen]      = useState(false);
-  const [selectedLeads, setSelectedLeads] = useState(new Set());
+  const [addOpen,            setAddOpen]            = useState(false);
+  const [dateRangeOpen,      setDateRangeOpen]      = useState(false);
+  const [manageOptionsOpen,  setManageOptionsOpen]  = useState(false);
+  const [convertModal,       setConvertModal]       = useState(null); // lead object
+  const [menuOpen,           setMenuOpen]           = useState(false);
+  const [selectedLeads,      setSelectedLeads]      = useState(new Set());
   const menuRef = useRef(null);
 
-  const [actionModal, setActionModal] = useState(null);
-  const [changeLogLeadId, setChangeLogLeadId] = useState(null);
+  const [actionModal,      setActionModal]      = useState(null);
+  const [changeLogLeadId,  setChangeLogLeadId]  = useState(null);
 
   // ── toast ──────────────────────────────────────────────────────────────
   const [toast, setToast] = useState(null);
@@ -106,15 +130,25 @@ export default function LeadsPage() {
     } catch { setUsers([]); }
   }, []);
 
+  const fetchCustomOptions = useCallback(async () => {
+    try {
+      const res  = await apiFetch("/leads/custom-options");
+      const json = await res.json();
+      if (json.success && json.data) setCustomOptions(json.data);
+    } catch { /* non-fatal */ }
+  }, []);
+
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
   useEffect(() => { fetchUsers(); }, [fetchUsers]);
+  useEffect(() => { fetchCustomOptions(); }, [fetchCustomOptions]);
 
   useEffect(() => {
     const unsub = subscribeCrmLive(["leads:changed", "calendar:changed"], () => {
       fetchLeads();
+      fetchCustomOptions();
     });
     return unsub;
-  }, [fetchLeads]);
+  }, [fetchLeads, fetchCustomOptions]);
 
   // ── derived ─────────────────────────────────────────────────────────────
   const filteredLeads = leads.filter((l) => {
@@ -123,11 +157,20 @@ export default function LeadsPage() {
     return true;
   });
 
-  function leadsForStatus(key) {
-    if (key === "confirm") {
-      return filteredLeads.filter((l) => isLeadConverted(l) || l.status === "confirm");
+  function leadsForStatus(key, isCustom = false) {
+    if (!key || key === "all") return filteredLeads;
+    if (key === "converted" || key === "confirm") {
+      return filteredLeads.filter((l) => isLeadConverted(l));
     }
-    return filteredLeads.filter((l) => l.status === key && !isLeadConverted(l));
+    if (isCustom) {
+      return filteredLeads.filter((l) => !isLeadConverted(l) && getLeadPipelineKey(l) === key);
+    }
+    return filteredLeads.filter((l) => {
+      if (isLeadConverted(l)) return false;
+      const pipe = getLeadPipelineKey(l);
+      if (isCustomLeadStatus(l) || customStatusKeys.has(pipe)) return false;
+      return pipe === key;
+    });
   }
 
   function handleStatusSelect(lead, newStatus) {
@@ -136,14 +179,14 @@ export default function LeadsPage() {
         showToast("Lead is already converted", "error");
         return;
       }
-      setActionModal({ type: "convert", lead });
+      setConvertModal(lead); // open the dedicated ConvertLeadModal
       return;
     }
     handleStatusChange(lead.id, newStatus);
   }
 
   function openConvertFromStatus(lead) {
-    setActionModal({ type: "convert", lead });
+    setConvertModal(lead);
   }
 
   // ── status change (inline dropdown) ────────────────────────────────────
@@ -159,7 +202,7 @@ export default function LeadsPage() {
       if (json.success) {
         setLeads((prev) =>
           prev.map((l) =>
-            l.id === leadId ? { ...l, ...(json.data || {}), status: newStatus } : l
+            l.id === leadId ? { ...l, ...(json.data || {}) } : l
           )
         );
         showToast("Status updated");
@@ -259,11 +302,8 @@ export default function LeadsPage() {
     filterLabel ||
     filterStatus;
 
-  function statusCount(key) {
-    if (key === "confirm") {
-      return filteredLeads.filter((l) => isLeadConverted(l) || l.status === "confirm").length;
-    }
-    return filteredLeads.filter((l) => l.status === key && !isLeadConverted(l)).length;
+  function statusCount(key, isCustom = false) {
+    return leadsForStatus(key, isCustom).length;
   }
 
   function toggleStatusFilter(key) {
@@ -432,7 +472,7 @@ export default function LeadsPage() {
               aria-label="Lead platform"
             >
               <option value="">Select Lead Platform</option>
-              {SOURCE_ITEMS.map((s) => (
+              {sourceFilterOptions.map((s) => (
                 <option key={s.value} value={s.value}>{s.label}</option>
               ))}
             </select>
@@ -503,6 +543,9 @@ export default function LeadsPage() {
               <div className={styles.dropdown}>
                 <button type="button" className={styles.dropItem} onClick={() => { setMenuOpen(false); }}>
                   <i className="fas fa-sort" /> Lead Sorting
+                </button>
+                <button type="button" className={styles.dropItem} onClick={() => { setMenuOpen(false); setManageOptionsOpen(true); }}>
+                  <i className="fas fa-sliders" /> Manage Custom Options
                 </button>
                 <button type="button" className={styles.dropItem} onClick={exportCSV}>
                   <i className="fas fa-file-export" /> Export Leads
@@ -577,8 +620,8 @@ export default function LeadsPage() {
                 onChange={(e) => setFilterLabel(e.target.value)}
               >
                 <option value="">All Labels</option>
-                {["Hot", "Warm", "Cold", "VIP", "Enterprise"].map((l) => (
-                  <option key={l} value={l}>{l}</option>
+                {labelFilterOptions.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
               </select>
               <i className="fas fa-chevron-down" />
@@ -595,7 +638,7 @@ export default function LeadsPage() {
                 onChange={(e) => setFilterSource(e.target.value)}
               >
                 <option value="">Source</option>
-                {SOURCE_ITEMS.map((s) => (
+                {sourceFilterOptions.map((s) => (
                   <option key={s.value} value={s.value}>{s.label}</option>
                 ))}
               </select>
@@ -605,8 +648,19 @@ export default function LeadsPage() {
         </div>
 
         <div className={styles.statusStrip} role="tablist" aria-label="Filter by status">
-            {STATUSES.map((st) => {
-              const n = statusCount(st.key);
+            <button
+              type="button"
+              role="tab"
+              aria-selected={!filterStatus}
+              className={`${styles.statusChip} ${!filterStatus ? styles.statusChipActive : ""}`}
+              style={{ background: "#0f172a" }}
+              onClick={() => setFilterStatus("")}
+            >
+              <span className={styles.statusChipLabel}>All Leads</span>
+              <span className={styles.statusChipCount}>{filteredLeads.length}</span>
+            </button>
+            {statusColumns.map((st) => {
+              const n = statusCount(st.key, st.isCustom);
               const active = filterStatus === st.key;
               return (
                 <button
@@ -614,7 +668,7 @@ export default function LeadsPage() {
                   type="button"
                   role="tab"
                   aria-selected={active}
-                  className={`${styles.statusChip} ${active ? styles.statusChipActive : ""}`}
+                  className={`${styles.statusChip} ${active ? styles.statusChipActive : ""} ${st.isCustom ? styles.statusChipCustom : ""}`}
                   style={{ background: st.color }}
                   onClick={() => toggleStatusFilter(st.key)}
                 >
@@ -629,8 +683,8 @@ export default function LeadsPage() {
       {/* ── KANBAN VIEW ───────────────────────────────────────────────────── */}
       {viewMode === "kanban" && (
         <div className={styles.kanban}>
-          {STATUSES.map((st) => {
-            const cols = leadsForStatus(st.key);
+          {statusColumns.map((st) => {
+            const cols = leadsForStatus(st.key, st.isCustom);
             return (
               <div key={st.key} className={styles.kanbanCol}>
                 <div
@@ -652,7 +706,8 @@ export default function LeadsPage() {
                       <KanbanCard
                         key={lead.id}
                         lead={lead}
-                        statuses={STATUSES}
+                        statuses={statusColumns}
+                        customStatuses={customOptions.status || []}
                         onStatusChange={handleStatusSelect}
                         onDelete={handleDelete}
                         onOpenAction={(type, l) => setActionModal({ type, lead: l })}
@@ -709,7 +764,8 @@ export default function LeadsPage() {
                       key={lead.id}
                       lead={lead}
                       idx={idx}
-                      statuses={STATUSES}
+                      statuses={statusColumns}
+                      customStatuses={customOptions.status || []}
                       selected={selectedLeads.has(lead.id)}
                       onToggle={() => toggleSelect(lead.id)}
                       onStatusChange={handleStatusSelect}
@@ -757,10 +813,12 @@ export default function LeadsPage() {
       {/* ── Add Lead Modal ─────────────────────────────────────────────── */}
       <AddLeadModal
         open={addOpen}
+        customOptions={customOptions}
         onClose={() => setAddOpen(false)}
         onCreated={(newLead) => {
           if (newLead) setLeads((prev) => [newLead, ...prev]);
           else fetchLeads();
+          fetchCustomOptions();
           setAddOpen(false);
           showToast("Lead added successfully!");
         }}
@@ -770,11 +828,29 @@ export default function LeadsPage() {
         modal={actionModal}
         onClose={() => setActionModal(null)}
         users={users}
-        statuses={STATUSES}
-        onDone={fetchLeads}
+        statuses={statusColumns}
+        customOptions={customOptions}
+        onDone={() => { fetchLeads(); fetchCustomOptions(); }}
         onLeadPatch={mergeLead}
         onConvertLead={openConvertFromStatus}
       />
+
+      {/* ── ManageCustomOptionsModal ───────────────────────────────────── */}
+      {manageOptionsOpen && (
+        <ManageCustomOptionsModal
+          onClose={() => setManageOptionsOpen(false)}
+          onDone={() => { fetchLeads(); fetchCustomOptions(); }}
+        />
+      )}
+
+      {/* ── ConvertLeadModal ──────────────────────────────────────────── */}
+      {convertModal && (
+        <ConvertLeadModal
+          lead={convertModal}
+          onClose={() => setConvertModal(null)}
+          onDone={() => { fetchLeads(); fetchCustomOptions(); setConvertModal(null); showToast("Lead converted to opportunity!"); }}
+        />
+      )}
 
       {changeLogLeadId && (
         <LeadChangeLogModal
@@ -788,23 +864,34 @@ export default function LeadsPage() {
 
 function LeadStatusSelect({ lead, statuses, className, style, onChange }) {
   const converted = isLeadConverted(lead);
+  const selectValue = getLeadStatusSelectValue(lead);
+  const customOpts = statuses.filter((s) => s.isCustom);
+  const builtInOpts = statuses.filter((s) => !s.isCustom);
+
   return (
     <select
       className={className}
-      value={lead.status}
+      value={selectValue}
       onChange={(e) => {
         const v = e.target.value;
         onChange(lead, v);
         if (v === CONVERT_OPTION_VALUE) {
-          e.target.value = lead.status;
+          e.target.value = selectValue;
         }
       }}
       style={style}
       aria-label="Lead status"
     >
-      {statuses.map((s) => (
+      {builtInOpts.map((s) => (
         <option key={s.key} value={s.key}>{s.label}</option>
       ))}
+      {customOpts.length > 0 && (
+        <optgroup label="Custom">
+          {customOpts.map((s) => (
+            <option key={s.key} value={s.key}>{s.label}</option>
+          ))}
+        </optgroup>
+      )}
       {!converted && (
         <optgroup label="Opportunity">
           <option value={CONVERT_OPTION_VALUE}>Convert to Opportunity…</option>
@@ -839,8 +926,8 @@ const MENU_ITEMS = [
   { key: "invoice", icon: "fa-file-invoice-dollar", label: "Create Invoice" },
 ];
 
-function KanbanCard({ lead, statuses, onStatusChange, onDelete, onOpenAction, onMenuAction }) {
-  const st = statuses.find((s) => s.key === lead.status) || statuses[0];
+function KanbanCard({ lead, statuses, customStatuses = [], onStatusChange, onDelete, onOpenAction, onMenuAction }) {
+  const displaySt = formatLeadStatus(lead);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
 
@@ -930,7 +1017,7 @@ function KanbanCard({ lead, statuses, onStatusChange, onDelete, onOpenAction, on
           lead={lead}
           statuses={statuses}
           className={styles.kcStatusSel}
-          style={{ color: st.color, borderColor: st.color }}
+          style={{ color: displaySt.color, borderColor: displaySt.color }}
           onChange={onStatusChange}
         />
         <Link href={`/leads/${lead.id}`} className={styles.kcActionBtn} title="View">
@@ -944,10 +1031,11 @@ function KanbanCard({ lead, statuses, onStatusChange, onDelete, onOpenAction, on
 // ─────────────────────────────────────────────────────────────────────────────
 // List Row
 // ─────────────────────────────────────────────────────────────────────────────
-function ListRow({ lead, idx, statuses, selected, onToggle, onStatusChange, onDelete, onOpenAction, onMenuAction }) {
+function ListRow({ lead, idx, statuses, customStatuses = [], selected, onToggle, onStatusChange, onDelete, onOpenAction, onMenuAction }) {
   const [expanded, setExpanded] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
+  const displaySt = formatLeadStatus(lead);
 
   useEffect(() => {
     function close(e) {
@@ -1000,8 +1088,8 @@ function ListRow({ lead, idx, statuses, selected, onToggle, onStatusChange, onDe
             statuses={statuses}
             className={styles.statusSel}
             style={{
-              color: statuses.find((s) => s.key === lead.status)?.color,
-              borderColor: statuses.find((s) => s.key === lead.status)?.color,
+              color: displaySt.color,
+              borderColor: displaySt.color,
             }}
             onChange={onStatusChange}
           />

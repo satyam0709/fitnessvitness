@@ -2168,6 +2168,15 @@ async function getRevenueSplit(req, res) {
     }
 
     const num = (v) => Number(v || 0);
+
+    const { getClosedWonLostInRange, getClosedWonLostLifetime } = require("../services/opportunityRevenueStats");
+    const fromDateObj = new Date(`${fromStr}T00:00:00`);
+    const toDateObj = new Date(`${toStr}T23:59:59`);
+    const [windowClosed, lifetimeClosed] = await Promise.all([
+      getClosedWonLostInRange(req, fromDateObj, toDateObj),
+      getClosedWonLostLifetime(req),
+    ]);
+
     res.json({
       success: true,
       data: {
@@ -2191,11 +2200,27 @@ async function getRevenueSplit(req, res) {
           profit: num(periodAgg.sup_profit),
           transactions: num(periodAgg.sup_count),
         },
+        booked_closed_won: {
+          count: windowClosed.closed_won_count,
+          value: windowClosed.closed_won_value,
+          value_this_window: windowClosed.closed_won_value,
+          lifetime_count: lifetimeClosed.closed_won_count,
+          lifetime_value: lifetimeClosed.closed_won_value,
+        },
+        closed_lost: {
+          count: windowClosed.closed_lost_count,
+          value: windowClosed.closed_lost_value,
+          value_this_window: windowClosed.closed_lost_value,
+          lifetime_count: lifetimeClosed.closed_lost_count,
+          lifetime_value: lifetimeClosed.closed_lost_value,
+        },
         years,
         yearRange: { from: startYear, to: endYear },
         classification: {
           diet_course: "Transaction types Membership and Other (plans, coaching, diet programs, misc services).",
           supplements: "Transaction type Supplement (product sales).",
+          booked_closed_won: "Opportunity Closed Won final_amount for this window (booked, not cash).",
+          closed_lost: "Opportunity Closed Lost forecast amounts for this window.",
         },
       },
     });

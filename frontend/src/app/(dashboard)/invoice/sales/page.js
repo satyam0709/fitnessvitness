@@ -45,6 +45,8 @@ export default function InvoiceSalesListPage() {
   const [searchInput, setSearchInput] = useState("");
   const [users, setUsers] = useState([]);
 
+  const [bookedSummary, setBookedSummary] = useState(null);
+
   const rangeLabel = useMemo(() => {
     try {
       const a = new Date(range.from).toLocaleDateString("en-IN");
@@ -66,6 +68,22 @@ export default function InvoiceSalesListPage() {
       setUsers([]);
     }
   }, [isLoaded]);
+
+  const loadBookedSummary = useCallback(async () => {
+    if (!isLoaded) return;
+    try {
+      const qp = new URLSearchParams({
+        from: range.from,
+        to: range.to,
+      });
+      const res = await apiFetch(`/opportunities/revenue-summary?${qp}`);
+      const json = await res.json().catch(() => ({}));
+      if (res.ok && json.success) setBookedSummary(json.data);
+      else setBookedSummary(null);
+    } catch {
+      setBookedSummary(null);
+    }
+  }, [isLoaded, range.from, range.to]);
 
   const fetchList = useCallback(async () => {
     if (!isLoaded) return;
@@ -99,11 +117,16 @@ export default function InvoiceSalesListPage() {
   }, [fetchList]);
 
   useEffect(() => {
+    void loadBookedSummary();
+  }, [loadBookedSummary]);
+
+  useEffect(() => {
     if (!isLoaded) return undefined;
-    return subscribeCrmLive(["invoices:changed", "collections:changed"], () => {
+    return subscribeCrmLive(["invoices:changed", "collections:changed", "opportunities:changed"], () => {
       void fetchList();
+      void loadBookedSummary();
     });
-  }, [isLoaded, fetchList]);
+  }, [isLoaded, fetchList, loadBookedSummary]);
 
   function applySearch(e) {
     e?.preventDefault?.();
@@ -196,6 +219,37 @@ export default function InvoiceSalesListPage() {
       </form>
 
       <p className={styles.dateRange}>{rangeLabel}</p>
+
+      {bookedSummary ? (
+        <div className={styles.bookedStrip}>
+          <Link href="/opportunities?view=won" className={styles.bookedChip}>
+            <span className={styles.bookedChipLabel}>Booked Closed Won (range)</span>
+            <strong>
+              {new Intl.NumberFormat("en-IN", {
+                style: "currency",
+                currency: "INR",
+                maximumFractionDigits: 0,
+              }).format(
+                Number(bookedSummary.window?.closed_won_value ?? bookedSummary.mtd?.closed_won_value ?? 0)
+              )}
+            </strong>
+          </Link>
+          <Link href="/opportunities?view=lost" className={styles.bookedChipLost}>
+            <span className={styles.bookedChipLabel}>Closed Lost (range)</span>
+            <strong>
+              {Number(bookedSummary.window?.closed_lost_count ?? bookedSummary.mtd?.closed_lost_count ?? 0)} ·{" "}
+              {new Intl.NumberFormat("en-IN", {
+                style: "currency",
+                currency: "INR",
+                maximumFractionDigits: 0,
+              }).format(
+                Number(bookedSummary.window?.closed_lost_value ?? bookedSummary.mtd?.closed_lost_value ?? 0)
+              )}
+            </strong>
+          </Link>
+          <span className={styles.bookedHint}>Booked from opportunities — not invoice cash</span>
+        </div>
+      ) : null}
 
       {err && <p className={styles.err}>{err}</p>}
 

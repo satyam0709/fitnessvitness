@@ -3,7 +3,7 @@
 import LeadForm from "./LeadForm";
 import styles from "./AddLeadModal.module.css";
 
-export default function AddLeadModal({ open, onClose, onCreated }) {
+export default function AddLeadModal({ open, onClose, onCreated, customOptions }) {
   if (!open) return null;
 
   return (
@@ -19,6 +19,7 @@ export default function AddLeadModal({ open, onClose, onCreated }) {
         </div>
         <LeadForm
           mode="create"
+          customOptions={customOptions}
           onCancel={onClose}
           onSuccess={(data) => {
             onCreated?.(data);

@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/api";
-import { PRODUCT_CATEGORIES } from "./leadConstants";
+import { PRODUCT_CATEGORIES, buildFieldOptions } from "./leadConstants";
 import styles from "./LeadQuickModals.module.css";
 
 /**
@@ -19,6 +19,29 @@ export default function ConvertLeadModal({ lead, onClose, onDone }) {
   const [notes, setNotes] = useState(lead.notes || "");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
+  const [customOptions, setCustomOptions] = useState({});
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const res = await apiFetch("/leads/custom-options");
+        const json = await res.json();
+        if (json.success && json.data) setCustomOptions(json.data);
+      } catch {
+        /* non-fatal */
+      }
+    }
+    load();
+  }, []);
+
+  const categoryOptions = useMemo(
+    () =>
+      buildFieldOptions(PRODUCT_CATEGORIES, customOptions.product_category || [], {
+        includeEmpty: true,
+        emptyLabel: "Select category…",
+      }),
+    [customOptions.product_category]
+  );
 
   async function submit(e) {
     e.preventDefault();
@@ -103,8 +126,7 @@ export default function ConvertLeadModal({ lead, onClose, onDone }) {
               value={productCategory}
               onChange={(e) => setProductCategory(e.target.value)}
             >
-              <option value="">Select category…</option>
-              {PRODUCT_CATEGORIES.map((c) => (
+              {categoryOptions.map((c) => (
                 <option key={c.value} value={c.value}>
                   {c.label}
                 </option>

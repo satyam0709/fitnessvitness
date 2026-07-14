@@ -30,6 +30,19 @@ async function addColumn(pool, table, column, definition) {
   console.log(`ensureCrmSchemaCompat: added ${table}.${column}`);
 }
 
+async function ensureColumnDefinition(pool, table, column, definition) {
+  if (!(await tableExists(pool, table))) return;
+  if (!(await columnExists(pool, table, column))) {
+    await addColumn(pool, table, column, definition);
+    return;
+  }
+  try {
+    await pool.execute(`ALTER TABLE \`${table}\` MODIFY COLUMN \`${column}\` ${definition}`);
+  } catch {
+    /* ignore if identical / unsupported */
+  }
+}
+
 async function ensureLeadsTable(pool) {
   if (!(await tableExists(pool, "users"))) return;
 
@@ -110,10 +123,14 @@ async function ensureLeadsTable(pool) {
     ["converted_opportunity_id", "INT UNSIGNED DEFAULT NULL"],
     ["last_touched_at", "DATETIME DEFAULT NULL"],
     ["updated_by", "INT UNSIGNED DEFAULT NULL"],
-    ["status_v2", "VARCHAR(32) DEFAULT NULL"],
+    ["status_v2", "VARCHAR(100) DEFAULT NULL"],
   ];
   for (const [col, def] of refCols) {
-    await addColumn(pool, "leads", col, def);
+    if (col === "status_v2") {
+      await ensureColumnDefinition(pool, "leads", col, def);
+    } else {
+      await addColumn(pool, "leads", col, def);
+    }
   }
 }
 

@@ -431,11 +431,35 @@ async function getSummary(req) {
   }
   const r = rows[0] || {};
 
+  let booked = {
+    booked_closed_won_mtd: 0,
+    booked_closed_won_lifetime: 0,
+    closed_lost_count_mtd: 0,
+    closed_lost_count_lifetime: 0,
+    closed_lost_value_mtd: 0,
+    closed_lost_value_lifetime: 0,
+  };
+  try {
+    const { getRevenueSummary } = require("./opportunityRevenueStats");
+    const summary = await getRevenueSummary(req);
+    booked = {
+      booked_closed_won_mtd: summary.mtd.closed_won_value,
+      booked_closed_won_lifetime: summary.lifetime.closed_won_value,
+      closed_lost_count_mtd: summary.mtd.closed_lost_count,
+      closed_lost_count_lifetime: summary.lifetime.closed_lost_count,
+      closed_lost_value_mtd: summary.mtd.closed_lost_value,
+      closed_lost_value_lifetime: summary.lifetime.closed_lost_value,
+    };
+  } catch (e) {
+    console.warn("collections summary booked append:", e.message);
+  }
+
   return {
     open_count: Number(r.open_count) || 0,
     due_today: Number(r.due_today) || 0,
     overdue: Number(r.overdue) || 0,
     total_pending_inr: Number(r.total_pending_inr) || 0,
+    ...booked,
   };
 }
 

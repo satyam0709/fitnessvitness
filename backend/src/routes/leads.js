@@ -58,6 +58,18 @@ function handleService(fn) {
 
 router.get("/calendar-markers", handleService((req) => leadService.getCalendarMarkers(req)));
 
+router.get("/custom-options", handleService(() => leadService.getCustomOptions()));
+
+router.put("/custom-options/rename", handleService(async (req) => {
+  const { fieldName, oldValue, newValue } = req.body || {};
+  return leadService.renameCustomOption({ fieldName, oldValue, newValue });
+}));
+
+router.delete("/custom-options", handleService(async (req) => {
+  const { fieldName, optionValue } = req.body || {};
+  return leadService.deleteCustomOption({ fieldName, optionValue });
+}));
+
 router.get("/", handleService((req) => leadService.listLeads(req)));
 
 router.get("/:id/followups", handleService(async (req) => {
@@ -92,7 +104,7 @@ router.post("/", multipartMaybe(), validateUploadedMimes, handleService(async (r
 router.post("/:id/convert", handleService(async (req) => {
   const leadId = Number(req.params.id);
   if (!leadId) throw Object.assign(new Error("Invalid lead id"), { status: 400 });
-  return leadService.convertLeadToOpportunity(req, leadId);
+  return leadService.convertLeadToOpportunity(req, leadId, req.body || {});
 }));
 
 router.post("/:id/link-client", handleService(async (req) => {

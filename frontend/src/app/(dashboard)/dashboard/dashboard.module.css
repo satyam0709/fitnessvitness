@@ -16,75 +16,213 @@
   background: var(--bg-card, #fff);
   border: 1px solid var(--border, #ebebeb);
   border-radius: 14px;
-  padding: 18px 20px;
+  padding: 18px 20px 16px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
 
 .todayWidgetHead {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 14px;
 }
 
+.todayWidgetHeadLeft {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
 .todayWidgetTitle {
   margin: 0;
-  font-size: 1.15rem;
+  font-size: 1.1rem;
   font-weight: 700;
   font-family: var(--font-display, "Montserrat", sans-serif);
+  color: var(--text-main, #1a1a2e);
+  letter-spacing: -0.01em;
+}
+
+.todayWidgetSubtitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted, #555770);
+  font-family: inherit;
 }
 
 .todayWidgetLink {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-main);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #1a1a2e;
   text-decoration: none;
-  padding: 6px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
+  padding: 8px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--border, #e4e7f0);
+  background: linear-gradient(180deg, #fffef8, #fff8dc);
+  white-space: nowrap;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 140ms ease;
 }
 
 .todayWidgetLink:hover {
   border-color: var(--yellow, #f5c400);
+  box-shadow: 0 2px 10px rgba(245, 196, 0, 0.2);
+  transform: translateY(-1px);
 }
 
-.todayWidgetList {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.todayWidgetGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 1100px) {
+  .todayWidgetGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .todayWidgetGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.todayTaskTile {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 12px;
+  border-radius: 12px;
+  text-decoration: none;
+  color: inherit;
+  border: 1px solid var(--border, #e8ebf2);
+  background: var(--bg-main, #f7f8fb);
+  transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease, transform 140ms ease;
+}
+
+.todayTaskTile:hover {
+  border-color: #d6dbe8;
+  background: #fff;
+  box-shadow: 0 4px 14px rgba(26, 26, 46, 0.06);
+  transform: translateY(-1px);
+}
+
+.todayTaskTileActive {
+  background: #fff;
+  border-color: #e2e5ee;
+}
+
+.todayTaskIcon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.todayTaskMeta {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 2px;
+  min-width: 0;
 }
 
-.todayWidgetRow {
-  display: grid;
-  grid-template-columns: 28px 1fr auto;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
+.todayTaskLabel {
+  font-size: 13px;
+  font-weight: 700;
+  font-family: inherit;
+  color: var(--text-main, #1a1a2e);
+  line-height: 1.25;
+}
+
+.todayTaskHint {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted, #6b7288);
 }
 
 .todayWidgetCount {
-  font-weight: 700;
-  min-width: 24px;
+  font-weight: 800;
+  font-size: 1.05rem;
+  min-width: 28px;
   text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-main, #1a1a2e);
 }
+
+.todayTone_teal .todayTaskIcon { background: #ccfbf1; color: #0f766e; }
+.todayTone_blue .todayTaskIcon { background: #dbeafe; color: #1d4ed8; }
+.todayTone_amber .todayTaskIcon { background: #fef3c7; color: #b45309; }
+.todayTone_green .todayTaskIcon { background: #dcfce7; color: #15803d; }
+.todayTone_slate .todayTaskIcon { background: #e2e8f0; color: #334155; }
+.todayTone_indigo .todayTaskIcon { background: #e0e7ff; color: #4338ca; }
+.todayTone_rose .todayTaskIcon { background: #ffe4e6; color: #be123c; }
+.todayTone_orange .todayTaskIcon { background: #ffedd5; color: #c2410c; }
+.todayTone_cyan .todayTaskIcon { background: #cffafe; color: #0e7490; }
+
+.todayTaskTileActive.todayTone_teal .todayWidgetCount { color: #0f766e; }
+.todayTaskTileActive.todayTone_blue .todayWidgetCount { color: #1d4ed8; }
+.todayTaskTileActive.todayTone_amber .todayWidgetCount { color: #b45309; }
+.todayTaskTileActive.todayTone_green .todayWidgetCount { color: #15803d; }
+.todayTaskTileActive.todayTone_slate .todayWidgetCount { color: #334155; }
+.todayTaskTileActive.todayTone_indigo .todayWidgetCount { color: #4338ca; }
+.todayTaskTileActive.todayTone_rose .todayWidgetCount { color: #be123c; }
+.todayTaskTileActive.todayTone_orange .todayWidgetCount { color: #c2410c; }
+.todayTaskTileActive.todayTone_cyan .todayWidgetCount { color: #0e7490; }
 
 .todayWidgetFooter {
   margin: 12px 0 0;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-muted, #555770);
   font-weight: 600;
 }
 
 .todayWidgetClear {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
   margin: 0;
-  color: #15803d;
-  font-weight: 600;
+  padding: 14px 14px;
+  border-radius: 12px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  color: #166534;
+}
+
+.todayWidgetClear strong {
+  display: block;
   font-size: 14px;
+  font-weight: 800;
+  margin-bottom: 2px;
+}
+
+.todayWidgetClear p {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: #15803d;
+}
+
+.todayWidgetClearIcon {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #16a34a;
+  color: #fff;
+  flex-shrink: 0;
 }
 
 .welcomeBanner {
@@ -435,6 +573,14 @@
   letter-spacing: 0.05em;
   color: var(--text-muted, #6b7280);
   margin-bottom: 6px;
+}
+
+.oprResultOppColSub {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted, #94a3b8);
 }
 
 .oprResultOppColValue {
@@ -1874,8 +2020,9 @@
 
 .financialStrip {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 32px;
+  gap: 24px 32px;
   padding: 16px 28px;
   background: var(--grey-100);
   border-top: 1px solid var(--border);

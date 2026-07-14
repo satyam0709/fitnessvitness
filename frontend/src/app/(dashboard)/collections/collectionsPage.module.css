@@ -82,6 +82,27 @@
   color: #059669;
 }
 
+.statBooked {
+  text-decoration: none;
+  color: inherit;
+  border-top: 3px solid #16a34a;
+}
+
+.statBooked .statValue {
+  color: #15803d;
+}
+
+.statLost {
+  text-decoration: none;
+  color: inherit;
+  border-top: 3px solid #9333ea;
+}
+
+.statLost .statValue {
+  color: #7e22ce;
+  font-size: 1.05rem;
+}
+
 .toolbar {
   display: flex;
   flex-wrap: wrap;

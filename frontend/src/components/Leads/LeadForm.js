@@ -1,18 +1,96 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
-import { FORM_STATUSES, SOURCES, LABEL_PRESETS } from "./leadConstants";
+import {
+  FORM_STATUSES,
+  SOURCES,
+  LABEL_OPTIONS,
+  PRODUCT_CATEGORIES,
+  FOLLOWUP_TYPES,
+  ACCOUNT_RELATIONSHIPS,
+  OTHER_VALUE,
+  buildFieldOptions,
+  getLeadStatusSelectValue,
+} from "./leadConstants";
 import styles from "./AddLeadModal.module.css";
+
+function initSelectWithOther(staticList, customList, currentValue) {
+  const options = buildFieldOptions(staticList, customList, { includeOther: true });
+  const known = new Set(options.map((o) => o.value));
+  if (!currentValue) return { select: "", other: "" };
+  if (known.has(currentValue) && currentValue !== OTHER_VALUE) {
+    return { select: currentValue, other: "" };
+  }
+  return { select: OTHER_VALUE, other: currentValue };
+}
+
+function resolveSelectWithOther(select, other) {
+  if (select === OTHER_VALUE) return other.trim();
+  return select;
+}
+
+function DropdownWithOther({
+  label,
+  staticList,
+  customList,
+  selectValue,
+  otherValue,
+  onSelectChange,
+  onOtherChange,
+  includeEmpty,
+  emptyLabel,
+  required,
+}) {
+  const options = useMemo(
+    () =>
+      buildFieldOptions(staticList, customList, {
+        includeEmpty,
+        includeOther: true,
+        emptyLabel,
+      }),
+    [staticList, customList, includeEmpty, emptyLabel]
+  );
+
+  return (
+    <div className={styles.field}>
+      <label className={styles.label}>
+        {label}
+        {required ? <span className={styles.req}> *</span> : null}
+      </label>
+      <select
+        className={styles.select}
+        value={selectValue}
+        onChange={(e) => onSelectChange(e.target.value)}
+      >
+        {options.map((o) => (
+          <option key={`${o.value}-${o.label}`} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      {selectValue === OTHER_VALUE && (
+        <input
+          className={styles.input}
+          style={{ marginTop: 8 }}
+          placeholder="Enter custom value"
+          value={otherValue}
+          onChange={(e) => onOtherChange(e.target.value)}
+        />
+      )}
+    </div>
+  );
+}
 
 /**
  * Shared create/edit lead form.
- * @param {{ mode?: 'create'|'edit', lead?: object, onSuccess?: (data) => void, onCancel?: () => void, submitLabel?: string }} props
+ * @param {{ mode?: 'create'|'edit', lead?: object, customOptions?: object, onSuccess?: (data) => void, onCancel?: () => void, submitLabel?: string }} props
  */
 export default function LeadForm({
   mode = "create",
   lead = null,
+  customOptions: customOptionsProp = null,
   onSuccess,
   onCancel,
   submitLabel,
@@ -21,11 +99,38 @@ export default function LeadForm({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [teamUsers, setTeamUsers] = useState([]);
-  const [meId, setMeId] = useState(null);
+  const [customOptions, setCustomOptions] = useState(customOptionsProp || {});
   const fileInputRef = useRef(null);
 
-  const [status, setStatus] = useState(lead?.status || "new");
-  const [source, setSource] = useState(lead?.source || "online");
+  const statusInit = initSelectWithOther(
+    FORM_STATUSES,
+    customOptions.status || [],
+    mode === "edit" && lead
+      ? getLeadStatusSelectValue(lead)
+      : "new"
+  );
+  const sourceInit = initSelectWithOther(SOURCES, customOptions.source || [], lead?.source || "online");
+  const labelInit = initSelectWithOther(LABEL_OPTIONS, customOptions.label || [], lead?.label || "");
+  const productInit = initSelectWithOther(
+    PRODUCT_CATEGORIES,
+    customOptions.product_category || [],
+    lead?.product_category || ""
+  );
+  const followupInit = initSelectWithOther(
+    FOLLOWUP_TYPES,
+    customOptions.followup_type || [],
+    lead?.followup_type || ""
+  );
+  const relationshipInit = initSelectWithOther(
+    ACCOUNT_RELATIONSHIPS,
+    customOptions.account_relationship || [],
+    lead?.account_relationship || ""
+  );
+
+  const [status, setStatus] = useState(statusInit.select);
+  const [statusOther, setStatusOther] = useState(statusInit.other);
+  const [source, setSource] = useState(sourceInit.select);
+  const [sourceOther, setSourceOther] = useState(sourceInit.other);
   const [assignedTo, setAssignedTo] = useState(
     lead?.assigned_to != null ? String(lead.assigned_to) : ""
   );
@@ -37,13 +142,37 @@ export default function LeadForm({
   );
   const [customerName, setCustomerName] = useState(lead?.name || "");
   const [email, setEmail] = useState(lead?.email || "");
-  const [label, setLabel] = useState(lead?.label || "");
+  const [label, setLabel] = useState(labelInit.select);
+  const [labelOther, setLabelOther] = useState(labelInit.other);
   const [reference, setReference] = useState(lead?.reference || "");
   const [address, setAddress] = useState(lead?.address || "");
   const [comment, setComment] = useState(lead?.notes || "");
   const [amount, setAmount] = useState(lead?.amount ? String(lead.amount) : "");
-  const [productCategory, setProductCategory] = useState(lead?.product_category || "");
+  const [productCategory, setProductCategory] = useState(productInit.select);
+  const [productCategoryOther, setProductCategoryOther] = useState(productInit.other);
+  const [followupType, setFollowupType] = useState(followupInit.select);
+  const [followupTypeOther, setFollowupTypeOther] = useState(followupInit.other);
+  const [accountRelationship, setAccountRelationship] = useState(relationshipInit.select);
+  const [accountRelationshipOther, setAccountRelationshipOther] = useState(relationshipInit.other);
   const [files, setFiles] = useState([]);
+
+  useEffect(() => {
+    if (customOptionsProp) setCustomOptions(customOptionsProp);
+  }, [customOptionsProp]);
+
+  useEffect(() => {
+    if (customOptionsProp) return;
+    async function loadOptions() {
+      try {
+        const res = await apiFetch("/leads/custom-options");
+        const json = await res.json();
+        if (json.success && json.data) setCustomOptions(json.data);
+      } catch {
+        /* non-fatal */
+      }
+    }
+    loadOptions();
+  }, [customOptionsProp]);
 
   useEffect(() => {
     async function load() {
@@ -55,7 +184,6 @@ export default function LeadForm({
         const meJson = await meRes.json();
         const usersJson = await usersRes.json();
         if (meJson.success && meJson.data?.id) {
-          setMeId(meJson.data.id);
           if (mode === "create" && !assignedTo) {
             setAssignedTo(String(meJson.data.id));
           }
@@ -82,24 +210,42 @@ export default function LeadForm({
       return;
     }
 
+    const resolvedStatus = resolveSelectWithOther(status, statusOther);
+    const resolvedSource = resolveSelectWithOther(source, sourceOther);
+    const resolvedLabel = resolveSelectWithOther(label, labelOther);
+    const resolvedProduct = resolveSelectWithOther(productCategory, productCategoryOther);
+    const resolvedFollowup = resolveSelectWithOther(followupType, followupTypeOther);
+    const resolvedRelationship = resolveSelectWithOther(accountRelationship, accountRelationshipOther);
+
+    if (status === OTHER_VALUE && !statusOther.trim()) {
+      setError("Enter a custom status or pick a built-in status.");
+      return;
+    }
+    if (source === OTHER_VALUE && !sourceOther.trim()) {
+      setError("Enter a custom source or pick from the list.");
+      return;
+    }
+
     setSubmitting(true);
     try {
       const fd = new FormData();
       fd.append("name", customerName.trim());
       fd.append("phone", phone.trim());
       fd.append("phone_dial", phoneDial.trim());
-      fd.append("status", status);
-      fd.append("source", source);
+      fd.append("status", resolvedStatus);
+      fd.append("source", resolvedSource || "other");
       if (leadDate) fd.append("follow_up_date", leadDate);
       if (companyName.trim()) fd.append("company_name", companyName.trim());
       if (email.trim()) fd.append("email", email.trim());
-      if (label) fd.append("label", label);
+      if (resolvedLabel) fd.append("label", resolvedLabel);
       if (reference.trim()) fd.append("reference", reference.trim());
       if (address.trim()) fd.append("address", address.trim());
       if (comment.trim()) fd.append("comment", comment.trim());
       if (assignedTo) fd.append("assigned_to", assignedTo);
       if (amount) fd.append("amount", amount);
-      if (productCategory) fd.append("product_category", productCategory);
+      if (resolvedProduct) fd.append("product_category", resolvedProduct);
+      if (resolvedFollowup) fd.append("followup_type", resolvedFollowup);
+      if (resolvedRelationship) fd.append("account_relationship", resolvedRelationship);
       files.forEach((f) => fd.append("attachments", f));
 
       const url = mode === "edit" && lead?.id ? `/leads/${lead.id}` : "/leads";
@@ -129,22 +275,24 @@ export default function LeadForm({
         {error ? <p className={styles.err}>{error}</p> : null}
 
         <div className={styles.row3}>
-          <div className={styles.field}>
-            <label className={styles.label}>Status</label>
-            <select className={styles.select} value={status} onChange={(e) => setStatus(e.target.value)}>
-              {FORM_STATUSES.map((s) => (
-                <option key={s.value} value={s.value}>{s.label}</option>
-              ))}
-            </select>
-          </div>
-          <div className={styles.field}>
-            <label className={styles.label}>Source</label>
-            <select className={styles.select} value={source} onChange={(e) => setSource(e.target.value)}>
-              {SOURCES.map((s) => (
-                <option key={s.value} value={s.value}>{s.label}</option>
-              ))}
-            </select>
-          </div>
+          <DropdownWithOther
+            label="Status"
+            staticList={FORM_STATUSES}
+            customList={customOptions.status || []}
+            selectValue={status}
+            otherValue={statusOther}
+            onSelectChange={setStatus}
+            onOtherChange={setStatusOther}
+          />
+          <DropdownWithOther
+            label="Source"
+            staticList={SOURCES}
+            customList={customOptions.source || []}
+            selectValue={source}
+            otherValue={sourceOther}
+            onSelectChange={setSource}
+            onOtherChange={setSourceOther}
+          />
           <div className={styles.field}>
             <label className={styles.label}>User</label>
             <select className={styles.select} value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)}>
@@ -213,15 +361,17 @@ export default function LeadForm({
         </div>
 
         <div className={styles.row2}>
-          <div className={styles.field}>
-            <label className={styles.label}>Label (Optional)</label>
-            <select className={styles.select} value={label} onChange={(e) => setLabel(e.target.value)}>
-              <option value="">Select Label</option>
-              {LABEL_PRESETS.map((l) => (
-                <option key={l} value={l}>{l}</option>
-              ))}
-            </select>
-          </div>
+          <DropdownWithOther
+            label="Label (Optional)"
+            staticList={LABEL_OPTIONS}
+            customList={customOptions.label || []}
+            selectValue={label}
+            otherValue={labelOther}
+            onSelectChange={setLabel}
+            onOtherChange={setLabelOther}
+            includeEmpty
+            emptyLabel="Select Label"
+          />
           <div className={styles.field}>
             <label className={styles.label}>Reference (Optional)</label>
             <input className={styles.input} value={reference} onChange={(e) => setReference(e.target.value)} />
@@ -233,10 +383,42 @@ export default function LeadForm({
             <label className={styles.label}>Amount (Optional)</label>
             <input className={styles.input} type="number" min="0" value={amount} onChange={(e) => setAmount(e.target.value)} />
           </div>
-          <div className={styles.field}>
-            <label className={styles.label}>Product Category</label>
-            <input className={styles.input} value={productCategory} onChange={(e) => setProductCategory(e.target.value)} />
-          </div>
+          <DropdownWithOther
+            label="Product Category"
+            staticList={PRODUCT_CATEGORIES}
+            customList={customOptions.product_category || []}
+            selectValue={productCategory}
+            otherValue={productCategoryOther}
+            onSelectChange={setProductCategory}
+            onOtherChange={setProductCategoryOther}
+            includeEmpty
+            emptyLabel="Select category"
+          />
+        </div>
+
+        <div className={styles.row2}>
+          <DropdownWithOther
+            label="Follow-up Type (Optional)"
+            staticList={FOLLOWUP_TYPES}
+            customList={customOptions.followup_type || []}
+            selectValue={followupType}
+            otherValue={followupTypeOther}
+            onSelectChange={setFollowupType}
+            onOtherChange={setFollowupTypeOther}
+            includeEmpty
+            emptyLabel="Select type"
+          />
+          <DropdownWithOther
+            label="Account Relationship (Optional)"
+            staticList={ACCOUNT_RELATIONSHIPS}
+            customList={customOptions.account_relationship || []}
+            selectValue={accountRelationship}
+            otherValue={accountRelationshipOther}
+            onSelectChange={setAccountRelationship}
+            onOtherChange={setAccountRelationshipOther}
+            includeEmpty
+            emptyLabel="Select relationship"
+          />
         </div>
 
         <div className={styles.field}>

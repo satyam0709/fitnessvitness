@@ -66,6 +66,7 @@ export default function ReportsPage() {
     conversion: [],
     activity: [],
     revenue: [],
+    revenueSummary: null,
     invoiceMix: null,
   });
 
@@ -108,11 +109,12 @@ export default function ReportsPage() {
         conversion: conversion.data || [],
         activity: activity.data || [],
         revenue: revenue.data || [],
+        revenueSummary: revenue.summary || null,
         invoiceMix: invoiceMixBody.data || null,
       });
     } catch (e) {
       setError(e.message || "Could not load reports");
-      setData({ pipeline: [], conversion: [], activity: [], revenue: [], invoiceMix: null });
+      setData({ pipeline: [], conversion: [], activity: [], revenue: [], revenueSummary: null, invoiceMix: null });
     } finally {
       setLoading(false);
     }
@@ -152,9 +154,15 @@ export default function ReportsPage() {
         change: growthPct(activityTop.total_activity || 0, activitySecond.total_activity || 0),
       },
       revenue: {
-        total: data.revenue.reduce((acc, r) => acc + Number(r.revenue_total || 0), 0),
+        total: data.revenueSummary?.invoice_total
+          ?? data.revenue.reduce((acc, r) => acc + Number(r.revenue_total || 0), 0),
         thisMonth: revNow.revenue_total || 0,
         change: growthPct(revNow.revenue_total || 0, revPrev.revenue_total || 0),
+        bookedTotal: data.revenueSummary?.booked_won_total
+          ?? data.revenue.reduce((acc, r) => acc + Number(r.booked_won_total || 0), 0),
+        bookedThisMonth: revNow.booked_won_total || 0,
+        closedLostCount: data.revenueSummary?.closed_lost_count || 0,
+        closedLostValue: data.revenueSummary?.closed_lost_value || 0,
       },
     };
   }, [data]);
@@ -253,19 +261,45 @@ export default function ReportsPage() {
 
       <div className={styles.metricsGrid}>
         <div className={styles.metricCard}>
-          <span className={styles.metricLabel}>Total</span>
-          <strong className={styles.metricValue}>{formatNum(summary[activeTab].total)}</strong>
-        </div>
-        <div className={styles.metricCard}>
-          <span className={styles.metricLabel}>This month</span>
+          <span className={styles.metricLabel}>
+            {activeTab === "revenue" ? "Invoice total" : "Total"}
+          </span>
           <strong className={styles.metricValue}>
-            {activeTab === "conversion" ? formatPct(summary[activeTab].thisMonth) : formatNum(summary[activeTab].thisMonth)}
+            {activeTab === "revenue"
+              ? formatInr(summary.revenue.total)
+              : formatNum(summary[activeTab].total)}
           </strong>
         </div>
         <div className={styles.metricCard}>
-          <span className={styles.metricLabel}>Change vs last month</span>
-          <strong className={styles.metricValue}>{formatPct(summary[activeTab].change)}</strong>
+          <span className={styles.metricLabel}>
+            {activeTab === "revenue" ? "Invoice this month" : "This month"}
+          </span>
+          <strong className={styles.metricValue}>
+            {activeTab === "conversion"
+              ? formatPct(summary[activeTab].thisMonth)
+              : activeTab === "revenue"
+                ? formatInr(summary.revenue.thisMonth)
+                : formatNum(summary[activeTab].thisMonth)}
+          </strong>
         </div>
+        <div className={styles.metricCard}>
+          <span className={styles.metricLabel}>
+            {activeTab === "revenue" ? "Booked Closed Won" : "Change vs last month"}
+          </span>
+          <strong className={styles.metricValue}>
+            {activeTab === "revenue"
+              ? formatInr(summary.revenue.bookedTotal)
+              : formatPct(summary[activeTab].change)}
+          </strong>
+        </div>
+        {activeTab === "revenue" ? (
+          <div className={styles.metricCard}>
+            <span className={styles.metricLabel}>Closed Lost (range)</span>
+            <strong className={styles.metricValue}>
+              {formatNum(summary.revenue.closedLostCount)} · {formatInr(summary.revenue.closedLostValue)}
+            </strong>
+          </div>
+        ) : null}
       </div>
 
       {loading ? (
@@ -318,7 +352,9 @@ export default function ReportsPage() {
                   <XAxis dataKey="month" />
                   <YAxis />
                   <Tooltip />
-                  <Line type="monotone" dataKey="revenue_total" stroke="#f5c400" strokeWidth={3} />
+                  <Legend />
+                  <Line type="monotone" dataKey="revenue_total" name="Invoice revenue" stroke="#f5c400" strokeWidth={3} />
+                  <Line type="monotone" dataKey="booked_won_total" name="Booked Closed Won" stroke="#16a34a" strokeWidth={2} />
                 </LineChart>
               </ResponsiveContainer>
             )}
@@ -339,8 +375,17 @@ export default function ReportsPage() {
               </div>
               {data.invoiceMix?.totals ? (
                 <div className={styles.invoiceMixSummary}>
-                  In selected range: <strong>{formatInr(data.invoiceMix.totals.amount)}</strong> total across{" "}
-                  {formatNum(data.invoiceMix.totals.count)} invoice(s).
+                  In selected range: <strong>{formatInr(data.invoiceMix.totals.amount)}</strong> invoice total across{" "}
+                  {formatNum(data.invoiceMix.totals.count)} invoice(s)
+                  {data.revenueSummary ? (
+                    <>
+                      {" "}
+                      · Booked Closed Won <strong>{formatInr(data.revenueSummary.booked_won_total)}</strong>
+                      {" "}
+                      · Closed Lost <strong>{formatNum(data.revenueSummary.closed_lost_count)}</strong>
+                    </>
+                  ) : null}
+                  .
                 </div>
               ) : null}
             </>
