@@ -1,4 +1,5 @@
 require("dotenv").config();
+require("./config/ensureDatabaseUrl").ensureDatabaseUrl();
 
 const http = require("http");
 const express = require("express");
