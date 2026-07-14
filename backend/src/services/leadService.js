@@ -97,36 +97,50 @@ function bodyStr(body, key) {
   return s || null;
 }
 
-/** Allocate next lead_number without raw SQL (avoids undefined bind crashes on live). */
+/** Allocate next lead_number — prefer MAX(lead_number)+1 (no raw SQL / undefined binds). */
 async function allocateLeadNumber(tx, tid) {
-  const key = counterTenantKey(tid);
   try {
-    await tx.tenant_lead_counters.upsert({
-      where: { tenant_id: key },
-      create: { tenant_id: key, next_lead_number: 1 },
-      update: {},
+    const where =
+      tid == null || tid === ""
+        ? { tenant_id: null }
+        : { tenant_id: Number(tid) };
+    const agg = await tx.leads.aggregate({
+      _max: { lead_number: true },
+      where,
     });
-    const row = await tx.tenant_lead_counters.findUnique({ where: { tenant_id: key } });
-    const num = Number(row?.next_lead_number ?? 1);
-    const safeNum = Number.isFinite(num) && num > 0 ? num : 1;
-    await tx.tenant_lead_counters.update({
-      where: { tenant_id: key },
-      data: { next_lead_number: safeNum + 1 },
-    });
-    return safeNum;
-  } catch (err) {
-    // Table/model missing or race — still create the lead with a safe number.
-    console.warn("allocateLeadNumber fallback:", err.message);
+    const max = Number(agg?._max?.lead_number ?? 0);
+    const next = (Number.isFinite(max) && max > 0 ? max : 0) + 1;
+
+    // Best-effort counter sync — never fail lead create if this table is missing.
     try {
-      const agg = await tx.leads.aggregate({
-        _max: { lead_number: true },
-        where: { tenant_id: tid == null ? null : tid },
+      const key = counterTenantKey(tid);
+      await tx.tenant_lead_counters.upsert({
+        where: { tenant_id: key },
+        create: { tenant_id: key, next_lead_number: next + 1 },
+        update: { next_lead_number: next + 1 },
       });
-      const max = Number(agg?._max?.lead_number ?? 0);
-      return (Number.isFinite(max) ? max : 0) + 1;
-    } catch {
-      return Date.now() % 1000000;
+    } catch (err) {
+      console.warn("allocateLeadNumber counter sync:", err.message);
     }
+    return next;
+  } catch (err) {
+    console.warn("allocateLeadNumber fallback:", err.message);
+    return (Date.now() % 1000000) + 1;
+  }
+}
+
+function parseDateOrNull(value) {
+  if (value == null || value === "") return null;
+  const d = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function parseDecimalOrZero(value) {
+  if (value == null || value === "") return new Prisma.Decimal(0);
+  try {
+    return new Prisma.Decimal(value);
+  } catch {
+    return new Prisma.Decimal(0);
   }
 }
 
@@ -613,11 +627,11 @@ async function createLead(req) {
         attachments_json: attachmentsJson,
         assigned_to: assignedUserId,
         created_by: userId,
-        follow_up_date: followUpDate ? new Date(followUpDate) : null,
-        followup_at: followupAt ? new Date(followupAt) : null,
+        follow_up_date: parseDateOrNull(followUpDate),
+        followup_at: parseDateOrNull(followupAt),
         notes,
         lead_number: num,
-        amount: amountRaw ? new Prisma.Decimal(amountRaw) : new Prisma.Decimal(0),
+        amount: parseDecimalOrZero(amountRaw),
         currency,
         product_category: productCategory,
         team,
@@ -641,9 +655,9 @@ async function createLead(req) {
     return created;
   });
 
-  // Custom option registry must never fail the create after the lead is saved.
-  try {
-    await registerLeadCustomOptions(
+  // Never block / fail create on custom-option registry (live DB may lack table).
+  setImmediate(() => {
+    registerLeadCustomOptions(
       {
         source,
         label,
@@ -654,10 +668,8 @@ async function createLead(req) {
         status: statusV2,
       },
       statusParsed
-    );
-  } catch (err) {
-    console.warn("createLead registerLeadCustomOptions:", err.message);
-  }
+    ).catch((err) => console.warn("createLead registerLeadCustomOptions:", err.message));
+  });
 
   const createdRow = await prisma.leads.findFirst({
     where: { id: result.id, tenant_id: tid },

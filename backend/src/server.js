@@ -212,7 +212,11 @@ app.get("/api/health", async (_req, res) => {
     services: {
       database: { status: dbStatus, latency_ms: dbLatency }
     },
-    version: process.env.APP_VERSION || "1.0.0"
+    version: process.env.APP_VERSION || "1.0.0",
+    // Bumped when lead create undefined-bind fix ships — check live /api/health
+    fixes: {
+      leadBindNull: "2026-07-14-bind-null-v2",
+    },
   };
 
   res.status(dbStatus === "ok" ? 200 : 503).json(status);
