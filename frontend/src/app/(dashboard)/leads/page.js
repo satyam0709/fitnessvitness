@@ -26,7 +26,7 @@ import {
   getLeadPipelineKey,
   formatLeadStatus,
   isCustomLeadStatus,
-  isBuiltinPipelineStatus,
+  statusChangeApiBody,
 } from "@/components/Leads/leadConstants";
 import styles from "./leads.module.css";
 
@@ -42,12 +42,8 @@ export default function LeadsPage() {
   const [customOptions, setCustomOptions] = useState({});
 
   const statusColumns = useMemo(
-    () => buildStatusColumns(customOptions.status || []),
-    [customOptions.status]
-  );
-  const customStatusKeys = useMemo(
-    () => new Set((customOptions.status || []).map((o) => o.value)),
-    [customOptions.status]
+    () => buildStatusColumns(customOptions.status || [], leads),
+    [customOptions.status, leads]
   );
   const sourceFilterOptions = useMemo(
     () => buildSourceFilterOptions(customOptions.source || []),
@@ -99,8 +95,9 @@ export default function LeadsPage() {
   }, []);
 
   // ── fetch leads ────────────────────────────────────────────────────────
-  const fetchLeads = useCallback(async () => {
-    setLoading(true);
+  const fetchLeads = useCallback(async (opts = {}) => {
+    const silent = Boolean(opts.silent);
+    if (!silent) setLoading(true);
     try {
       const params = new URLSearchParams();
       if (filterSource) params.set("source", filterSource);
@@ -111,7 +108,7 @@ export default function LeadsPage() {
         params.set("follow_up_date", filterDate);
       }
       if (filterSearch) params.set("search", filterSearch);
-      if (filterStatus) params.set("status", filterStatus);
+      // Status chips filter client-side so counts stay accurate for all columns
       if (filterAssignTo) params.set("assigned_to", filterAssignTo);
 
       const qs = params.toString();
@@ -120,8 +117,8 @@ export default function LeadsPage() {
       if (json.success && Array.isArray(json.data)) setLeads(json.data);
       else setLeads([]);
     } catch { setLeads([]); }
-    finally  { setLoading(false); }
-  }, [filterSource, filterDate, filterFollowUpFrom, filterFollowUpTo, filterSearch, filterStatus, filterAssignTo]);
+    finally  { if (!silent) setLoading(false); }
+  }, [filterSource, filterDate, filterFollowUpFrom, filterFollowUpTo, filterSearch, filterAssignTo]);
 
   const fetchUsers = useCallback(async () => {
     try {
@@ -135,7 +132,9 @@ export default function LeadsPage() {
     try {
       const res  = await apiFetch("/leads/custom-options");
       const json = await res.json();
-      if (json.success && json.data) setCustomOptions(json.data);
+      if (json.success && (json.data || json.registry)) {
+        setCustomOptions(json.data || json.registry || {});
+      }
     } catch { /* non-fatal */ }
   }, []);
 
@@ -145,34 +144,47 @@ export default function LeadsPage() {
 
   useEffect(() => {
     const unsub = subscribeCrmLive(["leads:changed", "calendar:changed"], () => {
-      fetchLeads();
+      fetchLeads({ silent: true });
       fetchCustomOptions();
     });
     return unsub;
   }, [fetchLeads, fetchCustomOptions]);
 
   // ── derived ─────────────────────────────────────────────────────────────
-  const filteredLeads = leads.filter((l) => {
-    if (filterCreatedBy && String(l.created_by) !== filterCreatedBy) return false;
-    if (filterLabel     && l.label !== filterLabel)                   return false;
-    return true;
-  });
+  const baseFilteredLeads = useMemo(
+    () =>
+      leads.filter((l) => {
+        if (filterCreatedBy && String(l.created_by) !== filterCreatedBy) return false;
+        if (filterLabel && l.label !== filterLabel) return false;
+        return true;
+      }),
+    [leads, filterCreatedBy, filterLabel]
+  );
 
-  function leadsForStatus(key, isCustom = false) {
-    if (!key || key === "all") return filteredLeads;
-    if (key === "converted" || key === "confirm") {
-      return filteredLeads.filter((l) => isLeadConverted(l));
-    }
-    if (isCustom) {
-      return filteredLeads.filter((l) => !isLeadConverted(l) && getLeadPipelineKey(l) === key);
-    }
-    return filteredLeads.filter((l) => {
-      if (isLeadConverted(l)) return false;
-      const pipe = getLeadPipelineKey(l);
-      if (isCustomLeadStatus(l) || customStatusKeys.has(pipe)) return false;
-      return pipe === key;
-    });
-  }
+  const leadsForStatus = useCallback(
+    (key, isCustom = false, sourceList = baseFilteredLeads) => {
+      if (!key || key === "all") return sourceList;
+      if (key === "converted" || key === "confirm") {
+        return sourceList.filter((l) => isLeadConverted(l));
+      }
+      if (isCustom) {
+        return sourceList.filter((l) => !isLeadConverted(l) && getLeadPipelineKey(l) === key);
+      }
+      return sourceList.filter((l) => {
+        if (isLeadConverted(l)) return false;
+        const pipe = getLeadPipelineKey(l);
+        if (isCustomLeadStatus(l)) return false;
+        return pipe === key;
+      });
+    },
+    [baseFilteredLeads]
+  );
+
+  const filteredLeads = useMemo(() => {
+    if (!filterStatus) return baseFilteredLeads;
+    const col = statusColumns.find((s) => s.key === filterStatus);
+    return leadsForStatus(filterStatus, Boolean(col?.isCustom), baseFilteredLeads);
+  }, [baseFilteredLeads, filterStatus, statusColumns, leadsForStatus]);
 
   function handleStatusSelect(lead, newStatus) {
     if (newStatus === CONVERT_OPTION_VALUE) {
@@ -180,7 +192,7 @@ export default function LeadsPage() {
         showToast("Lead is already converted", "error");
         return;
       }
-      setConvertModal(lead); // open the dedicated ConvertLeadModal
+      setConvertModal(lead);
       return;
     }
     handleStatusChange(lead.id, newStatus);
@@ -192,12 +204,19 @@ export default function LeadsPage() {
 
   // ── status change (inline dropdown) ────────────────────────────────────
   async function handleStatusChange(leadId, newStatus) {
+    const prev = leads.find((l) => l.id === leadId);
+    const body = statusChangeApiBody(newStatus);
+    // Optimistic UI — chips + row update immediately
+    if (prev) {
+      setLeads((list) =>
+        list.map((l) =>
+          l.id === leadId
+            ? { ...l, status: body.status, status_v2: body.status_v2, display_status: body.status_v2 }
+            : l
+        )
+      );
+    }
     try {
-      // Custom statuses go in status_v2; enum `status` stays a valid leads_status.
-      const body = isBuiltinPipelineStatus(newStatus)
-        ? { status: newStatus }
-        : { status: "processing", status_v2: newStatus };
-      // PUT (not PATCH) so CORS preflight works with APIs that omit PATCH in Allow-Methods.
       const res = await apiFetch(`/leads/${leadId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -205,15 +224,19 @@ export default function LeadsPage() {
       });
       const json = await res.json();
       if (json.success) {
-        setLeads((prev) =>
-          prev.map((l) =>
-            l.id === leadId ? { ...l, ...(json.data || {}) } : l
-          )
+        setLeads((list) =>
+          list.map((l) => (l.id === leadId ? { ...l, ...(json.data || {}) } : l))
         );
         showToast("Status updated");
         void fetchCustomOptions();
-      } else showToast(json.message || "Failed", "error");
-    } catch { showToast("Network error", "error"); }
+      } else {
+        if (prev) setLeads((list) => list.map((l) => (l.id === leadId ? prev : l)));
+        showToast(json.message || "Failed", "error");
+      }
+    } catch {
+      if (prev) setLeads((list) => list.map((l) => (l.id === leadId ? prev : l)));
+      showToast("Network error", "error");
+    }
   }
 
   // ── delete ─────────────────────────────────────────────────────────────
@@ -309,7 +332,7 @@ export default function LeadsPage() {
     filterStatus;
 
   function statusCount(key, isCustom = false) {
-    return leadsForStatus(key, isCustom).length;
+    return leadsForStatus(key, isCustom, baseFilteredLeads).length;
   }
 
   function toggleStatusFilter(key) {
@@ -663,7 +686,7 @@ export default function LeadsPage() {
               onClick={() => setFilterStatus("")}
             >
               <span className={styles.statusChipLabel}>All Leads</span>
-              <span className={styles.statusChipCount}>{filteredLeads.length}</span>
+              <span className={styles.statusChipCount}>{baseFilteredLeads.length}</span>
             </button>
             {statusColumns.map((st) => {
               const n = statusCount(st.key, st.isCustom);
@@ -873,6 +896,11 @@ function LeadStatusSelect({ lead, statuses, className, style, onChange }) {
   const selectValue = getLeadStatusSelectValue(lead);
   const customOpts = statuses.filter((s) => s.isCustom);
   const builtInOpts = statuses.filter((s) => !s.isCustom);
+  const known = new Set(statuses.map((s) => s.key));
+  const orphan =
+    selectValue && !known.has(selectValue) && selectValue !== CONVERT_OPTION_VALUE
+      ? selectValue
+      : null;
 
   return (
     <select
@@ -891,8 +919,9 @@ function LeadStatusSelect({ lead, statuses, className, style, onChange }) {
       {builtInOpts.map((s) => (
         <option key={s.key} value={s.key}>{s.label}</option>
       ))}
-      {customOpts.length > 0 && (
+      {(customOpts.length > 0 || orphan) && (
         <optgroup label="Custom">
+          {orphan ? <option value={orphan}>{orphan}</option> : null}
           {customOpts.map((s) => (
             <option key={s.key} value={s.key}>{s.label}</option>
           ))}

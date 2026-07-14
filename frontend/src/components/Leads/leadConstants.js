@@ -39,6 +39,15 @@ const LEGACY_TO_V2 = {
   cancel: "dead",
 };
 
+const V2_TO_LEGACY = {
+  new: "new",
+  assigned: "close_by",
+  in_process: "processing",
+  converted: "confirm",
+  recycled: "processing",
+  dead: "cancel",
+};
+
 const KNOWN_STATUS_KEYS = new Set([
   "new",
   "processing",
@@ -69,9 +78,31 @@ export function isBuiltinPipelineStatus(value) {
 export function getLeadPipelineKey(lead) {
   if (!lead) return "new";
   if (isLeadConverted(lead)) return "converted";
-  const v2 = lead.status_v2 != null ? String(lead.status_v2).trim() : "";
-  if (v2) return v2;
-  return LEGACY_TO_V2[lead.status] || lead.status || "new";
+  const v2Raw = lead.status_v2 != null ? String(lead.status_v2).trim() : "";
+  if (v2Raw) {
+    const lower = v2Raw.toLowerCase();
+    if (BUILTIN_PIPELINE_KEYS.has(lower)) return lower;
+    if (LEGACY_TO_V2[lower]) return LEGACY_TO_V2[lower];
+    return v2Raw; // custom — keep as stored
+  }
+  const legacy = String(lead.status || "")
+    .trim()
+    .toLowerCase();
+  return LEGACY_TO_V2[legacy] || legacy || "new";
+}
+
+/** Body for PUT /leads/:id when changing status (enum-safe + status_v2). */
+export function statusChangeApiBody(newStatus) {
+  const raw = String(newStatus || "").trim();
+  if (!raw) return { status: "new", status_v2: "new" };
+  const lower = raw.toLowerCase();
+  if (BUILTIN_PIPELINE_KEYS.has(lower)) {
+    return { status: V2_TO_LEGACY[lower] || "processing", status_v2: lower };
+  }
+  if (LEGACY_TO_V2[lower]) {
+    return { status: lower, status_v2: LEGACY_TO_V2[lower] };
+  }
+  return { status: "processing", status_v2: raw };
 }
 
 export function formatLeadStatus(lead) {
@@ -207,18 +238,35 @@ export function getLeadStatusSelectValue(lead) {
 }
 
 /**
- * Status strip + kanban: colored built-ins + gray custom statuses from API.
- * Gray chips = custom options created via "Other" on lead save / manage modal.
+ * Status strip + kanban: colored built-ins + gray custom statuses from API +
+ * any orphan custom values still on leads (so live chips match rows even if
+ * dropdown_options is empty).
  */
-export function buildStatusColumns(customStatusOptions = []) {
+export function buildStatusColumns(customStatusOptions = [], leads = []) {
   const staticForClean = REFERENCE_STATUSES.map((s) => ({ value: s.key, label: s.label }));
-  const custom = cleanCustomOptions(customStatusOptions, staticForClean).map((o, i) => ({
+  const fromRegistry = cleanCustomOptions(customStatusOptions, staticForClean);
+
+  const registryNorm = new Set(fromRegistry.map((o) => normOptKey(o.value)));
+  const orphanMap = new Map();
+  for (const lead of leads || []) {
+    if (isLeadConverted(lead)) continue;
+    const key = getLeadPipelineKey(lead);
+    if (!key || BUILTIN_PIPELINE_KEYS.has(String(key).toLowerCase())) continue;
+    if (registryNorm.has(normOptKey(key))) continue;
+    if (!orphanMap.has(key)) orphanMap.set(key, key);
+  }
+
+  const custom = [
+    ...fromRegistry.map((o) => ({ value: o.value, label: o.label })),
+    ...[...orphanMap.entries()].map(([value, label]) => ({ value, label })),
+  ].map((o, i) => ({
     key: o.value,
     label: o.label,
     color: CUSTOM_STATUS_COLORS[i % CUSTOM_STATUS_COLORS.length],
     bg: `${CUSTOM_STATUS_COLORS[i % CUSTOM_STATUS_COLORS.length]}1a`,
     isCustom: true,
   }));
+
   return [
     ...REFERENCE_STATUSES.map((s) => ({ ...s, isCustom: false })),
     ...custom,

@@ -7,6 +7,7 @@ import {
   isLeadConverted,
   buildLabelFilterOptions,
   getLeadPipelineKey,
+  statusChangeApiBody,
 } from "./leadConstants";
 import styles from "./LeadQuickModals.module.css";
 
@@ -536,7 +537,7 @@ function StatusModal({ lead, statuses, onClose, onDone, onLeadPatch, onConvertLe
       const res = await apiFetch(`/leads/${lead.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: st }),
+        body: JSON.stringify(statusChangeApiBody(st)),
       });
       const json = await res.json();
       if (!res.ok || !json.success) {

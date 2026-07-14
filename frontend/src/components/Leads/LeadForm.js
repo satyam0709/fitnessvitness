@@ -13,7 +13,7 @@ import {
   OTHER_VALUE,
   buildFieldOptions,
   getLeadStatusSelectValue,
-  isBuiltinPipelineStatus,
+  statusChangeApiBody,
 } from "./leadConstants";
 import styles from "./AddLeadModal.module.css";
 
@@ -233,14 +233,10 @@ export default function LeadForm({
       fd.append("name", customerName.trim());
       fd.append("phone", phone.trim());
       fd.append("phone_dial", phoneDial.trim());
-      // Custom Other statuses must NOT go in enum `status` — store in status_v2.
-      // Keep `status` as a valid leads_status so older backends don't return "invalid status".
-      if (status === OTHER_VALUE || (resolvedStatus && !isBuiltinPipelineStatus(resolvedStatus))) {
-        fd.append("status", "processing");
-        fd.append("status_v2", resolvedStatus);
-      } else {
-        fd.append("status", resolvedStatus);
-      }
+      // Always set status + status_v2 together (enum-safe + clears stale custom v2).
+      const statusBody = statusChangeApiBody(resolvedStatus);
+      fd.append("status", statusBody.status);
+      fd.append("status_v2", statusBody.status_v2);
       fd.append("source", resolvedSource || "other");
       if (leadDate) fd.append("follow_up_date", leadDate);
       if (companyName.trim()) fd.append("company_name", companyName.trim());
