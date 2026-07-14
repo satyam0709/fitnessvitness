@@ -73,11 +73,12 @@ function counterTenantKey(tid) {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** Prisma `$executeRaw` rejects `undefined` — always coerce to null. */
+/** Prisma `$executeRaw` / query engine rejects `undefined` — always coerce to null. */
 function sqlNull(v) {
   return v === undefined ? null : v;
 }
 
+/** Drop keys whose value is `undefined` (Prisma treats omit vs null differently). */
 function cleanCreateData(data) {
   const out = {};
   for (const [k, v] of Object.entries(data || {})) {
@@ -86,22 +87,47 @@ function cleanCreateData(data) {
   return out;
 }
 
+/** Multipart / JSON body value → trimmed string or null (never undefined). */
+function bodyStr(body, key) {
+  if (!body || body[key] == null) return null;
+  const raw = body[key];
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  if (v == null) return null;
+  const s = String(v).trim();
+  return s || null;
+}
+
 /** Allocate next lead_number without raw SQL (avoids undefined bind crashes on live). */
 async function allocateLeadNumber(tx, tid) {
   const key = counterTenantKey(tid);
-  await tx.tenant_lead_counters.upsert({
-    where: { tenant_id: key },
-    create: { tenant_id: key, next_lead_number: 1 },
-    update: {},
-  });
-  const row = await tx.tenant_lead_counters.findUnique({ where: { tenant_id: key } });
-  const num = Number(row?.next_lead_number ?? 1);
-  const safeNum = Number.isFinite(num) && num > 0 ? num : 1;
-  await tx.tenant_lead_counters.update({
-    where: { tenant_id: key },
-    data: { next_lead_number: safeNum + 1 },
-  });
-  return safeNum;
+  try {
+    await tx.tenant_lead_counters.upsert({
+      where: { tenant_id: key },
+      create: { tenant_id: key, next_lead_number: 1 },
+      update: {},
+    });
+    const row = await tx.tenant_lead_counters.findUnique({ where: { tenant_id: key } });
+    const num = Number(row?.next_lead_number ?? 1);
+    const safeNum = Number.isFinite(num) && num > 0 ? num : 1;
+    await tx.tenant_lead_counters.update({
+      where: { tenant_id: key },
+      data: { next_lead_number: safeNum + 1 },
+    });
+    return safeNum;
+  } catch (err) {
+    // Table/model missing or race — still create the lead with a safe number.
+    console.warn("allocateLeadNumber fallback:", err.message);
+    try {
+      const agg = await tx.leads.aggregate({
+        _max: { lead_number: true },
+        where: { tenant_id: tid == null ? null : tid },
+      });
+      const max = Number(agg?._max?.lead_number ?? 0);
+      return (Number.isFinite(max) ? max : 0) + 1;
+    } catch {
+      return Date.now() % 1000000;
+    }
+  }
 }
 
 function parseAttachments(row) {
@@ -503,8 +529,9 @@ async function getFollowups(req, leadId) {
 
 async function createLead(req) {
   const b = req.body || {};
-  const name = b.name != null ? String(b.name).trim() : "";
+  const name = bodyStr(b, "name") || "";
   const phone = normalizePhone(b);
+  const userId = req.user?.id != null ? Number(req.user.id) : null;
 
   if (!name) {
     const err = new Error("name is required");
@@ -516,11 +543,22 @@ async function createLead(req) {
     err.status = 400;
     throw err;
   }
+  if (!userId) {
+    const err = new Error("Not authenticated");
+    err.status = 401;
+    throw err;
+  }
 
-  const statusParsed = parseStatusInput(b, "new");
+  const statusParsed = parseStatusInput(
+    {
+      status: bodyStr(b, "status"),
+      status_v2: bodyStr(b, "status_v2"),
+    },
+    "new"
+  );
   const status = statusParsed.legacy || "processing";
-  const statusV2 = statusParsed.v2 || legacyToV2(status);
-  const assignedUserId = (await resolveUserId(b.assigned_to)) || req.user?.id;
+  const statusV2 = String(statusParsed.v2 || legacyToV2(status) || "new").slice(0, 32);
+  const assignedUserId = (await resolveUserId(bodyStr(b, "assigned_to"))) || userId;
   if (!assignedUserId) {
     const err = new Error("Could not resolve assigned user");
     err.status = 400;
@@ -534,6 +572,23 @@ async function createLead(req) {
   }
 
   const { first_name, last_name } = splitName(name);
+  const source = bodyStr(b, "source") || "other";
+  const label = bodyStr(b, "label");
+  const companyName = bodyStr(b, "company_name");
+  const email = bodyStr(b, "email");
+  const phoneDial = bodyStr(b, "phone_dial");
+  const followUpDate = bodyStr(b, "follow_up_date");
+  const followupAt = bodyStr(b, "followup_at");
+  const notes = bodyStr(b, "notes") || bodyStr(b, "comment");
+  const amountRaw = bodyStr(b, "amount");
+  const productCategory = bodyStr(b, "product_category");
+  const team = bodyStr(b, "team");
+  const accountRelationship = bodyStr(b, "account_relationship");
+  const followupType = bodyStr(b, "followup_type");
+  const address = bodyStr(b, "address");
+  const reference = bodyStr(b, "reference");
+  const cancelReason = bodyStr(b, "cancel_reason");
+  const currency = (bodyStr(b, "currency") || "INR").toUpperCase();
 
   const result = await prisma.$transaction(async (tx) => {
     const num = await allocateLeadNumber(tx, tid);
@@ -542,34 +597,34 @@ async function createLead(req) {
       data: cleanCreateData({
         tenant_id: tid,
         name,
-        first_name: b.first_name != null && String(b.first_name).trim() ? String(b.first_name).trim() : first_name,
-        last_name: b.last_name != null && String(b.last_name).trim() ? String(b.last_name).trim() : last_name,
-        company_name: b.company_name ? String(b.company_name).trim() : null,
+        first_name: bodyStr(b, "first_name") || first_name,
+        last_name: bodyStr(b, "last_name") || last_name,
+        company_name: companyName,
         phone,
-        phone_dial: b.phone_dial ? String(b.phone_dial).trim() : null,
-        email: b.email ? String(b.email).trim() : null,
-        source: b.source ? String(b.source).trim() : "other",
+        phone_dial: phoneDial,
+        email,
+        source,
         status,
         status_v2: statusV2,
-        label: b.label ? String(b.label).trim() : null,
-        cancel_reason: b.cancel_reason ? String(b.cancel_reason).trim() : null,
-        address: b.address ? String(b.address).trim() : null,
-        reference: b.reference ? String(b.reference).trim() : null,
+        label,
+        cancel_reason: cancelReason,
+        address,
+        reference,
         attachments_json: attachmentsJson,
         assigned_to: assignedUserId,
-        created_by: req.user.id,
-        follow_up_date: b.follow_up_date ? new Date(b.follow_up_date) : null,
-        followup_at: b.followup_at ? new Date(b.followup_at) : null,
-        notes: (b.notes || b.comment) ? String(b.notes || b.comment) : null,
+        created_by: userId,
+        follow_up_date: followUpDate ? new Date(followUpDate) : null,
+        followup_at: followupAt ? new Date(followupAt) : null,
+        notes,
         lead_number: num,
-        amount: b.amount ? new Prisma.Decimal(b.amount) : new Prisma.Decimal(0),
-        currency: String(b.currency || "INR").toUpperCase(),
-        product_category: b.product_category ? String(b.product_category).trim() : null,
-        team: b.team ? String(b.team).trim() : null,
-        account_relationship: b.account_relationship ? String(b.account_relationship).trim() : null,
-        followup_type: b.followup_type ? String(b.followup_type).trim() : null,
+        amount: amountRaw ? new Prisma.Decimal(amountRaw) : new Prisma.Decimal(0),
+        currency,
+        product_category: productCategory,
+        team,
+        account_relationship: accountRelationship,
+        followup_type: followupType,
         last_touched_at: new Date(),
-        updated_by: req.user.id,
+        updated_by: userId,
       }),
     });
 
@@ -579,14 +634,30 @@ async function createLead(req) {
         field_name: "status",
         old_value: null,
         new_value: String(statusV2 || status),
-        user_id: req.user.id,
+        user_id: userId,
       },
     });
 
     return created;
   });
 
-  await registerLeadCustomOptions(b, statusParsed);
+  // Custom option registry must never fail the create after the lead is saved.
+  try {
+    await registerLeadCustomOptions(
+      {
+        source,
+        label,
+        product_category: productCategory,
+        team,
+        account_relationship: accountRelationship,
+        followup_type: followupType,
+        status: statusV2,
+      },
+      statusParsed
+    );
+  } catch (err) {
+    console.warn("createLead registerLeadCustomOptions:", err.message);
+  }
 
   const createdRow = await prisma.leads.findFirst({
     where: { id: result.id, tenant_id: tid },
@@ -690,11 +761,15 @@ async function updateLead(req, leadId) {
 
   await logFieldChanges(leadId, existing, updates, req.user.id);
 
-  await registerLeadCustomOptions(b, statusParsed);
+  try {
+    await registerLeadCustomOptions(b, statusParsed);
+  } catch (err) {
+    console.warn("updateLead registerLeadCustomOptions:", err.message);
+  }
 
   await prisma.leads.update({
     where: { id: Number(leadId) },
-    data: {
+    data: cleanCreateData({
       name: updates.name !== undefined ? updates.name : undefined,
       first_name: updates.first_name !== undefined ? updates.first_name : undefined,
       last_name: updates.last_name !== undefined ? updates.last_name : undefined,
@@ -706,8 +781,8 @@ async function updateLead(req, leadId) {
       status: updates.status !== undefined ? updates.status : undefined,
       status_v2:
         statusParsed != null
-          ? statusV2
-          : statusV2 || (status ? legacyToV2(status) : undefined),
+          ? statusV2 || null
+          : undefined,
       label: updates.label !== undefined ? updates.label : undefined,
       cancel_reason: b.cancel_reason !== undefined ? (b.cancel_reason || null) : undefined,
       address: updates.address !== undefined ? updates.address : undefined,
@@ -729,7 +804,7 @@ async function updateLead(req, leadId) {
       last_touched_at: new Date(),
       updated_by: req.user.id,
       updated_at: new Date(),
-    }
+    }),
   });
 
   const updatedRow = await prisma.leads.findFirst({
@@ -1018,7 +1093,7 @@ async function convertLeadToOpportunity(req, leadId) {
         converted_opportunity_id: createdOpp.id,
         amount: new Prisma.Decimal(amount),
         currency,
-        product_category: productCategory || undefined,
+        product_category: productCategory || null,
         last_touched_at: new Date(),
         updated_by: req.user.id,
         updated_at: new Date(),
@@ -1351,36 +1426,45 @@ async function getHistory(req, leadId) {
 }
 
 async function registerCustomOptionIfNeeded(fieldName, value) {
-  if (!value || typeof value !== "string") return;
-  const val = value.trim();
-  if (!val || isBuiltInOption(fieldName, val)) return;
+  const field = fieldName != null ? String(fieldName).trim() : "";
+  const raw = Array.isArray(value) ? value[0] : value;
+  const val = raw != null ? String(raw).trim() : "";
+  if (!field || !val || isBuiltInOption(field, val)) return;
 
   try {
-    // Prisma compound unique name is field_name_option_value (map name uk_dropdown_opt is DB-only)
-    await prisma.dropdown_options.upsert({
-      where: {
-        field_name_option_value: {
-          field_name: fieldName,
-          option_value: val,
-        },
-      },
-      update: { option_label: val },
-      create: {
-        field_name: fieldName,
+    const existing = await prisma.dropdown_options.findFirst({
+      where: { field_name: field, option_value: val },
+      select: { id: true, option_label: true },
+    });
+    if (existing) {
+      if (existing.option_label !== val) {
+        await prisma.dropdown_options.update({
+          where: { id: existing.id },
+          data: { option_label: val },
+        });
+      }
+      return;
+    }
+    await prisma.dropdown_options.create({
+      data: {
+        field_name: field,
         option_value: val,
         option_label: val,
       },
     });
   } catch (err) {
-    // Fallback if client out of sync with schema
+    // Fallback if client out of sync with schema — never pass undefined into raw SQL.
     try {
       await prisma.$executeRaw`
         INSERT INTO dropdown_options (field_name, option_value, option_label)
-        VALUES (${sqlNull(fieldName)}, ${sqlNull(val)}, ${sqlNull(val)})
+        VALUES (${sqlNull(field)}, ${sqlNull(val)}, ${sqlNull(val)})
         ON DUPLICATE KEY UPDATE option_label = VALUES(option_label)
       `;
     } catch (err2) {
-      console.error(`Error registering custom option for ${fieldName}:`, err2.message || err.message);
+      console.warn(
+        `registerCustomOptionIfNeeded ${field}:`,
+        err2.message || err.message
+      );
     }
   }
 }
@@ -1393,7 +1477,8 @@ async function registerLeadCustomOptions(body, statusParsed) {
       }
       continue;
     }
-    if (body[field]) await registerCustomOptionIfNeeded(field, body[field]);
+    const v = bodyStr(body, field);
+    if (v) await registerCustomOptionIfNeeded(field, v);
   }
 }
 
