@@ -273,6 +273,25 @@ export function buildStatusColumns(customStatusOptions = [], leads = []) {
   ];
 }
 
+/** Same custom status list as chips — for Add/Edit Lead forms & Manage Options. */
+export function customStatusesFromColumns(statusColumns = []) {
+  return (statusColumns || [])
+    .filter((s) => s.isCustom && s.key)
+    .map((s) => ({ value: s.key, label: s.label || s.key, id: s.key }));
+}
+
+/**
+ * Merge API custom-options with statuses discovered on current leads so
+ * Add Lead dropdown always matches status chips (local + live).
+ */
+export function mergeCustomOptionsWithLeads(customOptions = {}, leads = []) {
+  const columns = buildStatusColumns(customOptions.status || [], leads);
+  return {
+    ...customOptions,
+    status: customStatusesFromColumns(columns),
+  };
+}
+
 export function buildSourceFilterOptions(customSources = []) {
   return buildFieldOptions(SOURCES, customSources, { includeEmpty: false, includeOther: false });
 }
