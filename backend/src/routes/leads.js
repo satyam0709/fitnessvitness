@@ -6,6 +6,9 @@ const { verifyToken } = require("../middleware/verifyToken");
 const { requireFeature } = require("../middleware/requireFeature");
 const leadService = require("../services/leadService");
 
+/** Fingerprint — if Render stack still shows createLeadHandler/pool.execute, old build is live. */
+const LEADS_ROUTE_BUILD = "prisma-leadService-2026-07-14-v3";
+
 const router = express.Router();
 router.use(verifyToken);
 router.use(requireFeature("lead_management"));
@@ -58,7 +61,31 @@ function handleService(fn) {
 
 router.get("/calendar-markers", handleService((req) => leadService.getCalendarMarkers(req)));
 
-router.get("/custom-options", handleService(() => leadService.getCustomOptions()));
+// Must stay above /:id — otherwise "custom-options" becomes an id → 400 Invalid lead id
+router.get(
+  "/custom-options",
+  handleService(async () => {
+    try {
+      return await leadService.getCustomOptions();
+    } catch (err) {
+      console.warn("GET /leads/custom-options:", err.message);
+      return {
+        success: true,
+        data: {
+          source: [],
+          label: [],
+          status: [],
+          account_relationship: [],
+          followup_type: [],
+          product_category: [],
+          team: [],
+        },
+        registry: {},
+        warning: err.message,
+      };
+    }
+  })
+);
 
 router.put("/custom-options/rename", handleService(async (req) => {
   const { fieldName, oldValue, newValue } = req.body || {};
@@ -97,8 +124,9 @@ router.get("/:id", handleService(async (req) => {
 }));
 
 router.post("/", multipartMaybe(), validateUploadedMimes, handleService(async (req) => {
+  console.log(`[leads] POST / create via ${LEADS_ROUTE_BUILD}`);
   const result = await leadService.createLead(req);
-  return { ...result, status: 201 };
+  return { ...result, status: 201, build: LEADS_ROUTE_BUILD };
 }));
 
 router.post("/:id/convert", handleService(async (req) => {

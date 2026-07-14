@@ -215,7 +215,8 @@ app.get("/api/health", async (_req, res) => {
     version: process.env.APP_VERSION || "1.0.0",
     // Bumped when lead create undefined-bind fix ships — check live /api/health
     fixes: {
-      leadBindNull: "2026-07-14-bind-null-v2",
+      leadBindNull: "2026-07-14-bind-null-v3",
+      leadsRoute: "prisma-leadService-2026-07-14-v3",
     },
   };
 
@@ -309,7 +310,8 @@ async function start() {
   initMeetingsRealtime(httpServer);
   httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`\n🚀  API → http://localhost:${PORT}/api/health`);
-    console.log(`📡  Realtime (meetings + admin) → ws://localhost:${PORT}/socket.io\n`);
+    console.log(`📡  Realtime (meetings + admin) → ws://localhost:${PORT}/socket.io`);
+    console.log(`✅  Leads create path: prisma-leadService-2026-07-14-v3\n`);
   });
 }
 
