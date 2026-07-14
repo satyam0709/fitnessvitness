@@ -1,3 +1,9 @@
+require("dotenv").config();
+const { ensureDatabaseUrl } = require("./ensureDatabaseUrl");
+
+// Must run before PrismaClient reads env("DATABASE_URL")
+ensureDatabaseUrl();
+
 const { PrismaClient } = require("../generated/prisma");
 
 /** Recursively remove `undefined` so Prisma never binds it into SQL. */
@@ -55,4 +61,4 @@ const prisma = basePrisma.$extends({
 
 module.exports = prisma;
 module.exports.omitUndefinedDeep = omitUndefinedDeep;
-module.exports.__leadBindFix = "2026-07-14-bind-null-v2";
+module.exports.__leadBindFix = "2026-07-14-bind-null-v3";
