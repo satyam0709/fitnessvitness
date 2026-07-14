@@ -26,6 +26,7 @@ import {
   getLeadPipelineKey,
   formatLeadStatus,
   isCustomLeadStatus,
+  isBuiltinPipelineStatus,
 } from "@/components/Leads/leadConstants";
 import styles from "./leads.module.css";
 
@@ -192,11 +193,15 @@ export default function LeadsPage() {
   // ── status change (inline dropdown) ────────────────────────────────────
   async function handleStatusChange(leadId, newStatus) {
     try {
+      // Custom statuses go in status_v2; enum `status` stays a valid leads_status.
+      const body = isBuiltinPipelineStatus(newStatus)
+        ? { status: newStatus }
+        : { status: "processing", status_v2: newStatus };
       // PUT (not PATCH) so CORS preflight works with APIs that omit PATCH in Allow-Methods.
       const res = await apiFetch(`/leads/${leadId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: newStatus }),
+        body: JSON.stringify(body),
       });
       const json = await res.json();
       if (json.success) {
@@ -206,6 +211,7 @@ export default function LeadsPage() {
           )
         );
         showToast("Status updated");
+        void fetchCustomOptions();
       } else showToast(json.message || "Failed", "error");
     } catch { showToast("Network error", "error"); }
   }

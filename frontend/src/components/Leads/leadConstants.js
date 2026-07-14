@@ -54,6 +54,17 @@ const KNOWN_STATUS_KEYS = new Set([
 
 const BUILTIN_PIPELINE_KEYS = new Set(REFERENCE_STATUSES.map((s) => s.key));
 
+/** True for built-in pipeline keys (new, assigned, in_process, …) or legacy ENUM keys. */
+export function isBuiltinPipelineStatus(value) {
+  const key = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (!key) return false;
+  if (BUILTIN_PIPELINE_KEYS.has(key)) return true;
+  if (KNOWN_STATUS_KEYS.has(key)) return true;
+  return false;
+}
+
 /** Resolve lead's pipeline key: status_v2 if set, else map from legacy. */
 export function getLeadPipelineKey(lead) {
   if (!lead) return "new";

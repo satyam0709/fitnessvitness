@@ -258,6 +258,23 @@ async function patchCrmColumns(pool) {
   }
 }
 
+async function ensureDropdownOptionsTable(pool) {
+  if (await tableExists(pool, "dropdown_options")) return;
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS dropdown_options (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      field_name VARCHAR(50) NOT NULL,
+      option_value VARCHAR(100) NOT NULL,
+      option_label VARCHAR(100) NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uk_dropdown_opt (field_name, option_value),
+      KEY idx_dropdown_field (field_name)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+  console.log("ensureCrmSchemaCompat: created dropdown_options table");
+}
+
 async function ensureCrmSchemaCompat(pool) {
   if (compatReady) return;
   await ensureCalendarCrmTables(pool);
@@ -266,6 +283,7 @@ async function ensureCrmSchemaCompat(pool) {
   await ensureLeadChangeLogTable(pool);
   await ensureTenantLeadCountersTable(pool);
   await ensureTicketsTable(pool);
+  await ensureDropdownOptionsTable(pool);
   await patchCrmColumns(pool);
   compatReady = true;
 }

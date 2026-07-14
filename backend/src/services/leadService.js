@@ -1415,8 +1415,37 @@ function addCustomOptionEntry(buckets, field, value, label, id) {
 async function getCustomOptions() {
   const discovered = emptyCustomOptionBuckets();
 
+  let registryRows = [];
+  try {
+    registryRows = await prisma.dropdown_options.findMany({
+      orderBy: [{ field_name: "asc" }, { option_label: "asc" }],
+    });
+  } catch (err) {
+    // Live DBs may lack the table until ensureSchema runs — create via raw and retry once
+    console.warn("getCustomOptions registry read:", err.message);
+    try {
+      await prisma.$executeRawUnsafe(`
+        CREATE TABLE IF NOT EXISTS dropdown_options (
+          id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+          field_name VARCHAR(50) NOT NULL,
+          option_value VARCHAR(100) NOT NULL,
+          option_label VARCHAR(100) NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          UNIQUE KEY uk_dropdown_opt (field_name, option_value),
+          KEY idx_dropdown_field (field_name)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+      `);
+      registryRows = await prisma.dropdown_options.findMany({
+        orderBy: [{ field_name: "asc" }, { option_label: "asc" }],
+      });
+    } catch (err2) {
+      console.warn("getCustomOptions ensure table:", err2.message);
+      registryRows = [];
+    }
+  }
+
   const [
-    registryRows,
     sourceDistinct,
     labelDistinct,
     statusDistinct,
@@ -1425,9 +1454,6 @@ async function getCustomOptions() {
     relationshipDistinct,
     teamDistinct,
   ] = await Promise.all([
-    prisma.dropdown_options.findMany({
-      orderBy: [{ field_name: "asc" }, { option_label: "asc" }],
-    }),
     prisma.leads.findMany({
       where: { is_deleted: false, NOT: { source: "" } },
       distinct: ["source"],
