@@ -704,7 +704,10 @@ async function updateLead(req, leadId) {
       email: updates.email !== undefined ? updates.email : undefined,
       source: updates.source !== undefined ? updates.source : undefined,
       status: updates.status !== undefined ? updates.status : undefined,
-      status_v2: statusV2 || (status ? legacyToV2(status) : undefined),
+      status_v2:
+        statusParsed != null
+          ? statusV2
+          : statusV2 || (status ? legacyToV2(status) : undefined),
       label: updates.label !== undefined ? updates.label : undefined,
       cancel_reason: b.cancel_reason !== undefined ? (b.cancel_reason || null) : undefined,
       address: updates.address !== undefined ? updates.address : undefined,
@@ -751,7 +754,6 @@ async function updateLead(req, leadId) {
   });
 
   emitLeadChanges("update");
-  emitLeadsChanged({ reason: "options_changed", action: "update" });
   return { success: true, data: formattedRow };
 }
 
