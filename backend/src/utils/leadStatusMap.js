@@ -33,15 +33,36 @@ function v2ToLegacy(statusV2) {
 }
 
 function resolveStatusFilter(raw) {
-  const s = String(raw || "").trim().toLowerCase();
+  const s = String(raw || "").trim();
   if (!s) return null;
-  if (VALID_LEGACY.has(s)) {
-    return { legacy: s, v2: legacyToV2(s) };
+  const lower = s.toLowerCase();
+  if (VALID_LEGACY.has(lower)) {
+    return { legacy: lower, v2: legacyToV2(lower), custom: false };
   }
-  if (VALID_V2.has(s)) {
-    return { legacy: v2ToLegacy(s), v2: s };
+  if (VALID_V2.has(lower)) {
+    return { legacy: v2ToLegacy(lower), v2: lower, custom: false };
   }
-  return null;
+  return { legacy: null, v2: s, custom: true };
+}
+
+/** Parse status from create/update body; custom values live in status_v2. */
+function parseStatusInput(body = {}, fallbackLegacy = "new") {
+  const raw = body.status != null ? String(body.status).trim() : "";
+  const rawV2 = body.status_v2 != null ? String(body.status_v2).trim() : "";
+  const candidate = raw || rawV2;
+  if (!candidate) {
+    const legacy = fallbackLegacy || "new";
+    return { legacy, v2: legacyToV2(legacy), custom: false };
+  }
+  const lower = candidate.toLowerCase();
+  if (VALID_LEGACY.has(lower)) {
+    return { legacy: lower, v2: legacyToV2(lower), custom: false };
+  }
+  if (VALID_V2.has(lower)) {
+    return { legacy: v2ToLegacy(lower), v2: lower, custom: false };
+  }
+  const customVal = raw || rawV2;
+  return { legacy: "processing", v2: customVal, custom: true };
 }
 
 function enrichLeadStatus(row) {
@@ -64,5 +85,6 @@ module.exports = {
   legacyToV2,
   v2ToLegacy,
   resolveStatusFilter,
+  parseStatusInput,
   enrichLeadStatus,
 };

@@ -318,6 +318,16 @@ function CollectionsPageInner() {
             <div className={styles.statLabel}>Total pending</div>
             <div className={styles.statValue}>{fmtInr(summary.total_pending_inr)}</div>
           </div>
+          <Link href="/opportunities?view=won" className={`${styles.stat} ${styles.statBooked}`}>
+            <div className={styles.statLabel}>Booked won (MTD)</div>
+            <div className={styles.statValue}>{fmtInr(summary.booked_closed_won_mtd)}</div>
+          </Link>
+          <Link href="/opportunities?view=lost" className={`${styles.stat} ${styles.statLost}`}>
+            <div className={styles.statLabel}>Closed lost (MTD)</div>
+            <div className={styles.statValue}>
+              {summary.closed_lost_count_mtd ?? 0} · {fmtInr(summary.closed_lost_value_mtd)}
+            </div>
+          </Link>
         </div>
       )}
 

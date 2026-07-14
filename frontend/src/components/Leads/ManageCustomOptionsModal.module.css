@@ -1,0 +1,345 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+/* Delete confirm must sit above Manage Custom Options (same stacking context). */
+.confirmOverlay {
+  z-index: 3200;
+  background: rgba(15, 23, 42, 0.65);
+  backdrop-filter: blur(1px);
+}
+
+.modal {
+  background: var(--bg-card, #fff);
+  color: var(--text, #111);
+  border-radius: 12px;
+  width: min(520px, 100%);
+  max-height: min(90vh, 640px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--crm-modal-border, var(--border, #e2e8f0));
+  box-shadow: var(--shadow-lg, 0 20px 50px rgba(0, 0, 0, 0.25));
+  overflow: hidden;
+}
+
+.header {
+  flex-shrink: 0;
+  background: linear-gradient(135deg, #1a1a2e 0%, #2d2d4e 100%);
+  border-bottom: 3px solid var(--yellow, #f5c400);
+  color: #fff;
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.title {
+  margin: 0;
+  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--yellow, #f5c400);
+}
+
+.closeBtn {
+  background: rgba(245, 196, 0, 0.2);
+  border: none;
+  color: #fff;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+  background: var(--bg-card, #fff);
+}
+
+.tab {
+  appearance: none;
+  background: none;
+  border: none;
+  border-bottom: 3px solid transparent;
+  padding: 12px 14px 10px;
+  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-muted, #64748b);
+  cursor: pointer;
+  margin-bottom: -1px;
+}
+
+.tabActive {
+  color: var(--text, #111);
+  border-bottom-color: var(--yellow, #f5c400);
+}
+
+.body {
+  padding: 16px 18px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 220px;
+}
+
+.hint {
+  margin: 0 0 14px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-muted, #64748b);
+}
+
+.err {
+  color: #ef4444;
+  font-size: 13px;
+  margin: 0 0 10px;
+}
+
+.toast {
+  color: #16a34a;
+  font-size: 13px;
+  margin: 0 0 10px;
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 40px 12px;
+  color: var(--text-muted, #94a3b8);
+  text-align: center;
+  font-size: 13px;
+}
+
+.empty i {
+  font-size: 28px;
+  opacity: 0.5;
+}
+
+.empty small {
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: #f1f5f9;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+}
+
+.optionLabel {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text, #1e293b);
+}
+
+.editInput {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--yellow, #f5c400);
+  font-size: 13px;
+  outline: none;
+}
+
+.iconEdit,
+.iconDelete,
+.iconSave,
+.iconCancel {
+  appearance: none;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+}
+
+.iconEdit {
+  color: var(--yellow, #d4a800);
+}
+
+.iconEdit:hover {
+  background: rgba(245, 196, 0, 0.15);
+}
+
+.iconDelete {
+  color: #dc2626;
+}
+
+.iconDelete:hover {
+  background: rgba(220, 38, 38, 0.12);
+  color: #b91c1c;
+}
+
+.iconSave {
+  color: #16a34a;
+}
+
+.iconCancel {
+  color: #64748b;
+}
+
+.footer {
+  padding: 12px 18px;
+  border-top: 1px solid var(--border, #e2e8f0);
+  display: flex;
+  justify-content: flex-end;
+  background: #fff;
+}
+
+.btnClose {
+  appearance: none;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #334155;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.btnClose:hover {
+  background: #f1f5f9;
+}
+
+/* High-risk delete confirm */
+.dangerModal {
+  background: #fff;
+  color: #111;
+  border-radius: 12px;
+  width: min(460px, 100%);
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+
+.dangerHeader {
+  background: linear-gradient(135deg, #1a1a2e 0%, #2d2d4e 100%);
+  border-bottom: 3px solid var(--yellow, #f5c400);
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dangerTitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 800;
+  color: #fecaca;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-display, "Montserrat", sans-serif);
+}
+
+.dangerBody {
+  padding: 18px;
+}
+
+.dangerLead {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.dangerAlert {
+  background: #fef2f2;
+  border-left: 4px solid #ef4444;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  color: #b91c1c;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.dangerLabel {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: #334155;
+}
+
+.dangerInput {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 2px solid var(--yellow, #f5c400);
+  font-size: 14px;
+  outline: none;
+}
+
+.dangerFooter {
+  padding: 12px 18px 16px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.btnCancel {
+  appearance: none;
+  border: 1px solid #e2e8f0;
+  background: #f1f5f9;
+  color: #334155;
+  padding: 9px 14px;
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.btnDanger {
+  appearance: none;
+  border: none;
+  background: #fecaca;
+  color: #fff;
+  padding: 9px 14px;
+  border-radius: 8px;
+  font-weight: 800;
+  font-size: 13px;
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.btnDanger:not(:disabled) {
+  background: #ef4444;
+  opacity: 1;
+}
+
+.btnDanger:disabled {
+  cursor: not-allowed;
+}

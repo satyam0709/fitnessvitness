@@ -57,6 +57,10 @@ function emptyPanels() {
         closed_won_value: 0,
         closed_lost: 0,
         closed_lost_value: 0,
+        closed_won_today: 0,
+        closed_won_value_today: 0,
+        closed_lost_today: 0,
+        closed_lost_value_today: 0,
       },
       leads: {
         converted: 0,
@@ -233,6 +237,10 @@ async function loadDashboardPanels(req) {
     resultClosedWonValueRes,
     resultClosedLostRes,
     resultClosedLostValueRes,
+    lifetimeClosedWonRes,
+    lifetimeClosedWonValueRes,
+    lifetimeClosedLostRes,
+    lifetimeClosedLostValueRes,
     resultLeadsConvertedRes,
     resultLeadsRecycledRes,
     resultLeadsDeadRes,
@@ -335,7 +343,7 @@ async function loadDashboardPanels(req) {
       `SELECT COUNT(*) AS c FROM opportunities o
        WHERE ${os.where}
          AND o.stage = 'closed_won'
-         AND DATE(o.updated_at) = ?`,
+         AND DATE(o.closed_won_at) = ?`,
       [...os.params, todayYmd]
     ),
     pool.execute(
@@ -345,14 +353,14 @@ async function loadDashboardPanels(req) {
        FROM opportunities o
        WHERE ${os.where}
          AND o.stage = 'closed_won'
-         AND DATE(o.updated_at) = ?`,
+         AND DATE(o.closed_won_at) = ?`,
       [...os.params, todayYmd]
     ),
     pool.execute(
       `SELECT COUNT(*) AS c FROM opportunities o
        WHERE ${os.where}
          AND o.stage = 'closed_lost'
-         AND DATE(o.updated_at) = ?`,
+         AND DATE(o.closed_lost_at) = ?`,
       [...os.params, todayYmd]
     ),
     pool.execute(
@@ -362,8 +370,34 @@ async function loadDashboardPanels(req) {
        FROM opportunities o
        WHERE ${os.where}
          AND o.stage = 'closed_lost'
-         AND DATE(o.updated_at) = ?`,
+         AND DATE(o.closed_lost_at) = ?`,
       [...os.params, todayYmd]
+    ),
+    pool.execute(
+      `SELECT COUNT(*) AS c FROM opportunities o
+       WHERE ${os.where} AND o.stage = 'closed_won' AND o.is_deleted = 0`,
+      os.params
+    ),
+    pool.execute(
+      `SELECT COALESCE(SUM(
+          CASE WHEN UPPER(COALESCE(o.currency,'INR')) = 'INR' THEN COALESCE(o.final_amount, o.amount) ELSE 0 END
+        ), 0) AS s
+       FROM opportunities o
+       WHERE ${os.where} AND o.stage = 'closed_won' AND o.is_deleted = 0`,
+      os.params
+    ),
+    pool.execute(
+      `SELECT COUNT(*) AS c FROM opportunities o
+       WHERE ${os.where} AND o.stage = 'closed_lost' AND o.is_deleted = 0`,
+      os.params
+    ),
+    pool.execute(
+      `SELECT COALESCE(SUM(
+          CASE WHEN UPPER(COALESCE(o.currency,'INR')) = 'INR' THEN o.amount ELSE 0 END
+        ), 0) AS s
+       FROM opportunities o
+       WHERE ${os.where} AND o.stage = 'closed_lost' AND o.is_deleted = 0`,
+      os.params
     ),
     pool.execute(
       `SELECT COUNT(*) AS c FROM leads l
@@ -416,6 +450,10 @@ async function loadDashboardPanels(req) {
   const [[resultClosedWonValue]] = resultClosedWonValueRes;
   const [[resultClosedLost]] = resultClosedLostRes;
   const [[resultClosedLostValue]] = resultClosedLostValueRes;
+  const [[lifetimeClosedWon]] = lifetimeClosedWonRes;
+  const [[lifetimeClosedWonValue]] = lifetimeClosedWonValueRes;
+  const [[lifetimeClosedLost]] = lifetimeClosedLostRes;
+  const [[lifetimeClosedLostValue]] = lifetimeClosedLostValueRes;
   const [[resultLeadsConverted]] = resultLeadsConvertedRes;
   const [[resultLeadsRecycled]] = resultLeadsRecycledRes;
   const [[resultLeadsDead]] = resultLeadsDeadRes;
@@ -450,10 +488,14 @@ async function loadDashboardPanels(req) {
     date: dateDmy,
     closed_tickets: Number(resultClosedTickets.c) || 0,
     opportunities: {
-      closed_won: Number(resultClosedWon.c) || 0,
-      closed_won_value: Number(resultClosedWonValue.s) || 0,
-      closed_lost: Number(resultClosedLost.c) || 0,
-      closed_lost_value: Number(resultClosedLostValue.s) || 0,
+      closed_won: Number(lifetimeClosedWon.c) || 0,
+      closed_won_value: Number(lifetimeClosedWonValue.s) || 0,
+      closed_lost: Number(lifetimeClosedLost.c) || 0,
+      closed_lost_value: Number(lifetimeClosedLostValue.s) || 0,
+      closed_won_today: Number(resultClosedWon.c) || 0,
+      closed_won_value_today: Number(resultClosedWonValue.s) || 0,
+      closed_lost_today: Number(resultClosedLost.c) || 0,
+      closed_lost_value_today: Number(resultClosedLostValue.s) || 0,
     },
     leads: {
       converted: Number(resultLeadsConverted.c) || 0,
@@ -654,6 +696,10 @@ async function getDashboardOpr(req, res) {
               closed_lost: result.opportunities.closed_lost,
               closed_won_value: result.opportunities.closed_won_value,
               closed_lost_value: result.opportunities.closed_lost_value,
+              closed_won_today: result.opportunities.closed_won_today,
+              closed_lost_today: result.opportunities.closed_lost_today,
+              closed_won_value_today: result.opportunities.closed_won_value_today,
+              closed_lost_value_today: result.opportunities.closed_lost_value_today,
             },
             leads: result.leads,
             completed_activities: result.completed_activities,

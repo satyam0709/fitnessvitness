@@ -65,6 +65,29 @@ async function getPipelineReport(req, res) {
         total_value: Number(r.total_value || 0),
       }));
 
+      // Append opportunity Closed Won / Lost booked values (leads pipeline has no deal amounts)
+      if (await tableExists("opportunities")) {
+        try {
+          const { getClosedWonLostInRange, getClosedWonLostLifetime } = require("../services/opportunityRevenueStats");
+          const closed =
+            from || to
+              ? await getClosedWonLostInRange(req, from || new Date(2000, 0, 1), to || new Date())
+              : await getClosedWonLostLifetime(req);
+          formattedRows.push({
+            status: "closed_won",
+            count: closed.closed_won_count,
+            total_value: closed.closed_won_value,
+          });
+          formattedRows.push({
+            status: "closed_lost",
+            count: closed.closed_lost_count,
+            total_value: closed.closed_lost_value,
+          });
+        } catch (appendErr) {
+          console.warn("getPipelineReport closed append:", appendErr.message);
+        }
+      }
+
       return res.json({ success: true, data: formattedRows });
     }
 
@@ -80,7 +103,17 @@ async function getPipelineReport(req, res) {
         const whereSql = Prisma.join(conditions, ' AND ');
 
         const rows = await prisma.$queryRaw`
-          SELECT stage AS status, COUNT(*) AS count, 0 AS total_value
+          SELECT stage AS status,
+                 COUNT(*) AS count,
+                 COALESCE(SUM(
+                   CASE
+                     WHEN stage = 'closed_won' AND UPPER(COALESCE(currency, 'INR')) = 'INR'
+                       THEN COALESCE(final_amount, amount)
+                     WHEN UPPER(COALESCE(currency, 'INR')) = 'INR'
+                       THEN amount
+                     ELSE 0
+                   END
+                 ), 0) AS total_value
           FROM opportunities
           WHERE ${whereSql}
           GROUP BY stage
@@ -220,6 +253,7 @@ async function getActivityReport(req, res) {
 
 async function getRevenueReport(req, res) {
   try {
+    const { getClosedWonByMonth, getClosedWonLostInRange, getClosedWonLostLifetime } = require("../services/opportunityRevenueStats");
     const range = rangeFromReq(req);
     const twelveMonthsAgo = new Date();
     twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 11);
@@ -238,21 +272,49 @@ async function getRevenueReport(req, res) {
        ORDER BY ym ASC
     `;
 
+    const bookedMonths = await getClosedWonByMonth(req, fromDate, toDate);
+    const bookedByMonth = new Map(bookedMonths.map((r) => [r.month_key, r]));
+
     const byMonth = new Map(rows.map((r) => [String(r.ym), Number(r.revenue_total || 0)]));
     const data = [];
     const cursor = new Date(fromDate.getFullYear(), fromDate.getMonth(), 1);
     const end = new Date(toDate.getFullYear(), toDate.getMonth(), 1);
+    let invoice_total = 0;
+    let booked_won_total = 0;
     while (cursor <= end) {
       const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
+      const inv = Number(byMonth.get(key) || 0);
+      const booked = Number(bookedByMonth.get(key)?.booked_won_total || 0);
+      invoice_total += inv;
+      booked_won_total += booked;
       data.push({
         month: cursor.toLocaleString("en-IN", { month: "short", year: "numeric" }),
         month_key: key,
-        revenue_total: Number(byMonth.get(key) || 0),
+        revenue_total: inv,
+        booked_won_total: booked,
+        closed_won_count: Number(bookedByMonth.get(key)?.closed_won_count || 0),
       });
       cursor.setMonth(cursor.getMonth() + 1);
     }
 
-    res.json({ success: true, data });
+    const [windowStats, lifetime] = await Promise.all([
+      getClosedWonLostInRange(req, fromDate, toDate),
+      getClosedWonLostLifetime(req),
+    ]);
+
+    res.json({
+      success: true,
+      data,
+      summary: {
+        invoice_total,
+        booked_won_total,
+        closed_won_count: windowStats.closed_won_count,
+        closed_lost_count: windowStats.closed_lost_count,
+        closed_lost_value: windowStats.closed_lost_value,
+        lifetime_closed_won_value: lifetime.closed_won_value,
+        lifetime_closed_lost_value: lifetime.closed_lost_value,
+      },
+    });
   } catch (err) {
     console.error("getRevenueReport", err);
     res.status(500).json({ success: false, message: err.message });

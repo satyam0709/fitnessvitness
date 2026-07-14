@@ -1207,3 +1207,13 @@ enum fitness_clients_plan_type {
   Month_6_Plan @map("6 Month Plan")
   Year_1_Plan  @map("1 Year Plan")
 }
+
+model dropdown_options {
+  id           Int      @id @default(autoincrement()) @db.UnsignedInt
+  field_name   String   @db.VarChar(50)
+  option_value String   @db.VarChar(100)
+  option_label String   @db.VarChar(100)
+  created_at   DateTime @default(now()) @db.DateTime(0)
+  
+  @@unique([field_name, option_value], map: "uk_dropdown_opt")
+}

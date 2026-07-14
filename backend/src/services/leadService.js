@@ -16,8 +16,25 @@ const {
   legacyToV2,
   v2ToLegacy,
   resolveStatusFilter,
+  parseStatusInput,
   enrichLeadStatus,
 } = require("../utils/leadStatusMap");
+const {
+  isBuiltInOption,
+  dedupeOptions,
+  LEAD_COLUMN_MAP,
+  normKey,
+} = require("../utils/leadCustomOptions");
+
+const CUSTOM_OPTION_FIELDS = [
+  "source",
+  "label",
+  "status",
+  "account_relationship",
+  "followup_type",
+  "product_category",
+  "team",
+];
 
 const TRACKED_FIELDS = [
   "name",
@@ -192,12 +209,14 @@ async function listLeads(req) {
   if (status) {
     const mapped = resolveStatusFilter(status);
     if (mapped) {
-      const statusCondition = {
-        OR: [
-          { status: mapped.legacy },
-          { status_v2: mapped.v2 }
-        ]
-      };
+      const statusCondition = mapped.custom
+        ? { status_v2: mapped.v2 }
+        : {
+            OR: [
+              { status: mapped.legacy },
+              { status_v2: mapped.v2 },
+            ],
+          };
       if (where.AND) {
         where.AND.push(statusCondition);
       } else {
@@ -463,17 +482,9 @@ async function createLead(req) {
     throw err;
   }
 
-  let status = b.status || "new";
-  if (VALID_V2.has(String(status).toLowerCase())) {
-    status = v2ToLegacy(status);
-  }
-  if (!VALID_LEGACY.has(status)) {
-    const err = new Error("invalid status");
-    err.status = 400;
-    throw err;
-  }
-
-  const statusV2 = b.status_v2 || legacyToV2(status);
+  const statusParsed = parseStatusInput(b, "new");
+  const status = statusParsed.legacy;
+  const statusV2 = statusParsed.v2;
   const assignedUserId = (await resolveUserId(b.assigned_to)) || req.user.id;
   const tid = tenantId(req);
 
@@ -496,7 +507,8 @@ async function createLead(req) {
     const rows = await tx.$queryRaw`
       SELECT next_lead_number FROM tenant_lead_counters WHERE tenant_id = ${key} FOR UPDATE
     `;
-    const num = rows[0]?.next_lead_number || 1;
+    // $queryRaw returns BIGINT columns as BigInt — coerce before arithmetic
+    const num = Number(rows[0]?.next_lead_number ?? 1);
     
     await tx.$executeRaw`
       UPDATE tenant_lead_counters SET next_lead_number = ${num + 1} WHERE tenant_id = ${key}
@@ -530,6 +542,8 @@ async function createLead(req) {
         currency: String(b.currency || "INR").toUpperCase(),
         product_category: b.product_category || null,
         team: b.team || null,
+        account_relationship: b.account_relationship || null,
+        followup_type: b.followup_type || null,
         last_touched_at: new Date(),
         updated_by: req.user.id,
       }
@@ -547,6 +561,8 @@ async function createLead(req) {
 
     return created;
   });
+
+  await registerLeadCustomOptions(b, statusParsed);
 
   const createdRow = await prisma.leads.findFirst({
     where: { id: result.id, tenant_id: tid },
@@ -570,6 +586,7 @@ async function createLead(req) {
   });
 
   emitLeadChanges("create");
+  emitLeadsChanged({ reason: "options_changed", action: "create" });
   return { success: true, data: formattedRow };
 }
 
@@ -587,20 +604,14 @@ async function updateLead(req, leadId) {
   }
 
   const b = req.body || {};
-  let status = b.status != null ? b.status : null;
-  let statusV2 = b.status_v2 != null ? b.status_v2 : null;
+  let status = null;
+  let statusV2 = null;
+  let statusParsed = null;
 
-  if (status) {
-    if (VALID_V2.has(String(status).toLowerCase())) {
-      statusV2 = status;
-      status = v2ToLegacy(status);
-    }
-    if (!VALID_LEGACY.has(status)) {
-      const err = new Error("invalid status");
-      err.status = 400;
-      throw err;
-    }
-    if (!statusV2) statusV2 = legacyToV2(status);
+  if (b.status != null || b.status_v2 != null) {
+    statusParsed = parseStatusInput(b, existing.status);
+    status = statusParsed.legacy;
+    statusV2 = statusParsed.v2;
   }
 
   const phone =
@@ -645,12 +656,17 @@ async function updateLead(req, leadId) {
     product_category:
       b.product_category != null ? b.product_category || null : undefined,
     team: b.team != null ? b.team || null : undefined,
+    account_relationship:
+      b.account_relationship != null ? b.account_relationship || null : undefined,
+    followup_type: b.followup_type != null ? b.followup_type || null : undefined,
     industry: b.industry != null ? b.industry || null : undefined,
     department: b.department != null ? b.department || null : undefined,
     address: b.address != null ? b.address || null : undefined,
   };
 
   await logFieldChanges(leadId, existing, updates, req.user.id);
+
+  await registerLeadCustomOptions(b, statusParsed);
 
   await prisma.leads.update({
     where: { id: Number(leadId) },
@@ -678,6 +694,9 @@ async function updateLead(req, leadId) {
       currency: updates.currency !== undefined ? updates.currency : undefined,
       product_category: updates.product_category !== undefined ? updates.product_category : undefined,
       team: updates.team !== undefined ? updates.team : undefined,
+      account_relationship:
+        updates.account_relationship !== undefined ? updates.account_relationship : undefined,
+      followup_type: updates.followup_type !== undefined ? updates.followup_type : undefined,
       industry: updates.industry !== undefined ? updates.industry : undefined,
       department: updates.department !== undefined ? updates.department : undefined,
       last_touched_at: new Date(),
@@ -708,16 +727,11 @@ async function updateLead(req, leadId) {
   });
 
   emitLeadChanges("update");
+  emitLeadsChanged({ reason: "options_changed", action: "update" });
   return { success: true, data: formattedRow };
 }
 
 async function updateLeadStatus(req, leadId, status) {
-  if (!VALID_LEGACY.has(status) && !VALID_V2.has(status)) {
-    const err = new Error("invalid status");
-    err.status = 400;
-    throw err;
-  }
-
   const existing = await loadLeadScoped(req, leadId);
   if (!existing) {
     const err = new Error("Lead not found");
@@ -730,13 +744,11 @@ async function updateLeadStatus(req, leadId, status) {
     throw err;
   }
 
-  let legacy = status;
-  let v2 = status;
-  if (VALID_V2.has(status)) {
-    legacy = v2ToLegacy(status);
-    v2 = status;
-  } else {
-    v2 = legacyToV2(status);
+  const statusParsed = parseStatusInput({ status }, existing.status);
+  const legacy = statusParsed.legacy;
+  const v2 = statusParsed.v2;
+  if (statusParsed.custom) {
+    await registerCustomOptionIfNeeded("status", v2);
   }
 
   await prisma.lead_change_log.create({
@@ -1323,6 +1335,462 @@ async function getHistory(req, leadId) {
   throw err;
 }
 
+async function registerCustomOptionIfNeeded(fieldName, value) {
+  if (!value || typeof value !== "string") return;
+  const val = value.trim();
+  if (!val || isBuiltInOption(fieldName, val)) return;
+
+  try {
+    // Prisma compound unique name is field_name_option_value (map name uk_dropdown_opt is DB-only)
+    await prisma.dropdown_options.upsert({
+      where: {
+        field_name_option_value: {
+          field_name: fieldName,
+          option_value: val,
+        },
+      },
+      update: { option_label: val },
+      create: {
+        field_name: fieldName,
+        option_value: val,
+        option_label: val,
+      },
+    });
+  } catch (err) {
+    // Fallback if client out of sync with schema
+    try {
+      await prisma.$executeRaw`
+        INSERT INTO dropdown_options (field_name, option_value, option_label)
+        VALUES (${fieldName}, ${val}, ${val})
+        ON DUPLICATE KEY UPDATE option_label = VALUES(option_label)
+      `;
+    } catch (err2) {
+      console.error(`Error registering custom option for ${fieldName}:`, err2.message || err.message);
+    }
+  }
+}
+
+async function registerLeadCustomOptions(body, statusParsed) {
+  for (const field of CUSTOM_OPTION_FIELDS) {
+    if (field === "status") {
+      if (statusParsed?.custom && statusParsed.v2) {
+        await registerCustomOptionIfNeeded("status", statusParsed.v2);
+      }
+      continue;
+    }
+    if (body[field]) await registerCustomOptionIfNeeded(field, body[field]);
+  }
+}
+
+const CUSTOM_OPTION_FIELD_KEYS = [
+  "source",
+  "label",
+  "status",
+  "account_relationship",
+  "followup_type",
+  "product_category",
+  "team",
+];
+
+function emptyCustomOptionBuckets() {
+  return Object.fromEntries(CUSTOM_OPTION_FIELD_KEYS.map((k) => [k, []]));
+}
+
+function addCustomOptionEntry(buckets, field, value, label, id) {
+  if (!value || isBuiltInOption(field, value)) return;
+  const key = normKey(value);
+  const existing = buckets[field].find((o) => normKey(o.value) === key);
+  const item = {
+    value,
+    label: label || value,
+    id: id ?? existing?.id ?? null,
+  };
+  if (!existing) {
+    buckets[field].push(item);
+  } else if (id && !existing.id) {
+    existing.id = id;
+  }
+}
+
+async function getCustomOptions() {
+  const discovered = emptyCustomOptionBuckets();
+
+  const [
+    registryRows,
+    sourceDistinct,
+    labelDistinct,
+    statusDistinct,
+    categoryDistinct,
+    followupDistinct,
+    relationshipDistinct,
+    teamDistinct,
+  ] = await Promise.all([
+    prisma.dropdown_options.findMany({
+      orderBy: [{ field_name: "asc" }, { option_label: "asc" }],
+    }),
+    prisma.leads.findMany({
+      where: { is_deleted: false, NOT: { source: "" } },
+      distinct: ["source"],
+      select: { source: true },
+    }),
+    prisma.leads.findMany({
+      where: { is_deleted: false, NOT: { label: null } },
+      distinct: ["label"],
+      select: { label: true },
+    }),
+    prisma.leads.findMany({
+      where: { is_deleted: false, NOT: { status_v2: null } },
+      distinct: ["status_v2"],
+      select: { status_v2: true },
+    }),
+    prisma.leads.findMany({
+      where: { is_deleted: false, NOT: { product_category: null } },
+      distinct: ["product_category"],
+      select: { product_category: true },
+    }),
+    prisma.leads.findMany({
+      where: { is_deleted: false, NOT: { followup_type: null } },
+      distinct: ["followup_type"],
+      select: { followup_type: true },
+    }),
+    prisma.leads.findMany({
+      where: { is_deleted: false, NOT: { account_relationship: null } },
+      distinct: ["account_relationship"],
+      select: { account_relationship: true },
+    }),
+    prisma.leads.findMany({
+      where: { is_deleted: false, NOT: { team: null } },
+      distinct: ["team"],
+      select: { team: true },
+    }),
+  ]);
+
+  for (const row of sourceDistinct) {
+    if (row.source) addCustomOptionEntry(discovered, "source", row.source, row.source, null);
+  }
+  for (const row of labelDistinct) {
+    if (row.label) addCustomOptionEntry(discovered, "label", row.label, row.label, null);
+  }
+  for (const row of statusDistinct) {
+    if (row.status_v2) {
+      addCustomOptionEntry(discovered, "status", row.status_v2, row.status_v2, null);
+    }
+  }
+  for (const row of categoryDistinct) {
+    if (row.product_category) {
+      addCustomOptionEntry(
+        discovered,
+        "product_category",
+        row.product_category,
+        row.product_category,
+        null
+      );
+    }
+  }
+  for (const row of followupDistinct) {
+    if (row.followup_type) {
+      addCustomOptionEntry(
+        discovered,
+        "followup_type",
+        row.followup_type,
+        row.followup_type,
+        null
+      );
+    }
+  }
+  for (const row of relationshipDistinct) {
+    if (row.account_relationship) {
+      addCustomOptionEntry(
+        discovered,
+        "account_relationship",
+        row.account_relationship,
+        row.account_relationship,
+        null
+      );
+    }
+  }
+  for (const row of teamDistinct) {
+    if (row.team) addCustomOptionEntry(discovered, "team", row.team, row.team, null);
+  }
+
+  const known = new Set(
+    registryRows.map((r) => `${r.field_name}::${normKey(r.option_value)}`)
+  );
+  const syncJobs = [];
+  for (const field of CUSTOM_OPTION_FIELD_KEYS) {
+    for (const item of discovered[field] || []) {
+      const key = `${field}::${normKey(item.value)}`;
+      if (!known.has(key)) syncJobs.push(registerCustomOptionIfNeeded(field, item.value));
+    }
+  }
+  if (syncJobs.length) await Promise.all(syncJobs);
+
+  const finalRows =
+    syncJobs.length > 0
+      ? await prisma.dropdown_options.findMany({
+          orderBy: [{ field_name: "asc" }, { option_label: "asc" }],
+        })
+      : registryRows;
+
+  const data = emptyCustomOptionBuckets();
+  for (const row of finalRows) {
+    if (!CUSTOM_OPTION_FIELD_KEYS.includes(row.field_name)) continue;
+    addCustomOptionEntry(
+      data,
+      row.field_name,
+      row.option_value,
+      row.option_label,
+      row.id
+    );
+  }
+  // Include any remaining discovered values
+  for (const field of CUSTOM_OPTION_FIELD_KEYS) {
+    for (const item of discovered[field] || []) {
+      addCustomOptionEntry(data, field, item.value, item.label, item.id);
+    }
+  }
+
+  for (const field of CUSTOM_OPTION_FIELD_KEYS) {
+    const byKey = new Map();
+    for (const item of data[field]) {
+      const k = normKey(item.value);
+      if (!k || isBuiltInOption(field, item.value)) continue;
+      const prev = byKey.get(k);
+      if (!prev || (item.id && !prev.id)) {
+        byKey.set(k, {
+          value: item.value,
+          label: item.label || item.value,
+          id: item.id || `dist:${field}:${item.value}`,
+        });
+      }
+    }
+    data[field] = [...byKey.values()].sort((a, b) =>
+      a.label.localeCompare(b.label, "en", { sensitivity: "base" })
+    );
+  }
+
+  return { success: true, data, registry: data };
+}
+
+async function renameCustomOption({ fieldName, oldValue, newValue }) {
+  if (!fieldName || !oldValue || !newValue) {
+    const err = new Error("fieldName, oldValue and newValue are required");
+    err.status = 400;
+    throw err;
+  }
+  const oldTrim = String(oldValue).trim();
+  const newTrim = String(newValue).trim();
+  if (!newTrim) {
+    const err = new Error("newValue cannot be empty");
+    err.status = 400;
+    throw err;
+  }
+  if (isBuiltInOption(fieldName, newTrim)) {
+    const err = new Error("Cannot rename to a built-in option value");
+    err.status = 400;
+    throw err;
+  }
+
+  const col = LEAD_COLUMN_MAP[fieldName];
+  const existingTarget = await prisma.dropdown_options.findFirst({
+    where: { field_name: fieldName, option_value: newTrim },
+  });
+
+  await prisma.$transaction(async (tx) => {
+    if (fieldName === "status") {
+      await tx.leads.updateMany({
+        where: { is_deleted: false, status_v2: oldTrim },
+        data: { status_v2: newTrim },
+      });
+    } else if (col) {
+      await tx.leads.updateMany({
+        where: { is_deleted: false, [col]: oldTrim },
+        data: { [col]: newTrim },
+      });
+    }
+
+    if (existingTarget) {
+      await tx.dropdown_options.deleteMany({
+        where: { field_name: fieldName, option_value: oldTrim },
+      });
+    } else {
+      const updated = await tx.dropdown_options.updateMany({
+        where: { field_name: fieldName, option_value: oldTrim },
+        data: { option_value: newTrim, option_label: newTrim },
+      });
+      if (updated.count === 0) {
+        await tx.dropdown_options.create({
+          data: {
+            field_name: fieldName,
+            option_value: newTrim,
+            option_label: newTrim,
+          },
+        });
+      }
+    }
+  });
+
+  emitLeadsChanged({ reason: "custom_option_rename" });
+  return { success: true, message: "Option renamed" };
+}
+
+async function deleteCustomOption({ fieldName, optionValue }) {
+  if (!fieldName || !optionValue) {
+    const err = new Error("fieldName and optionValue are required");
+    err.status = 400;
+    throw err;
+  }
+  const val = String(optionValue).trim();
+  const col = LEAD_COLUMN_MAP[fieldName];
+  const now = new Date();
+
+  await prisma.$transaction(async (tx) => {
+    if (fieldName === "status") {
+      // Custom statuses live only in status_v2 (legacy `status` is leads_status enum).
+      await tx.leads.updateMany({
+        where: {
+          is_deleted: false,
+          status_v2: val,
+        },
+        data: { is_deleted: true, deleted_at: now },
+      });
+    } else if (col) {
+      await tx.leads.updateMany({
+        where: { is_deleted: false, [col]: val },
+        data: { is_deleted: true, deleted_at: now },
+      });
+    }
+
+    await tx.dropdown_options.deleteMany({
+      where: { field_name: fieldName, option_value: val },
+    });
+  });
+
+  emitLeadsChanged({ reason: "custom_option_delete" });
+  return {
+    success: true,
+    message: "Option deleted and matching leads were removed",
+  };
+}
+
+async function convertLeadToOpportunity(req, leadId, body = {}) {
+  const lead = await prisma.leads.findFirst({
+    where: { id: Number(leadId), is_deleted: false, tenant_id: tenantId(req) }
+  });
+
+  if (!lead) {
+    const err = new Error("Lead not found");
+    err.status = 404;
+    throw err;
+  }
+
+  if (lead.converted_opportunity_id) {
+    const err = new Error("This lead is already converted to an opportunity");
+    err.status = 400;
+    throw err;
+  }
+
+  const existingAmount = lead.amount != null ? Number(lead.amount) : 0;
+  const hasLeadAmount = Number.isFinite(existingAmount) && existingAmount > 0;
+
+  let leadAmount = hasLeadAmount ? existingAmount : 0;
+  if (!hasLeadAmount) {
+    const bodyAmount = Number(body.amount);
+    if (!Number.isFinite(bodyAmount) || bodyAmount <= 0) {
+      const err = new Error("Amount (INR) is required to convert this lead.");
+      err.status = 400;
+      throw err;
+    }
+    leadAmount = bodyAmount;
+  } else if (body.amount !== undefined && body.amount !== null && body.amount !== "") {
+    const bodyAmount = Number(body.amount);
+    if (bodyAmount > 0) leadAmount = bodyAmount;
+  }
+
+  const rawCategory = body.product_category != null && String(body.product_category).trim() 
+    ? String(body.product_category).trim() 
+    : lead.product_category;
+
+  if (!rawCategory || !String(rawCategory).trim()) {
+    const err = new Error("Product category is required to convert this lead to an opportunity");
+    err.status = 400;
+    throw err;
+  }
+
+  const title = lead.name;
+  const ownerId = lead.assigned_to || req.user.id;
+  const normalizedCategory = String(rawCategory).trim();
+
+  const result = await prisma.$transaction(async (tx) => {
+    if (normalizedCategory) {
+      await tx.dropdown_options.upsert({
+        where: {
+          field_name_option_value: { field_name: "product_category", option_value: normalizedCategory }
+        },
+        update: { option_label: normalizedCategory },
+        create: { field_name: "product_category", option_value: normalizedCategory, option_label: normalizedCategory }
+      });
+    }
+
+    const opp = await tx.opportunities.create({
+      data: {
+        tenant_id: tenantId(req),
+        title,
+        lead_id: lead.id,
+        contact_id: lead.contact_id || null,
+        company_name: lead.company_name || null,
+        amount: leadAmount,
+        currency: String(body.currency || lead.currency || "INR").trim().toUpperCase() || "INR",
+        stage: "qualification_done",
+        owner_user_id: ownerId,
+        created_by: req.user.id,
+        notes: lead.comments_history || lead.notes || null,
+        product_category: normalizedCategory,
+        followup_at: lead.followup_at || null,
+        followup_type: lead.followup_type || null,
+        lead_source: lead.source || "other",
+        team: lead.team || null,
+        comments_history: lead.comments_history || null,
+      }
+    });
+
+    await tx.leads.update({
+      where: { id: lead.id },
+      data: {
+        status: "confirm",
+        status_v2: "converted",
+        converted_opportunity_id: opp.id,
+        amount: leadAmount,
+        currency: String(body.currency || lead.currency || "INR").trim().toUpperCase() || "INR",
+        product_category: normalizedCategory,
+        updated_by: req.user.id,
+        last_touched_at: new Date(),
+        updated_at: new Date(),
+      }
+    });
+
+    await tx.lead_change_log.create({
+      data: {
+        lead_id: lead.id,
+        user_id: req.user.id,
+        field_name: "status",
+        old_value: lead.status,
+        new_value: "converted"
+      }
+    });
+
+    return opp;
+  });
+
+  emitLeadsChanged({ reason: "convert", id: leadId, opportunityId: result.id });
+  emitOpportunitiesChanged({ reason: "create", id: result.id, leadId });
+  emitAdminChanged({ scope: "opportunities", action: "create", id: result.id });
+  emitAdminChanged({ scope: "stats", reason: "leads", action: "convert" });
+  emitCalendarChanged({ reason: "leads" });
+
+  return { success: true, opportunityId: result.id };
+}
+
 module.exports = {
   canMutateLead,
   listLeads,
@@ -1339,4 +1807,8 @@ module.exports = {
   duplicateLead,
   getChangeLog,
   getHistory,
+  getCustomOptions,
+  renameCustomOption,
+  deleteCustomOption,
+  registerCustomOptionIfNeeded,
 };

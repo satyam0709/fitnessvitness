@@ -432,6 +432,14 @@
   border-top: 4px solid #10b981;
 }
 
+.revenueCardBooked {
+  border-top: 4px solid #16a34a;
+}
+
+.revenueCardLost {
+  border-top: 4px solid #9333ea;
+}
+
 .revenueCard h3 {
   margin: 0 0 8px;
   font-size: 1.05rem;

@@ -66,49 +66,96 @@ function fmtInrPill(n) {
 
 function TodayOverviewWidget({ summary }) {
   const by = summary?.by_type || {};
+  const toneClass = {
+    teal: styles.todayTone_teal,
+    blue: styles.todayTone_blue,
+    amber: styles.todayTone_amber,
+    green: styles.todayTone_green,
+    slate: styles.todayTone_slate,
+    indigo: styles.todayTone_indigo,
+    rose: styles.todayTone_rose,
+    orange: styles.todayTone_orange,
+    cyan: styles.todayTone_cyan,
+  };
   const rows = [
-    { icon: "📞", label: "Lead Follow-ups", key: "lead_followup" },
-    { icon: "🤝", label: "Meetings", key: "meeting" },
-    { icon: "🔔", label: "Reminders", key: "reminder" },
-    { icon: "⚖️", label: "Client Check-ins", key: "client_followup" },
-    { icon: "✅", label: "Todos", key: "todo" },
-    { icon: "📋", label: "CRM Tasks", key: "task" },
-    { icon: "📅", label: "Calendar Events", key: "calendar_event" },
-    { icon: "🎯", label: "Prospect follow-ups", key: "opportunity_followup" },
+    { icon: "fa-phone", label: "Lead Follow-ups", key: "lead_followup", tone: "teal" },
+    { icon: "fa-handshake", label: "Meetings", key: "meeting", tone: "blue" },
+    { icon: "fa-bell", label: "Reminders", key: "reminder", tone: "amber" },
+    { icon: "fa-user-check", label: "Client Check-ins", key: "client_followup", tone: "green" },
+    { icon: "fa-circle-check", label: "Todos", key: "todo", tone: "slate" },
+    { icon: "fa-clipboard-list", label: "CRM Tasks", key: "task", tone: "indigo" },
+    { icon: "fa-calendar-day", label: "Calendar Events", key: "calendar_event", tone: "rose" },
+    { icon: "fa-bullseye", label: "Prospect follow-ups", key: "opportunity_followup", tone: "orange" },
   ];
   if (Number(by.google_event ?? 0) > 0) {
-    rows.push({ icon: "🌐", label: "Google Calendar", key: "google_event" });
+    rows.push({
+      icon: "fa-globe",
+      label: "Google Calendar",
+      key: "google_event",
+      tone: "cyan",
+    });
   }
   const total = Number(summary?.total ?? 0);
   const allClear = total === 0;
+  const attentionRows = rows.filter((r) => Number(by[r.key] ?? 0) > 0);
+  const displayRows = allClear ? rows : attentionRows.length ? attentionRows : rows;
 
   return (
-    <div className={styles.todayWidget}>
+    <section className={styles.todayWidget} aria-label="Today's tasks">
       <div className={styles.todayWidgetHead}>
-        <h2 className={styles.todayWidgetTitle}>Today&apos;s Tasks</h2>
+        <div className={styles.todayWidgetHeadLeft}>
+          <h2 className={styles.todayWidgetTitle}>Today&apos;s Tasks</h2>
+          <p className={styles.todayWidgetSubtitle}>
+            {allClear ? "You're caught up for today" : `${total} item${total === 1 ? "" : "s"} need attention`}
+          </p>
+        </div>
         <Link href="/today" className={styles.todayWidgetLink}>
-          Open Command Center →
+          Open Command Center <i className="fas fa-arrow-right" aria-hidden />
         </Link>
       </div>
       {allClear ? (
-        <p className={styles.todayWidgetClear}>✅ All clear for today!</p>
+        <div className={styles.todayWidgetClear}>
+          <span className={styles.todayWidgetClearIcon} aria-hidden>
+            <i className="fas fa-check" />
+          </span>
+          <div>
+            <strong>All clear</strong>
+            <p>No follow-ups, meetings, or tasks due today.</p>
+          </div>
+        </div>
       ) : (
         <>
-          <ul className={styles.todayWidgetList}>
-            {rows.map((r) => (
-              <li key={r.key} className={styles.todayWidgetRow}>
-                <span>{r.icon}</span>
-                <span>{r.label}</span>
-                <span className={styles.todayWidgetCount}>{by[r.key] ?? 0}</span>
-              </li>
-            ))}
-          </ul>
-          <p className={styles.todayWidgetFooter}>
-            {total} task{total === 1 ? "" : "s"} need attention today
-          </p>
+          <div className={styles.todayWidgetGrid}>
+            {displayRows.map((r) => {
+              const count = Number(by[r.key] ?? 0);
+              return (
+                <Link
+                  key={r.key}
+                  href="/today"
+                  className={`${styles.todayTaskTile} ${toneClass[r.tone] || ""} ${count > 0 ? styles.todayTaskTileActive : ""}`}
+                >
+                  <span className={styles.todayTaskIcon} aria-hidden>
+                    <i className={`fas ${r.icon}`} />
+                  </span>
+                  <span className={styles.todayTaskMeta}>
+                    <span className={styles.todayTaskLabel}>{r.label}</span>
+                    <span className={styles.todayTaskHint}>{count > 0 ? "Due today" : "None today"}</span>
+                  </span>
+                  <span className={styles.todayWidgetCount}>{count}</span>
+                </Link>
+              );
+            })}
+          </div>
+          {attentionRows.length > 0 && attentionRows.length < rows.length ? (
+            <p className={styles.todayWidgetFooter}>
+              Showing {attentionRows.length} of {rows.length} categories with open work
+            </p>
+          ) : (
+            <p className={styles.todayWidgetFooter}>Jump into Command Center to complete or reschedule</p>
+          )}
         </>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -150,6 +197,7 @@ function DashboardOprPairBlock({ left, right, loading }) {
               left.value
             )}
           </div>
+          {left.sub ? <span className={styles.oprResultOppColSub}>{left.sub}</span> : null}
         </Link>
         <Link href={right.href} className={`${styles.oprResultOppCol} ${styles.oprPairCol}`}>
           {right.inrPill != null ? (
@@ -169,6 +217,7 @@ function DashboardOprPairBlock({ left, right, loading }) {
               right.value
             )}
           </div>
+          {right.sub ? <span className={styles.oprResultOppColSub}>{right.sub}</span> : null}
         </Link>
       </div>
     </div>
@@ -652,6 +701,8 @@ export default function DashboardPage() {
       lost,
       wonVal,
       lostVal,
+      wonToday: Number(o?.closed_won_today) || 0,
+      lostToday: Number(o?.closed_lost_today) || 0,
       totalClosed: won + lost,
       totalInr: wonVal + lostVal,
     };
@@ -870,22 +921,28 @@ export default function DashboardPage() {
         </article>
         <article className={styles.oprCard}>
           <header className={styles.oprCardHeader}>
-            <h3 className={styles.oprTitle}>Closed today</h3>
+            <h3 className={styles.oprTitle}>Closed Won / Closed Lost</h3>
           </header>
           <div className={styles.oprBody}>
             <DashboardOprPairBlock
               loading={statsLoading}
               left={{
                 href: "/opportunities?view=won",
-                label: "Won",
+                label: "Closed Won",
                 value: opportunityResultPanel.won,
                 inrPill: fmtInrPill(opportunityResultPanel.wonVal),
+                sub: opportunityResultPanel.wonToday
+                  ? `${opportunityResultPanel.wonToday} today`
+                  : "All time",
               }}
               right={{
                 href: "/opportunities?view=lost",
-                label: "Lost",
+                label: "Closed Lost",
                 value: opportunityResultPanel.lost,
                 inrPill: fmtInrPill(opportunityResultPanel.lostVal),
+                sub: opportunityResultPanel.lostToday
+                  ? `${opportunityResultPanel.lostToday} today`
+                  : "All time",
               }}
             />
           </div>
@@ -978,6 +1035,18 @@ export default function DashboardPage() {
             <span className={styles.finLabel}>Total Pending</span>
             <span className={styles.finValue} style={{color: "#ef4444"}}>{fmtInrPill(fitnessStats?.total_pending || 0)}</span>
           </div>
+          <Link href="/opportunities?view=won" className={styles.finItem} style={{ textDecoration: "none" }}>
+            <span className={styles.finLabel}>Booked Closed Won</span>
+            <span className={styles.finValue} style={{ color: "#16a34a" }}>
+              {statsLoading ? "…" : fmtInrPill(opportunityResultPanel.wonVal)}
+            </span>
+          </Link>
+          <Link href="/opportunities?view=lost" className={styles.finItem} style={{ textDecoration: "none" }}>
+            <span className={styles.finLabel}>Closed Lost</span>
+            <span className={styles.finValue} style={{ color: "#9333ea" }}>
+              {statsLoading ? "…" : `${opportunityResultPanel.lost} · ${fmtInrPill(opportunityResultPanel.lostVal)}`}
+            </span>
+          </Link>
           <Link href="/business-tracker" className={styles.finLink}>Full Report <i className="fas fa-chevron-right" /></Link>
         </div>
 

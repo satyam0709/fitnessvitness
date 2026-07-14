@@ -274,6 +274,60 @@ export default function BusinessTrackerPage() {
                   <div><span>Transactions</span><strong>{revenueData.supplements.transactions}</strong></div>
                 </div>
               </div>
+              <div className={`${styles.revenueCard} ${styles.revenueCardBooked}`}>
+                <h3>Booked Closed Won</h3>
+                <p className={styles.revenueHint}>
+                  {revenueData.classification?.booked_closed_won ||
+                    "Opportunity Closed Won amounts for this window (booked, not cash)."}
+                </p>
+                <div className={styles.revenueMetrics}>
+                  <div>
+                    <span>Booked this window</span>
+                    <strong>{fmtInr(revenueData.booked_closed_won?.value_this_window)}</strong>
+                  </div>
+                  <div>
+                    <span>Deals</span>
+                    <strong>{revenueData.booked_closed_won?.count ?? 0}</strong>
+                  </div>
+                  <div>
+                    <span>Lifetime booked</span>
+                    <strong>{fmtInr(revenueData.booked_closed_won?.lifetime_value)}</strong>
+                  </div>
+                  <div>
+                    <span>
+                      <Link href="/opportunities?view=won">View won deals →</Link>
+                    </span>
+                    <strong />
+                  </div>
+                </div>
+              </div>
+              <div className={`${styles.revenueCard} ${styles.revenueCardLost}`}>
+                <h3>Closed Lost</h3>
+                <p className={styles.revenueHint}>
+                  {revenueData.classification?.closed_lost ||
+                    "Opportunity Closed Lost forecast amounts for this window."}
+                </p>
+                <div className={styles.revenueMetrics}>
+                  <div>
+                    <span>Forecast this window</span>
+                    <strong>{fmtInr(revenueData.closed_lost?.value_this_window)}</strong>
+                  </div>
+                  <div>
+                    <span>Deals</span>
+                    <strong>{revenueData.closed_lost?.count ?? 0}</strong>
+                  </div>
+                  <div>
+                    <span>Lifetime</span>
+                    <strong>{fmtInr(revenueData.closed_lost?.lifetime_value)}</strong>
+                  </div>
+                  <div>
+                    <span>
+                      <Link href="/opportunities?view=lost">View lost deals →</Link>
+                    </span>
+                    <strong />
+                  </div>
+                </div>
+              </div>
             </div>
             <h3 className={styles.yearTableTitle}>
               Ten-year history ({revenueData.yearRange.from}–{revenueData.yearRange.to}) — received

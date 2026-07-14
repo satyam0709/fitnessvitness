@@ -101,23 +101,21 @@
   min-width: 140px;
 }
 
-/* Status summary row (like reference CRM) */
+/* Status summary row (like reference CRM) — built-ins + dynamic gray customs */
 .statusStrip {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 10px;
-}
-
-@media (max-width: 900px) {
-  .statusStrip {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
 }
 
 @media (max-width: 520px) {
   .statusStrip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+
+.statusChipCustom {
+  opacity: 0.95;
 }
 
 .statusChip {
