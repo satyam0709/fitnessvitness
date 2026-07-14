@@ -61,12 +61,47 @@ const TRACKED_FIELDS = [
 ];
 
 function tenantId(req) {
-  return req.user?.tenantId ?? req.tenantId ?? null;
+  const tid = req.user?.tenantId ?? req.tenantId ?? null;
+  if (tid == null || tid === "") return null;
+  const n = Number(tid);
+  return Number.isFinite(n) ? n : null;
 }
 
 /** Standalone CRM uses null tenant_id on rows; counter table PK cannot be null. */
 function counterTenantKey(tid) {
-  return tid != null ? Number(tid) : 0;
+  const n = tid != null ? Number(tid) : 0;
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Prisma `$executeRaw` rejects `undefined` — always coerce to null. */
+function sqlNull(v) {
+  return v === undefined ? null : v;
+}
+
+function cleanCreateData(data) {
+  const out = {};
+  for (const [k, v] of Object.entries(data || {})) {
+    if (v !== undefined) out[k] = v;
+  }
+  return out;
+}
+
+/** Allocate next lead_number without raw SQL (avoids undefined bind crashes on live). */
+async function allocateLeadNumber(tx, tid) {
+  const key = counterTenantKey(tid);
+  await tx.tenant_lead_counters.upsert({
+    where: { tenant_id: key },
+    create: { tenant_id: key, next_lead_number: 1 },
+    update: {},
+  });
+  const row = await tx.tenant_lead_counters.findUnique({ where: { tenant_id: key } });
+  const num = Number(row?.next_lead_number ?? 1);
+  const safeNum = Number.isFinite(num) && num > 0 ? num : 1;
+  await tx.tenant_lead_counters.update({
+    where: { tenant_id: key },
+    data: { next_lead_number: safeNum + 1 },
+  });
+  return safeNum;
 }
 
 function parseAttachments(row) {
@@ -483,9 +518,14 @@ async function createLead(req) {
   }
 
   const statusParsed = parseStatusInput(b, "new");
-  const status = statusParsed.legacy;
-  const statusV2 = statusParsed.v2;
-  const assignedUserId = (await resolveUserId(b.assigned_to)) || req.user.id;
+  const status = statusParsed.legacy || "processing";
+  const statusV2 = statusParsed.v2 || legacyToV2(status);
+  const assignedUserId = (await resolveUserId(b.assigned_to)) || req.user?.id;
+  if (!assignedUserId) {
+    const err = new Error("Could not resolve assigned user");
+    err.status = 400;
+    throw err;
+  }
   const tid = tenantId(req);
 
   let attachmentsJson = null;
@@ -496,67 +536,51 @@ async function createLead(req) {
   const { first_name, last_name } = splitName(name);
 
   const result = await prisma.$transaction(async (tx) => {
-    const key = counterTenantKey(tid);
-    
-    await tx.$executeRaw`
-      INSERT INTO tenant_lead_counters (tenant_id, next_lead_number)
-      VALUES (${key}, 1)
-      ON DUPLICATE KEY UPDATE tenant_id = tenant_id
-    `;
-    
-    const rows = await tx.$queryRaw`
-      SELECT next_lead_number FROM tenant_lead_counters WHERE tenant_id = ${key} FOR UPDATE
-    `;
-    // $queryRaw returns BIGINT columns as BigInt — coerce before arithmetic
-    const num = Number(rows[0]?.next_lead_number ?? 1);
-    
-    await tx.$executeRaw`
-      UPDATE tenant_lead_counters SET next_lead_number = ${num + 1} WHERE tenant_id = ${key}
-    `;
+    const num = await allocateLeadNumber(tx, tid);
 
     const created = await tx.leads.create({
-      data: {
+      data: cleanCreateData({
         tenant_id: tid,
         name,
-        first_name: b.first_name || first_name,
-        last_name: b.last_name || last_name,
-        company_name: b.company_name || null,
+        first_name: b.first_name != null && String(b.first_name).trim() ? String(b.first_name).trim() : first_name,
+        last_name: b.last_name != null && String(b.last_name).trim() ? String(b.last_name).trim() : last_name,
+        company_name: b.company_name ? String(b.company_name).trim() : null,
         phone,
-        phone_dial: b.phone_dial || null,
-        email: b.email || null,
-        source: b.source || "other",
+        phone_dial: b.phone_dial ? String(b.phone_dial).trim() : null,
+        email: b.email ? String(b.email).trim() : null,
+        source: b.source ? String(b.source).trim() : "other",
         status,
         status_v2: statusV2,
-        label: b.label || null,
-        cancel_reason: b.cancel_reason || null,
-        address: b.address || null,
-        reference: b.reference || null,
+        label: b.label ? String(b.label).trim() : null,
+        cancel_reason: b.cancel_reason ? String(b.cancel_reason).trim() : null,
+        address: b.address ? String(b.address).trim() : null,
+        reference: b.reference ? String(b.reference).trim() : null,
         attachments_json: attachmentsJson,
         assigned_to: assignedUserId,
         created_by: req.user.id,
         follow_up_date: b.follow_up_date ? new Date(b.follow_up_date) : null,
         followup_at: b.followup_at ? new Date(b.followup_at) : null,
-        notes: b.notes || b.comment || null,
+        notes: (b.notes || b.comment) ? String(b.notes || b.comment) : null,
         lead_number: num,
-        amount: b.amount ? new Prisma.Decimal(b.amount) : 0,
+        amount: b.amount ? new Prisma.Decimal(b.amount) : new Prisma.Decimal(0),
         currency: String(b.currency || "INR").toUpperCase(),
-        product_category: b.product_category || null,
-        team: b.team || null,
-        account_relationship: b.account_relationship || null,
-        followup_type: b.followup_type || null,
+        product_category: b.product_category ? String(b.product_category).trim() : null,
+        team: b.team ? String(b.team).trim() : null,
+        account_relationship: b.account_relationship ? String(b.account_relationship).trim() : null,
+        followup_type: b.followup_type ? String(b.followup_type).trim() : null,
         last_touched_at: new Date(),
         updated_by: req.user.id,
-      }
+      }),
     });
 
     await tx.lead_change_log.create({
       data: {
         lead_id: created.id,
-        field_name: 'status',
+        field_name: "status",
         old_value: null,
-        new_value: status,
+        new_value: String(statusV2 || status),
         user_id: req.user.id,
-      }
+      },
     });
 
     return created;
@@ -1111,23 +1135,10 @@ async function duplicateLead(req, leadId) {
 
   const tid = tenantId(req);
   const result = await prisma.$transaction(async (tx) => {
-    const key = counterTenantKey(tid);
-    
-    await tx.$executeRaw`
-      INSERT INTO tenant_lead_counters (tenant_id, next_lead_number)
-      VALUES (${key}, 1)
-      ON DUPLICATE KEY UPDATE tenant_id = tenant_id
-    `;
-    const rows = await tx.$queryRaw`
-      SELECT next_lead_number FROM tenant_lead_counters WHERE tenant_id = ${key} FOR UPDATE
-    `;
-    const num = rows[0]?.next_lead_number || 1;
-    await tx.$executeRaw`
-      UPDATE tenant_lead_counters SET next_lead_number = ${num + 1} WHERE tenant_id = ${key}
-    `;
+    const num = await allocateLeadNumber(tx, tid);
 
     const created = await tx.leads.create({
-      data: {
+      data: cleanCreateData({
         tenant_id: tid,
         name: lead.name,
         first_name: lead.first_name,
@@ -1137,27 +1148,29 @@ async function duplicateLead(req, leadId) {
         phone_dial: lead.phone_dial,
         email: lead.email,
         source: lead.source,
-        status: 'new',
-        status_v2: 'new',
+        status: "new",
+        status_v2: "new",
         label: lead.label,
         address: lead.address,
         reference: lead.reference,
         attachments_json: lead.attachments_json,
         assigned_to: lead.assigned_to,
         created_by: req.user.id,
-        follow_up_date: lead.follow_up_date ? new Date(lead.follow_up_date) : null,
-        followup_at: lead.followup_at ? new Date(lead.followup_at) : null,
-        notes: lead.notes ? `Duplicate of #${leadId}: ${lead.notes}` : `Duplicate of lead #${leadId}`,
+        follow_up_date: lead.follow_up_date,
+        followup_at: lead.followup_at,
+        notes: lead.notes
+          ? `Duplicate of #${leadId}: ${lead.notes}`
+          : `Duplicate of lead #${leadId}`,
         lead_number: num,
-        amount: lead.amount ? new Prisma.Decimal(lead.amount) : 0,
-        currency: lead.currency,
+        amount: lead.amount != null ? lead.amount : new Prisma.Decimal(0),
+        currency: lead.currency || "INR",
         product_category: lead.product_category,
         team: lead.team,
-        industry: lead.industry,
-        department: lead.department,
+        account_relationship: lead.account_relationship,
+        followup_type: lead.followup_type,
         last_touched_at: new Date(),
         updated_by: req.user.id,
-      }
+      }),
     });
 
     return created;
@@ -1361,7 +1374,7 @@ async function registerCustomOptionIfNeeded(fieldName, value) {
     try {
       await prisma.$executeRaw`
         INSERT INTO dropdown_options (field_name, option_value, option_label)
-        VALUES (${fieldName}, ${val}, ${val})
+        VALUES (${sqlNull(fieldName)}, ${sqlNull(val)}, ${sqlNull(val)})
         ON DUPLICATE KEY UPDATE option_label = VALUES(option_label)
       `;
     } catch (err2) {
