@@ -1,6 +1,8 @@
 const { mainPool } = require("../config/database");
 
 let usersColumnsCache = null;
+const userCache = new Map();
+const USER_CACHE_TTL = 15000; // 15 seconds
 
 async function getUsersColumns(pool = mainPool) {
   if (usersColumnsCache) return usersColumnsCache;
@@ -32,6 +34,12 @@ function isAdminRole(role) {
 }
 
 async function fetchUserRowById(userId, pool = mainPool) {
+  const now = Date.now();
+  const cached = userCache.get(userId);
+  if (cached && (now - cached.time < USER_CACHE_TTL)) {
+    return cached.data;
+  }
+
   const cols = await getUsersColumns(pool);
   if (!cols.size) return null;
 
@@ -52,7 +60,19 @@ async function fetchUserRowById(userId, pool = mainPool) {
      LIMIT 1`,
     [userId]
   );
-  return rows[0] || null;
+  const result = rows[0] || null;
+  if (result) {
+    userCache.set(userId, { data: result, time: now });
+  }
+  return result;
+}
+
+function clearUserCache(userId) {
+  if (userId) {
+    userCache.delete(userId);
+  } else {
+    userCache.clear();
+  }
 }
 
 function mapUserRowToProfile(row, jwtRole) {
@@ -76,6 +96,7 @@ module.exports = {
   getUsersColumns,
   clearUsersColumnsCache,
   fetchUserRowById,
+  clearUserCache,
   mapUserRowToProfile,
   isAdminRole,
   userNameSelectSql,
