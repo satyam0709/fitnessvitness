@@ -4,6 +4,7 @@ const {
   mapUserRowToProfile,
   getUsersColumns,
   userNameSelectSql,
+  clearUserCache,
 } = require("../utils/userSchema");
 
 async function getMe(req, res) {
@@ -78,6 +79,7 @@ async function clearMustChangePassword(req, res) {
         "UPDATE users SET must_change_password = 0, updated_at = NOW() WHERE id = ?",
         [uid]
       );
+      clearUserCache(uid);
     }
     return res.json({ success: true });
   } catch (err) {
@@ -137,6 +139,7 @@ async function updateProfile(req, res) {
         `UPDATE users SET ${updates.join(", ")}, updated_at = NOW() WHERE id = ?`,
         params
       );
+      clearUserCache(userId);
     }
 
     res.json({ success: true, message: "Profile updated successfully." });
