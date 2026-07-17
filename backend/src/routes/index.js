@@ -2,7 +2,7 @@ const express = require("express");
 const { getMe, syncCurrentUser } = require("../controllers/userController");
 const { submitContact, getContacts, markAsRead } = require("../controllers/contactController");
 const { verifyToken } = require("../middleware/verifyToken");
-const { mainPool } = require("../config/database");
+const prisma = require("../config/prisma");
 const leadsRouter        = require("./leads");
 const opportunitiesRouter = require("./opportunities");
 const ticketsRouter      = require("./tickets");
@@ -63,10 +63,10 @@ router.get("/health", (_req, res) =>
 
 router.get("/health/db", async (_req, res) => {
   try {
-    const [rows] = await mainPool.execute("SELECT 1 AS ok");
+    const rows = await prisma.$queryRaw`SELECT 1 AS ok`;
     res.json({
       success: true,
-      db: { ok: rows?.[0]?.ok === 1 },
+      db: { ok: rows?.[0]?.ok === 1 || rows?.[0]?.ok === 1n },
       timestamp: new Date().toISOString(),
     });
   } catch (error) {

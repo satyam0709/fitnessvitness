@@ -1,6 +1,12 @@
 require("dotenv").config();
 require("./config/ensureDatabaseUrl").ensureDatabaseUrl();
 
+// Fix for Prisma $queryRaw returning BigInts (e.g. from COUNT(*))
+// This allows res.json() to safely serialize BigInts to standard Numbers.
+BigInt.prototype.toJSON = function () {
+  return Number(this);
+};
+
 const http = require("http");
 const express = require("express");
 const path = require("path");

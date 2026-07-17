@@ -1,4 +1,4 @@
-const { mainPool } = require("../config/database");
+const prisma = require("../config/prisma");
 const {
   emitCalendarChanged,
   emitFitnessChanged,
@@ -102,11 +102,7 @@ const tableColumnsCache = new Map();
 
 async function tableExists(tableName) {
   if (tableExistsCache.has(tableName)) return tableExistsCache.get(tableName);
-  const [rows] = await mainPool.execute(
-    `SELECT 1 FROM information_schema.TABLES
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? LIMIT 1`,
-    [tableName]
-  );
+  const rows = await prisma.$queryRaw`SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${tableName} LIMIT 1`;
   const exists = rows.length > 0;
   tableExistsCache.set(tableName, exists);
   return exists;
@@ -114,11 +110,7 @@ async function tableExists(tableName) {
 
 async function tableColumns(tableName) {
   if (tableColumnsCache.has(tableName)) return tableColumnsCache.get(tableName);
-  const [rows] = await mainPool.execute(
-    `SELECT COLUMN_NAME FROM information_schema.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
-    [tableName]
-  );
+  const rows = await prisma.$queryRaw`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${tableName}`;
   const cols = new Set(rows.map((r) => r.COLUMN_NAME));
   tableColumnsCache.set(tableName, cols);
   return cols;
@@ -141,21 +133,12 @@ async function syncClientNextDueFromCompleted(clientId, completedOn) {
   if (!clientId) return;
   const completedDate = normalizeDateOnly(completedOn);
   if (completedDate) {
-    const [clients] = await mainPool.execute(
-      `SELECT follow_up_freq_days FROM fitness_clients WHERE client_id = ?`,
-      [clientId]
-    );
+    const clients = await prisma.$queryRaw`SELECT follow_up_freq_days FROM fitness_clients WHERE client_id = ${clientId}`;
     if (!clients.length) return;
     const days = Number(clients[0].follow_up_freq_days) || 14;
-    await mainPool.execute(
-      `UPDATE fitness_clients SET next_due_date = DATE_ADD(?, INTERVAL ? DAY), updated_at = NOW() WHERE client_id = ?`,
-      [completedDate, days, clientId]
-    );
+    await prisma.$executeRaw`UPDATE fitness_clients SET next_due_date = DATE_ADD(${completedDate}, INTERVAL ${days} DAY), updated_at = NOW() WHERE client_id = ${clientId}`;
   } else {
-    await mainPool.execute(
-      `UPDATE fitness_clients SET next_due_date = NULL, updated_at = NOW() WHERE client_id = ?`,
-      [clientId]
-    );
+    await prisma.$executeRaw`UPDATE fitness_clients SET next_due_date = NULL, updated_at = NOW() WHERE client_id = ${clientId}`;
   }
 }
 
@@ -173,22 +156,14 @@ async function syncClientDueTask(clientRow, actorUserId) {
   const dueDate = normalizeDateOnly(clientRow.next_due_date);
   const isActive = String(clientRow.status || "Active") === "Active";
 
-  const [existing] = await mainPool.execute(
-    `SELECT id FROM tasks
-     WHERE client_id = ?
-       AND task_category = 'client_due'
-       AND task_type = 'client_due'
-     ORDER BY id DESC
-     LIMIT 1`,
-    [clientDbId]
-  );
+  const existing = await prisma.$queryRaw`SELECT id FROM tasks WHERE client_id = ${clientDbId} AND task_category = 'client_due' AND task_type = 'client_due' ORDER BY id DESC LIMIT 1`;
   const taskId = existing[0]?.id;
 
   if (!dueDate || !isActive) {
     if (!taskId) return false;
     const updates = ["status = 'done'"];
     if (hasUpdatedAt) updates.push("updated_at = NOW()");
-    await mainPool.execute(`UPDATE tasks SET ${updates.join(", ")} WHERE id = ?`, [taskId]);
+    await prisma.$executeRawUnsafe(`UPDATE tasks SET ${updates.join(", ")} WHERE id = ?`, taskId);
     return true;
   }
 
@@ -209,7 +184,7 @@ async function syncClientDueTask(clientRow, actorUserId) {
     if (hasPriority) updates.push("priority = 'medium'");
     if (hasUpdatedAt) updates.push("updated_at = NOW()");
     params.push(taskId);
-    await mainPool.execute(`UPDATE tasks SET ${updates.join(", ")} WHERE id = ?`, params);
+    await prisma.$executeRawUnsafe(`UPDATE tasks SET ${updates.join(", ")} WHERE id = ?`, ...params);
     return true;
   }
 
@@ -237,9 +212,9 @@ async function syncClientDueTask(clientRow, actorUserId) {
   }
 
   const placeholders = fields.map(() => "?").join(", ");
-  await mainPool.execute(
+  await prisma.$executeRawUnsafe(
     `INSERT INTO tasks (${fields.map((f) => `\`${f}\``).join(", ")}) VALUES (${placeholders})`,
-    values
+    ...values
   );
   return true;
 }
@@ -275,7 +250,7 @@ const createConsultationValidation = [
 // ─────────────────────────────────────────────────────────────────
 async function getFitnessSettings(_req, res) {
   try {
-    const [rows] = await mainPool.execute("SELECT * FROM fitness_settings");
+    const rows = await prisma.$queryRaw`SELECT * FROM fitness_settings`;
     const settings = {};
     for (const row of rows) {
       settings[row.setting_key] = typeof row.setting_value === 'string'
@@ -298,17 +273,10 @@ async function updateFitnessSettings(req, res) {
 
     // If single key/value pair
     if (settings.key && settings.value !== undefined) {
-      await mainPool.execute(
-        "INSERT INTO fitness_settings (setting_key, setting_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE setting_value = ?",
-        [settings.key, JSON.stringify(settings.value), JSON.stringify(settings.value)]
-      );
+      await prisma.$executeRaw`INSERT INTO fitness_settings (setting_key, setting_value) VALUES (${settings.key}, ${JSON.stringify(settings.value)}) ON DUPLICATE KEY UPDATE setting_value = ${JSON.stringify(settings.value)}`;
     } else {
-      // Update multiple settings at once
       for (const [key, value] of Object.entries(settings)) {
-        await mainPool.execute(
-          "INSERT INTO fitness_settings (setting_key, setting_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE setting_value = ?",
-          [key, JSON.stringify(value), JSON.stringify(value)]
-        );
+        await prisma.$executeRaw`INSERT INTO fitness_settings (setting_key, setting_value) VALUES (${key}, ${JSON.stringify(value)}) ON DUPLICATE KEY UPDATE setting_value = ${JSON.stringify(value)}`;
       }
     }
     res.json({ success: true });
@@ -588,7 +556,7 @@ async function getAllClients(req, res) {
     const orderSql = buildClientListOrder(sort, isNextDueView);
 
     const query = `SELECT * FROM fitness_clients WHERE ${whereSql} ${orderSql}`;
-    const [rows] = await mainPool.execute(query, params);
+    const rows = await prisma.$queryRawUnsafe(query, ...params);
     let result = rows.map(computeClientFields);
     result = applyComputedClientFilters(result, computed);
     result = sortClientRows(result, sort);
@@ -614,13 +582,10 @@ async function searchClients(req, res) {
       return res.json({ success: true, data: [] });
     }
     const searchTerm = `%${q}%`;
-    const [rows] = await mainPool.execute(
-      `SELECT client_id, full_name, phone, status, tier
+    const rows = await prisma.$queryRaw`SELECT client_id, full_name, phone, status, tier
        FROM fitness_clients
-       WHERE status != 'Inactive' AND (client_id LIKE ? OR full_name LIKE ? OR phone LIKE ? OR email LIKE ?)
-       LIMIT 20`,
-      [searchTerm, searchTerm, searchTerm, searchTerm]
-    );
+       WHERE status != 'Inactive' AND (client_id LIKE ${searchTerm} OR full_name LIKE ${searchTerm} OR phone LIKE ${searchTerm} OR email LIKE ${searchTerm})
+       LIMIT 20`;
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -630,10 +595,10 @@ async function searchClients(req, res) {
 async function getClientSummary(req, res) {
   try {
     const { clientId } = req.params;
-    const [rows] = await mainPool.execute(`
+    const rows = await prisma.$queryRaw`
       SELECT client_id, full_name, status, progress, plan_type, plan_start_date,
              plan_expiry_date, last_consultation_date, next_due_date, tier, source
-      FROM fitness_clients WHERE client_id = ?`, [clientId]);
+      FROM fitness_clients WHERE client_id = ${clientId}`;
     if (!rows.length) {
       return res.status(404).json({ success: false, message: "Client not found" });
     }
@@ -647,44 +612,29 @@ async function getClientSummary(req, res) {
 async function getClientById(req, res) {
   try {
     const { clientId } = req.params;
-    const [rows] = await mainPool.execute(`
-      SELECT * FROM fitness_clients WHERE client_id = ?`, [clientId]);
+    const rows = await prisma.$queryRaw`
+      SELECT * FROM fitness_clients WHERE client_id = ${clientId}`;
     if (!rows.length) {
       return res.status(404).json({ success: false, message: "Client not found" });
     }
     const client = computeClientFields(rows[0]);
 
     // Fetch related data
-    const [consultations] = await mainPool.execute(
-      "SELECT * FROM fitness_consultations WHERE client_id = ? ORDER BY consult_date DESC",
-      [clientId]
-    );
-    const [bodyStats] = await mainPool.execute(
-      "SELECT * FROM fitness_body_stats WHERE client_id = ? ORDER BY recorded_date DESC",
-      [clientId]
-    );
-    const [supplements] = await mainPool.execute(
-      "SELECT * FROM fitness_supplements WHERE client_id = ? ORDER BY prescribed_date DESC",
-      [clientId]
-    );
-    const [transactions] = await mainPool.execute(
-      "SELECT * FROM fitness_transactions WHERE client_id = ? ORDER BY transaction_date DESC",
-      [clientId]
-    );
-    const [tasks] = await mainPool.execute(
-      "SELECT * FROM fitness_client_tasks WHERE client_id = ? ORDER BY due_date ASC",
-      [clientId]
-    );
-    const [referralsGiven] = await mainPool.execute(`
+    const consultations = await prisma.$queryRaw`SELECT * FROM fitness_consultations WHERE client_id = ${clientId} ORDER BY consult_date DESC`;
+    const bodyStats = await prisma.$queryRaw`SELECT * FROM fitness_body_stats WHERE client_id = ${clientId} ORDER BY recorded_date DESC`;
+    const supplements = await prisma.$queryRaw`SELECT * FROM fitness_supplements WHERE client_id = ${clientId} ORDER BY prescribed_date DESC`;
+    const transactions = await prisma.$queryRaw`SELECT * FROM fitness_transactions WHERE client_id = ${clientId} ORDER BY transaction_date DESC`;
+    const tasks = await prisma.$queryRaw`SELECT * FROM fitness_client_tasks WHERE client_id = ${clientId} ORDER BY due_date ASC`;
+    const referralsGiven = await prisma.$queryRaw`
       SELECT fr.*, fc.full_name as referred_name
       FROM fitness_referrals fr
       JOIN fitness_clients fc ON fr.referred_client_id = fc.client_id
-      WHERE fr.referrer_client_id = ?`, [clientId]);
-    const [referralsReceived] = await mainPool.execute(`
+      WHERE fr.referrer_client_id = ${clientId}`;
+    const referralsReceived = await prisma.$queryRaw`
       SELECT fr.*, fc.full_name as referrer_name
       FROM fitness_referrals fr
       JOIN fitness_clients fc ON fr.referrer_client_id = fc.client_id
-      WHERE fr.referred_client_id = ?`, [clientId]);
+      WHERE fr.referred_client_id = ${clientId}`;
 
     res.json({
       success: true,
@@ -804,9 +754,8 @@ async function createClient(req, res) {
     }
 
     // Get next client ID
-    const [[{ count }]] = await mainPool.execute(
-      "SELECT COUNT(*) as count FROM fitness_clients"
-    );
+    const countRows = await prisma.$queryRaw`SELECT COUNT(*) as count FROM fitness_clients`;
+    const count = Number(countRows[0].count);
     const clientId = generateClientId(count);
 
     // Calculate derived fields
@@ -822,27 +771,22 @@ async function createClient(req, res) {
       bmi = calculateBMI(height_cm, current_weight_kg);
     }
 
-    const [result] = await mainPool.execute(
-      `INSERT INTO fitness_clients (
+    await prisma.$executeRaw`INSERT INTO fitness_clients (
         client_id, full_name, phone, email, age, city, address, occupation, emergency_contact,
         referred_by_client_id, referred_by_name, source, tier, health_goal, plan_type, plan_start_date,
         plan_expiry_date, next_due_date, follow_up_freq_days, medical_conditions, allergies, activity_level,
         current_medications, height_cm, start_weight_kg, current_weight_kg, target_weight_kg, bmi,
         status, progress
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        clientId, full_name, phone, email, age, city, address, occupation, emergency_contact,
-        referred_by_client_id || null, referred_by_name || null, source || "Walk-in", tier || 3,
-        health_goal, plan_type, plan_start_date, plan_expiry_date, next_due_date, follow_up_freq_days || 14,
-        medical_conditions, allergies, activity_level, current_medications,
-        height_cm, start_weight_kg, current_weight_kg, target_weight_kg, bmi,
-        status || "Active", progress || "Neutral",
-      ]
-    );
+      ) VALUES (
+        ${clientId}, ${full_name}, ${phone}, ${email}, ${age}, ${city}, ${address}, ${occupation}, ${emergency_contact},
+        ${referred_by_client_id || null}, ${referred_by_name || null}, ${source || "Walk-in"}, ${tier || 3},
+        ${health_goal}, ${plan_type}, ${plan_start_date}, ${plan_expiry_date}, ${next_due_date}, ${follow_up_freq_days || 14},
+        ${medical_conditions}, ${allergies}, ${activity_level}, ${current_medications},
+        ${height_cm}, ${start_weight_kg}, ${current_weight_kg}, ${target_weight_kg}, ${bmi},
+        ${status || "Active"}, ${progress || "Neutral"}
+      )`;
 
-    const [rows] = await mainPool.execute(
-      "SELECT * FROM fitness_clients WHERE id = ?", [result.insertId]
-    );
+    const rows = await prisma.$queryRaw`SELECT * FROM fitness_clients WHERE client_id = ${clientId}`;
 
     const taskChanged = await syncClientDueTask(rows[0], req.user?.id);
     if (taskChanged) emitFitnessAndDueTaskChanged("client_due_create");
@@ -939,10 +883,7 @@ async function updateClient(req, res) {
 
     // Recalculate BMI if height or weight changed
     if (fields.height_cm || fields.current_weight_kg) {
-      const [client] = await mainPool.execute(
-        "SELECT height_cm, current_weight_kg FROM fitness_clients WHERE client_id = ?",
-        [clientId]
-      );
+      const client = await prisma.$queryRaw`SELECT height_cm, current_weight_kg FROM fitness_clients WHERE client_id = ${clientId}`;
       const height = fields.height_cm ?? client[0]?.height_cm;
       const weight = fields.current_weight_kg ?? client[0]?.current_weight_kg;
       if (height && weight) {
@@ -954,14 +895,9 @@ async function updateClient(req, res) {
     }
 
     values.push(clientId);
-    await mainPool.execute(
-      `UPDATE fitness_clients SET ${updates.join(', ')} WHERE client_id = ?`,
-      values
-    );
+    await prisma.$executeRawUnsafe(`UPDATE fitness_clients SET ${updates.join(', ')} WHERE client_id = ?`, ...values);
 
-    const [rows] = await mainPool.execute(
-      "SELECT * FROM fitness_clients WHERE client_id = ?", [clientId]
-    );
+    const rows = await prisma.$queryRaw`SELECT * FROM fitness_clients WHERE client_id = ${clientId}`;
 
     if (!rows.length) {
       return res.status(404).json({ success: false, message: "Client not found" });
@@ -998,11 +934,8 @@ async function deleteClient(req, res) {
 
   if (soft) {
     try {
-      const [result] = await mainPool.execute(
-        "UPDATE fitness_clients SET status = 'Inactive' WHERE client_id = ?",
-        [clientId]
-      );
-      if (result.affectedRows === 0) {
+      const result = await prisma.$executeRaw`UPDATE fitness_clients SET status = 'Inactive' WHERE client_id = ${clientId}`;
+      if (result === 0) {
         return res.status(404).json({ success: false, message: "Client not found" });
       }
       emitFitnessChanged();
@@ -1012,61 +945,39 @@ async function deleteClient(req, res) {
     }
   }
 
-  const conn = await mainPool.getConnection();
   try {
-    await conn.beginTransaction();
-    const [clients] = await conn.execute(
-      "SELECT id FROM fitness_clients WHERE client_id = ? FOR UPDATE",
-      [clientId]
-    );
-    if (!clients.length) {
-      await conn.rollback();
-      return res.status(404).json({ success: false, message: "Client not found" });
-    }
-    const internalId = clients[0].id;
+    await prisma.$transaction(async (tx) => {
+      const clients = await tx.$queryRaw`SELECT id FROM fitness_clients WHERE client_id = ${clientId} FOR UPDATE`;
+      if (!clients.length) {
+        throw new Error("Client not found");
+      }
+      const internalId = clients[0].id;
 
-    await conn.execute(
-      `DELETE FROM notifications WHERE entity_type IN ('fitness_expiry', 'fitness_due') AND entity_id = ?`,
-      [internalId]
-    );
-    await conn.execute(
-      `DELETE FROM fitness_referrals WHERE referrer_client_id = ? OR referred_client_id = ?`,
-      [clientId, clientId]
-    );
-    await conn.execute(`DELETE FROM fitness_meal_plans WHERE client_id = ?`, [clientId]);
-    await conn.execute(`DELETE FROM fitness_client_tasks WHERE client_id = ?`, [clientId]);
-    await conn.execute(`DELETE FROM fitness_supplements WHERE client_id = ?`, [clientId]);
-    await conn.execute(`DELETE FROM fitness_transactions WHERE client_id = ?`, [clientId]);
-    await conn.execute(`DELETE FROM fitness_body_stats WHERE client_id = ?`, [clientId]);
-    await conn.execute(`DELETE FROM fitness_consultations WHERE client_id = ?`, [clientId]);
-    await conn.execute(
-      `UPDATE fitness_clients SET referred_by_client_id = NULL WHERE referred_by_client_id = ?`,
-      [clientId]
-    );
-    const [delResult] = await conn.execute(
-      `DELETE FROM fitness_clients WHERE client_id = ?`,
-      [clientId]
-    );
-    if (delResult.affectedRows === 0) {
-      await conn.rollback();
-      return res.status(404).json({ success: false, message: "Client not found" });
-    }
+      await tx.$executeRaw`DELETE FROM notifications WHERE entity_type IN ('fitness_expiry', 'fitness_due') AND entity_id = ${internalId}`;
+      await tx.$executeRaw`DELETE FROM fitness_referrals WHERE referrer_client_id = ${clientId} OR referred_client_id = ${clientId}`;
+      await tx.$executeRaw`DELETE FROM fitness_meal_plans WHERE client_id = ${clientId}`;
+      await tx.$executeRaw`DELETE FROM fitness_client_tasks WHERE client_id = ${clientId}`;
+      await tx.$executeRaw`DELETE FROM fitness_supplements WHERE client_id = ${clientId}`;
+      await tx.$executeRaw`DELETE FROM fitness_transactions WHERE client_id = ${clientId}`;
+      await tx.$executeRaw`DELETE FROM fitness_body_stats WHERE client_id = ${clientId}`;
+      await tx.$executeRaw`DELETE FROM fitness_consultations WHERE client_id = ${clientId}`;
+      await tx.$executeRaw`UPDATE fitness_clients SET referred_by_client_id = NULL WHERE referred_by_client_id = ${clientId}`;
+      const delResult = await tx.$executeRaw`DELETE FROM fitness_clients WHERE client_id = ${clientId}`;
+      if (delResult === 0) {
+        throw new Error("Client not found");
+      }
+    });
 
-    await conn.commit();
     emitFitnessChanged();
     res.json({
       success: true,
       message: "Client and all related fitness records were removed from the database",
     });
   } catch (error) {
-    try {
-      await conn.rollback();
-    } catch (_) {
-      /* ignore */
+    if (error.message === "Client not found") {
+      return res.status(404).json({ success: false, message: "Client not found" });
     }
     res.status(500).json({ success: false, message: error.message });
-  } finally {
-    conn.release();
   }
 }
 
@@ -1075,13 +986,13 @@ async function deleteClient(req, res) {
 // ─────────────────────────────────────────────────────────────────
 async function getAllConsultations(req, res) {
   try {
-    const [rows] = await mainPool.execute(`
+    const rows = await prisma.$queryRaw`
       SELECT c.*, fc.full_name, fc.status as client_status
       FROM fitness_consultations c
       JOIN fitness_clients fc ON c.client_id = fc.client_id
       ORDER BY c.consult_date DESC
       LIMIT 500
-    `);
+    `;
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1091,10 +1002,7 @@ async function getAllConsultations(req, res) {
 async function getConsultations(req, res) {
   try {
     const { clientId } = req.params;
-    const [rows] = await mainPool.execute(
-      "SELECT * FROM fitness_consultations WHERE client_id = ? ORDER BY consult_date DESC",
-      [clientId]
-    );
+    const rows = await prisma.$queryRaw`SELECT * FROM fitness_consultations WHERE client_id = ${clientId} ORDER BY consult_date DESC`;
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1130,44 +1038,32 @@ async function createConsultation(req, res) {
       if (weightErr) return sendValidationError(res, weightErr);
     }
 
-    const [result] = await mainPool.execute(
-      `INSERT INTO fitness_consultations (client_id, consult_date, consult_type, weight_kg, key_observations, diet_changes, next_steps, next_appointment)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [clientId, consult_date, consult_type, weight_kg, key_observations, diet_changes, next_steps, next_appointment]
-    );
+    const insertId = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`INSERT INTO fitness_consultations (client_id, consult_date, consult_type, weight_kg, key_observations, diet_changes, next_steps, next_appointment)
+       VALUES (${clientId}, ${consult_date}, ${consult_type}, ${weight_kg}, ${key_observations}, ${diet_changes}, ${next_steps}, ${next_appointment})`;
+      const r = await tx.$queryRaw`SELECT LAST_INSERT_ID() as id`;
+      return Number(r[0].id);
+    });
 
     // Update client's last_consultation_date and recalculate next_due_date
-    await mainPool.execute(
-      "UPDATE fitness_clients SET last_consultation_date = ? WHERE client_id = ?",
-      [consult_date, clientId]
-    );
+    await prisma.$executeRaw`UPDATE fitness_clients SET last_consultation_date = ${consult_date} WHERE client_id = ${clientId}`;
 
     // Recalculate next_due_date
-    const [client] = await mainPool.execute(
-      "SELECT follow_up_freq_days FROM fitness_clients WHERE client_id = ?", [clientId]
-    );
+    const client = await prisma.$queryRaw`SELECT follow_up_freq_days FROM fitness_clients WHERE client_id = ${clientId}`;
     if (client.length && client[0].follow_up_freq_days) {
       const { calculateNextDueDate } = require("../services/fitnessComputedFields");
       const nextDue = calculateNextDueDate(consult_date, client[0].follow_up_freq_days);
       if (nextDue) {
-        await mainPool.execute(
-          "UPDATE fitness_clients SET next_due_date = ? WHERE client_id = ?",
-          [nextDue, clientId]
-        );
+        await prisma.$executeRaw`UPDATE fitness_clients SET next_due_date = ${nextDue} WHERE client_id = ${clientId}`;
       }
     }
 
-    const [clientRows] = await mainPool.execute(
-      "SELECT * FROM fitness_clients WHERE client_id = ?",
-      [clientId]
-    );
+    const clientRows = await prisma.$queryRaw`SELECT * FROM fitness_clients WHERE client_id = ${clientId}`;
     const taskChanged = clientRows[0]
       ? await syncClientDueTask(clientRows[0], req.user?.id)
       : false;
 
-    const [rows] = await mainPool.execute(
-      "SELECT * FROM fitness_consultations WHERE id = ?", [result.insertId]
-    );
+    const rows = await prisma.$queryRaw`SELECT * FROM fitness_consultations WHERE id = ${insertId}`;
     if (taskChanged) emitFitnessAndDueTaskChanged("client_due_consultation");
     else emitFitnessChanged();
     res.status(201).json({ success: true, data: rows[0] });
@@ -1198,16 +1094,11 @@ async function updateConsultation(req, res) {
       if (err) return sendValidationError(res, err);
     }
 
-    await mainPool.execute(
-      `UPDATE fitness_consultations
-       SET consult_date = ?, consult_type = ?, weight_kg = ?, key_observations = ?, diet_changes = ?, next_steps = ?, next_appointment = ?
-       WHERE id = ?`,
-      [consult_date, consult_type, weight_kg, key_observations, diet_changes, next_steps, next_appointment, id]
-    );
+    await prisma.$executeRaw`UPDATE fitness_consultations
+       SET consult_date = ${consult_date}, consult_type = ${consult_type}, weight_kg = ${weight_kg}, key_observations = ${key_observations}, diet_changes = ${diet_changes}, next_steps = ${next_steps}, next_appointment = ${next_appointment}
+       WHERE id = ${id}`;
 
-    const [rows] = await mainPool.execute(
-      "SELECT * FROM fitness_consultations WHERE id = ?", [id]
-    );
+    const rows = await prisma.$queryRaw`SELECT * FROM fitness_consultations WHERE id = ${id}`;
     if (!rows.length) {
       return res.status(404).json({ success: false, message: "Consultation not found" });
     }
@@ -1221,10 +1112,8 @@ async function updateConsultation(req, res) {
 async function deleteConsultation(req, res) {
   try {
     const { id } = req.params;
-    const [result] = await mainPool.execute(
-      "DELETE FROM fitness_consultations WHERE id = ?", [id]
-    );
-    if (result.affectedRows === 0) {
+    const result = await prisma.$executeRaw`DELETE FROM fitness_consultations WHERE id = ${id}`;
+    if (result === 0) {
       return res.status(404).json({ success: false, message: "Consultation not found" });
     }
     emitFitnessChanged();
@@ -1240,10 +1129,7 @@ async function deleteConsultation(req, res) {
 async function getBodyStats(req, res) {
   try {
     const { clientId } = req.params;
-    const [rows] = await mainPool.execute(
-      "SELECT * FROM fitness_body_stats WHERE client_id = ? ORDER BY recorded_date DESC",
-      [clientId]
-    );
+    const rows = await prisma.$queryRaw`SELECT * FROM fitness_body_stats WHERE client_id = ${clientId} ORDER BY recorded_date DESC`;
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1278,31 +1164,25 @@ async function createBodyStat(req, res) {
       if (err) return sendValidationError(res, err);
     }
 
-    const [result] = await mainPool.execute(
-      `INSERT INTO fitness_body_stats (client_id, recorded_date, weight_kg, body_fat_pct, muscle_mass_kg, waist_cm, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [clientId, recorded_date, weight_kg, body_fat_pct, muscle_mass_kg, waist_cm, notes]
-    );
+    const insertId = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`INSERT INTO fitness_body_stats (client_id, recorded_date, weight_kg, body_fat_pct, muscle_mass_kg, waist_cm, notes)
+       VALUES (${clientId}, ${recorded_date}, ${weight_kg}, ${body_fat_pct}, ${muscle_mass_kg}, ${waist_cm}, ${notes})`;
+      const r = await tx.$queryRaw`SELECT LAST_INSERT_ID() as id`;
+      return Number(r[0].id);
+    });
 
     // Update current_weight_kg on client
     if (weight_kg) {
       const { calculateBMI } = require("../services/fitnessComputedFields");
-      const [client] = await mainPool.execute(
-        "SELECT height_cm FROM fitness_clients WHERE client_id = ?", [clientId]
-      );
+      const client = await prisma.$queryRaw`SELECT height_cm FROM fitness_clients WHERE client_id = ${clientId}`;
       let bmi = null;
       if (client.length && client[0].height_cm) {
         bmi = calculateBMI(client[0].height_cm, weight_kg);
       }
-      await mainPool.execute(
-        "UPDATE fitness_clients SET current_weight_kg = ?, bmi = ? WHERE client_id = ?",
-        [weight_kg, bmi, clientId]
-      );
+      await prisma.$executeRaw`UPDATE fitness_clients SET current_weight_kg = ${weight_kg}, bmi = ${bmi} WHERE client_id = ${clientId}`;
     }
 
-    const [rows] = await mainPool.execute(
-      "SELECT * FROM fitness_body_stats WHERE id = ?", [result.insertId]
-    );
+    const rows = await prisma.$queryRaw`SELECT * FROM fitness_body_stats WHERE id = ${insertId}`;
     emitFitnessChanged();
     res.status(201).json({ success: true, data: rows[0] });
   } catch (error) {
@@ -1313,10 +1193,8 @@ async function createBodyStat(req, res) {
 async function deleteBodyStat(req, res) {
   try {
     const { id } = req.params;
-    const [result] = await mainPool.execute(
-      "DELETE FROM fitness_body_stats WHERE id = ?", [id]
-    );
-    if (result.affectedRows === 0) {
+    const result = await prisma.$executeRaw`DELETE FROM fitness_body_stats WHERE id = ${id}`;
+    if (result === 0) {
       return res.status(404).json({ success: false, message: "Body stat not found" });
     }
     res.json({ success: true });
@@ -1331,10 +1209,7 @@ async function deleteBodyStat(req, res) {
 async function getSupplements(req, res) {
   try {
     const { clientId } = req.params;
-    const [rows] = await mainPool.execute(
-      "SELECT * FROM fitness_supplements WHERE client_id = ? ORDER BY prescribed_date DESC",
-      [clientId]
-    );
+    const rows = await prisma.$queryRaw`SELECT * FROM fitness_supplements WHERE client_id = ${clientId} ORDER BY prescribed_date DESC`;
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1370,15 +1245,14 @@ async function createSupplement(req, res) {
       if (err) return sendValidationError(res, err);
     }
 
-    const [result] = await mainPool.execute(
-      `INSERT INTO fitness_supplements (client_id, product_name, prescribed_date, quantity, mrp_inr, rate_inr, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [clientId, product_name, prescribed_date, quantity, mrp_inr, rate_inr, notes]
-    );
+    const insertId = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`INSERT INTO fitness_supplements (client_id, product_name, prescribed_date, quantity, mrp_inr, rate_inr, notes)
+       VALUES (${clientId}, ${product_name}, ${prescribed_date}, ${quantity}, ${mrp_inr}, ${rate_inr}, ${notes})`;
+      const r = await tx.$queryRaw`SELECT LAST_INSERT_ID() as id`;
+      return Number(r[0].id);
+    });
 
-    const [rows] = await mainPool.execute(
-      "SELECT * FROM fitness_supplements WHERE id = ?", [result.insertId]
-    );
+    const rows = await prisma.$queryRaw`SELECT * FROM fitness_supplements WHERE id = ${insertId}`;
     emitFitnessChanged();
     res.status(201).json({ success: true, data: rows[0] });
   } catch (error) {
@@ -1412,16 +1286,11 @@ async function updateSupplement(req, res) {
       if (err) return sendValidationError(res, err);
     }
 
-    await mainPool.execute(
-      `UPDATE fitness_supplements
-       SET product_name = ?, prescribed_date = ?, quantity = ?, mrp_inr = ?, rate_inr = ?, notes = ?
-       WHERE id = ?`,
-      [product_name, prescribed_date, quantity, mrp_inr, rate_inr, notes, id]
-    );
+    await prisma.$executeRaw`UPDATE fitness_supplements
+       SET product_name = ${product_name}, prescribed_date = ${prescribed_date}, quantity = ${quantity}, mrp_inr = ${mrp_inr}, rate_inr = ${rate_inr}, notes = ${notes}
+       WHERE id = ${id}`;
 
-    const [rows] = await mainPool.execute(
-      "SELECT * FROM fitness_supplements WHERE id = ?", [id]
-    );
+    const rows = await prisma.$queryRaw`SELECT * FROM fitness_supplements WHERE id = ${id}`;
     if (!rows.length) {
       return res.status(404).json({ success: false, message: "Supplement not found" });
     }
@@ -1435,10 +1304,8 @@ async function updateSupplement(req, res) {
 async function deleteSupplement(req, res) {
   try {
     const { id } = req.params;
-    const [result] = await mainPool.execute(
-      "DELETE FROM fitness_supplements WHERE id = ?", [id]
-    );
-    if (result.affectedRows === 0) {
+    const result = await prisma.$executeRaw`DELETE FROM fitness_supplements WHERE id = ${id}`;
+    if (result === 0) {
       return res.status(404).json({ success: false, message: "Supplement not found" });
     }
     emitFitnessChanged();
@@ -1482,7 +1349,7 @@ async function getAllTransactions(req, res) {
     }
 
     query += " ORDER BY ft.transaction_date DESC";
-    const [rows] = await mainPool.execute(query, params);
+    const rows = await prisma.$queryRawUnsafe(query, ...params);
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1492,10 +1359,7 @@ async function getAllTransactions(req, res) {
 async function getClientTransactions(req, res) {
   try {
     const { clientId } = req.params;
-    const [rows] = await mainPool.execute(
-      "SELECT * FROM fitness_transactions WHERE client_id = ? ORDER BY transaction_date DESC",
-      [clientId]
-    );
+    const rows = await prisma.$queryRaw`SELECT * FROM fitness_transactions WHERE client_id = ${clientId} ORDER BY transaction_date DESC`;
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1591,10 +1455,7 @@ async function createTransaction(req, res) {
       }
       finalClientId = cid;
     } else if (hasExplicitExtId) {
-      const [buyers] = await mainPool.execute(
-        "SELECT id FROM fitness_external_buyers WHERE id = ?",
-        [extIdParsed]
-      );
+      const buyers = await prisma.$queryRaw`SELECT id FROM fitness_external_buyers WHERE id = ${extIdParsed}`;
       if (!buyers.length) {
         return res.status(400).json({ success: false, message: "external_buyer_id not found" });
       }
@@ -1611,20 +1472,14 @@ async function createTransaction(req, res) {
           ? String(eb.referred_by_client_id).trim()
           : null;
       if (refId) {
-        const [cref] = await mainPool.execute(
-          "SELECT client_id FROM fitness_clients WHERE client_id = ?",
-          [refId]
-        );
+        const cref = await prisma.$queryRaw`SELECT client_id FROM fitness_clients WHERE client_id = ${refId}`;
         if (!cref.length) {
           return sendValidationError(res, "external_buyer.referred_by_client_id not found");
         }
       }
       let buyerId;
       if (phoneNorm) {
-        const [found] = await mainPool.execute(
-          "SELECT id FROM fitness_external_buyers WHERE phone = ? LIMIT 1",
-          [phoneNorm]
-        );
+        const found = await prisma.$queryRaw`SELECT id FROM fitness_external_buyers WHERE phone = ${phoneNorm} LIMIT 1`;
         if (found.length) {
           buyerId = found[0].id;
         }
@@ -1632,18 +1487,15 @@ async function createTransaction(req, res) {
       if (!buyerId) {
         const noteVal = eb.notes != null ? String(eb.notes) : null;
         try {
-          const [ins] = await mainPool.execute(
-            `INSERT INTO fitness_external_buyers (full_name, phone, referred_by_client_id, notes)
-             VALUES (?, ?, ?, ?)`,
-            [name, phoneNorm, refId, noteVal]
-          );
-          buyerId = ins.insertId;
+          const insId = await prisma.$transaction(async (tx) => {
+            await tx.$executeRaw`INSERT INTO fitness_external_buyers (full_name, phone, referred_by_client_id, notes) VALUES (${name}, ${phoneNorm}, ${refId}, ${noteVal})`;
+            const r = await tx.$queryRaw`SELECT LAST_INSERT_ID() as id`;
+            return Number(r[0].id);
+          });
+          buyerId = insId;
         } catch (insErr) {
-          if (insErr.code === "ER_DUP_ENTRY" && phoneNorm) {
-            const [found2] = await mainPool.execute(
-              "SELECT id FROM fitness_external_buyers WHERE phone = ? LIMIT 1",
-              [phoneNorm]
-            );
+          if (phoneNorm) {
+            const found2 = await prisma.$queryRaw`SELECT id FROM fitness_external_buyers WHERE phone = ${phoneNorm} LIMIT 1`;
             if (!found2.length) {
               return res.status(500).json({ success: false, message: insErr.message });
             }
@@ -1656,33 +1508,14 @@ async function createTransaction(req, res) {
       finalExtBuyerId = buyerId;
     }
 
-    const conn = await mainPool.getConnection();
     try {
-      await conn.beginTransaction();
-      const [result] = await conn.execute(
-        `INSERT INTO fitness_transactions (client_id, external_buyer_id, transaction_date, payment_due_date, product_plan, type, mrp_inr, rate_inr, received_inr, pending_inr, cost_inr, pay_mode, notes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          finalClientId,
-          finalExtBuyerId,
-          transaction_date,
-          payment_due_date || null,
-          product_plan,
-          type,
-          mrp_inr,
-          rate_inr,
-          received_inr || 0,
-          pending_inr || 0,
-          cost_inr || 0,
-          pay_mode || "GPay",
-          notes,
-        ]
-      );
-      const insertId = result.insertId;
-      const [rows] = await conn.execute(`${sqlFitnessTransactionsJoined()} WHERE ft.id = ?`, [
-        insertId,
-      ]);
-      await conn.commit();
+      const insertId = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`INSERT INTO fitness_transactions (client_id, external_buyer_id, transaction_date, payment_due_date, product_plan, type, mrp_inr, rate_inr, received_inr, pending_inr, cost_inr, pay_mode, notes)
+         VALUES (${finalClientId}, ${finalExtBuyerId}, ${transaction_date}, ${payment_due_date || null}, ${product_plan}, ${type}, ${mrp_inr}, ${rate_inr}, ${received_inr || 0}, ${pending_inr || 0}, ${cost_inr || 0}, ${pay_mode || "GPay"}, ${notes})`;
+        const r = await tx.$queryRaw`SELECT LAST_INSERT_ID() as id`;
+        return Number(r[0].id);
+      });
+      const rows = await prisma.$queryRawUnsafe(`${sqlFitnessTransactionsJoined()} WHERE ft.id = ?`, insertId);
       emitFitnessChanged();
 
       let receipt_invoice_id = null;
@@ -1704,14 +1537,7 @@ async function createTransaction(req, res) {
         data: { ...rows[0], receipt_invoice_id },
       });
     } catch (err) {
-      try {
-        await conn.rollback();
-      } catch {
-        /* ignore */
-      }
       throw err;
-    } finally {
-      conn.release();
     }
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1760,14 +1586,11 @@ async function updateTransaction(req, res) {
       if (err) return sendValidationError(res, err);
     }
 
-    await mainPool.execute(
-      `UPDATE fitness_transactions
-       SET transaction_date = ?, payment_due_date = ?, product_plan = ?, type = ?, mrp_inr = ?, rate_inr = ?, received_inr = ?, pending_inr = ?, cost_inr = ?, pay_mode = ?, notes = ?
-       WHERE id = ?`,
-      [transaction_date, payment_due_date || null, product_plan, type, mrp_inr, rate_inr, received_inr, pending_inr, cost_inr, pay_mode, notes, id]
-    );
+    await prisma.$executeRaw`UPDATE fitness_transactions
+       SET transaction_date = ${transaction_date}, payment_due_date = ${payment_due_date || null}, product_plan = ${product_plan}, type = ${type}, mrp_inr = ${mrp_inr}, rate_inr = ${rate_inr}, received_inr = ${received_inr}, pending_inr = ${pending_inr}, cost_inr = ${cost_inr}, pay_mode = ${pay_mode}, notes = ${notes}
+       WHERE id = ${id}`;
 
-    const [rows] = await mainPool.execute(`${sqlFitnessTransactionsJoined()} WHERE ft.id = ?`, [id]);
+    const rows = await prisma.$queryRawUnsafe(`${sqlFitnessTransactionsJoined()} WHERE ft.id = ?`, id);
     if (!rows.length) {
       return res.status(404).json({ success: false, message: "Transaction not found" });
     }
@@ -1781,10 +1604,8 @@ async function updateTransaction(req, res) {
 async function deleteTransaction(req, res) {
   try {
     const { id } = req.params;
-    const [result] = await mainPool.execute(
-      "DELETE FROM fitness_transactions WHERE id = ?", [id]
-    );
-    if (result.affectedRows === 0) {
+    const result = await prisma.$executeRaw`DELETE FROM fitness_transactions WHERE id = ${id}`;
+    if (result === 0) {
       return res.status(404).json({ success: false, message: "Transaction not found" });
     }
     emitFitnessChanged();
@@ -1815,8 +1636,7 @@ async function getExternalBuyers(req, res) {
   try {
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
     const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
-    const [rows] = await mainPool.execute(
-      `SELECT feb.id, feb.full_name, feb.phone, feb.referred_by_client_id, feb.notes, feb.created_at, feb.updated_at,
+    const rows = await prisma.$queryRawUnsafe(`SELECT feb.id, feb.full_name, feb.phone, feb.referred_by_client_id, feb.notes, feb.created_at, feb.updated_at,
         COALESCE(SUM(ft.received_inr), 0) AS lifetime_received,
         COUNT(ft.id) AS visit_count,
         MAX(ft.transaction_date) AS last_visit,
@@ -1826,9 +1646,7 @@ async function getExternalBuyers(req, res) {
        LEFT JOIN fitness_clients fc ON feb.referred_by_client_id = fc.client_id
        GROUP BY feb.id
        ORDER BY last_visit IS NULL, last_visit DESC, feb.id DESC
-       LIMIT ? OFFSET ?`,
-      [limit, offset]
-    );
+       LIMIT ? OFFSET ?`, limit, offset);
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1851,23 +1669,19 @@ async function getExternalStats(req, res) {
       dateCond = " AND ft.transaction_date <= ?";
       params.push(toStr);
     }
-    const [[agg]] = await mainPool.execute(
-      `SELECT COUNT(*) AS transaction_count,
+    const aggRows = await prisma.$queryRawUnsafe(`SELECT COUNT(*) AS transaction_count,
         COALESCE(SUM(ft.received_inr), 0) AS total_received,
         COALESCE(SUM(ft.received_inr - ft.cost_inr), 0) AS total_profit,
         COUNT(DISTINCT ft.external_buyer_id) AS distinct_buyers
        FROM fitness_transactions ft
-       WHERE ft.external_buyer_id IS NOT NULL ${dateCond}`,
-      params
-    );
-    const [[repeatRow]] = await mainPool.execute(
-      `SELECT COUNT(*) AS repeat_buyers FROM (
+       WHERE ft.external_buyer_id IS NOT NULL ${dateCond}`, ...params);
+    const agg = aggRows[0];
+    const repeatRows = await prisma.$queryRawUnsafe(`SELECT COUNT(*) AS repeat_buyers FROM (
          SELECT ft.external_buyer_id FROM fitness_transactions ft
          WHERE ft.external_buyer_id IS NOT NULL ${dateCond}
          GROUP BY ft.external_buyer_id HAVING COUNT(*) > 1
-       ) t`,
-      params
-    );
+       ) t`, ...params);
+    const repeatRow = repeatRows[0];
     res.json({
       success: true,
       data: {
@@ -1900,7 +1714,7 @@ async function searchExternalBuyers(req, res) {
       params.push(`%${qDigits}%`);
     }
     sql += " ORDER BY id DESC LIMIT 30";
-    const [rows] = await mainPool.execute(sql, params);
+    const rows = await prisma.$queryRawUnsafe(sql, ...params);
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1913,7 +1727,7 @@ async function getTransactionSummary(req, res) {
     const currentYear = new Date().getFullYear();
 
     if (period === 'yearly') {
-      const [rows] = await mainPool.execute(`
+      const rows = await prisma.$queryRaw`
         SELECT
           SUM(received_inr) as total_received,
           SUM(pending_inr) as total_pending,
@@ -1923,13 +1737,13 @@ async function getTransactionSummary(req, res) {
           SUM(CASE WHEN type = 'Supplement' THEN received_inr ELSE 0 END) as supplement_rev,
           COUNT(*) as total_transactions
         FROM fitness_transactions
-        WHERE YEAR(transaction_date) = ?
-      `, [currentYear]);
+        WHERE YEAR(transaction_date) = ${currentYear}
+      `;
       return res.json({ success: true, data: rows[0] });
     }
 
     // Monthly summary for current year
-    const [rows] = await mainPool.execute(`
+    const rows = await prisma.$queryRaw`
       SELECT
         DATE_FORMAT(transaction_date, '%Y-%m') as month,
         SUM(received_inr) as received,
@@ -1940,10 +1754,10 @@ async function getTransactionSummary(req, res) {
         SUM(CASE WHEN type = 'Supplement' THEN received_inr ELSE 0 END) as supplement,
         COUNT(*) as transactions
       FROM fitness_transactions
-      WHERE YEAR(transaction_date) = ?
+      WHERE YEAR(transaction_date) = ${currentYear}
       GROUP BY DATE_FORMAT(transaction_date, '%Y-%m')
       ORDER BY month
-    `, [currentYear]);
+    `;
 
     // Fill missing months with zeros
     const months = [];
@@ -2003,38 +1817,30 @@ async function getFitnessTransactionCharts(req, res) {
       return res.status(400).json({ success: false, message: "date_from must be on or before date_to" });
     }
 
-    const [byType] = await mainPool.execute(
-      `SELECT COALESCE(type, 'Other') AS key_label,
+    const byType = await prisma.$queryRaw`SELECT COALESCE(type, 'Other') AS key_label,
               SUM(received_inr) AS received,
               SUM(pending_inr) AS pending,
               SUM(received_inr - cost_inr) AS profit,
               COUNT(*) AS cnt
        FROM fitness_transactions
-       WHERE transaction_date >= ? AND transaction_date <= ?
+       WHERE transaction_date >= ${fromStr} AND transaction_date <= ${toStr}
        GROUP BY COALESCE(type, 'Other')
-       ORDER BY received DESC`,
-      [fromStr, toStr]
-    );
-    const [byPayMode] = await mainPool.execute(
-      `SELECT COALESCE(pay_mode, 'Unknown') AS key_label,
+       ORDER BY received DESC`;
+    const byPayMode = await prisma.$queryRaw`SELECT COALESCE(pay_mode, 'Unknown') AS key_label,
               SUM(received_inr) AS received,
               SUM(pending_inr) AS pending,
               COUNT(*) AS cnt
        FROM fitness_transactions
-       WHERE transaction_date >= ? AND transaction_date <= ?
+       WHERE transaction_date >= ${fromStr} AND transaction_date <= ${toStr}
        GROUP BY COALESCE(pay_mode, 'Unknown')
-       ORDER BY received DESC`,
-      [fromStr, toStr]
-    );
-    const [[totals]] = await mainPool.execute(
-      `SELECT SUM(received_inr) AS received,
+       ORDER BY received DESC`;
+    const totalsRows = await prisma.$queryRaw`SELECT SUM(received_inr) AS received,
               SUM(pending_inr) AS pending,
               SUM(received_inr - cost_inr) AS profit,
               COUNT(*) AS cnt
        FROM fitness_transactions
-       WHERE transaction_date >= ? AND transaction_date <= ?`,
-      [fromStr, toStr]
-    );
+       WHERE transaction_date >= ${fromStr} AND transaction_date <= ${toStr}`;
+    const totals = totalsRows[0];
 
     const num = (v) => Number(v) || 0;
     res.json({
@@ -2109,7 +1915,7 @@ async function getRevenueSplit(req, res) {
     const dietCond = `type IN ('Membership','Other')`;
     const supCond = `type = 'Supplement'`;
 
-    const [[periodAgg]] = await mainPool.execute(
+    const periodAggRows = await prisma.$queryRawUnsafe(
       `SELECT
          SUM(CASE WHEN ${dietCond} THEN received_inr ELSE 0 END) AS diet_received,
          SUM(CASE WHEN ${dietCond} THEN pending_inr ELSE 0 END) AS diet_pending,
@@ -2123,12 +1929,13 @@ async function getRevenueSplit(req, res) {
          SUM(CASE WHEN ${supCond} THEN 1 ELSE 0 END) AS sup_count
        FROM fitness_transactions
        WHERE transaction_date >= ? AND transaction_date <= ?`,
-      [fromStr, toStr]
+      fromStr, toStr
     );
+    const periodAgg = periodAggRows[0];
 
     const endYear = today.getFullYear();
     const startYear = endYear - 9;
-    const [yearRows] = await mainPool.execute(
+    const yearRows = await prisma.$queryRawUnsafe(
       `SELECT
          YEAR(transaction_date) AS yr,
          SUM(CASE WHEN ${dietCond} THEN received_inr ELSE 0 END) AS diet_received,
@@ -2143,7 +1950,7 @@ async function getRevenueSplit(req, res) {
        WHERE YEAR(transaction_date) >= ? AND YEAR(transaction_date) <= ?
        GROUP BY YEAR(transaction_date)
        ORDER BY yr ASC`,
-      [startYear, endYear]
+      startYear, endYear
     );
 
     const byYear = new Map(yearRows.map((r) => [Number(r.yr), r]));
@@ -2235,7 +2042,7 @@ async function getRevenueSplit(req, res) {
 // ─────────────────────────────────────────────────────────────────
 async function getAllReferrals(req, res) {
   try {
-    const [rows] = await mainPool.execute(`
+    const rows = await prisma.$queryRaw`
       SELECT fr.*,
         rc.full_name as referrer_name, rc.client_id as referrer_client_id,
         rc.tier as referrer_tier,
@@ -2244,7 +2051,7 @@ async function getAllReferrals(req, res) {
       JOIN fitness_clients rc ON fr.referrer_client_id = rc.client_id
       JOIN fitness_clients nc ON fr.referred_client_id = nc.client_id
       ORDER BY fr.referral_date DESC
-    `);
+    `;
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -2254,12 +2061,12 @@ async function getAllReferrals(req, res) {
 async function getClientReferrals(req, res) {
   try {
     const { clientId } = req.params;
-    const [rows] = await mainPool.execute(`
+    const rows = await prisma.$queryRaw`
       SELECT fr.*, fc.full_name as referred_name
       FROM fitness_referrals fr
       JOIN fitness_clients fc ON fr.referred_client_id = fc.client_id
-      WHERE fr.referrer_client_id = ?
-    `, [clientId]);
+      WHERE fr.referrer_client_id = ${clientId}
+    `;
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -2269,11 +2076,11 @@ async function getClientReferrals(req, res) {
 async function getReferralsReceived(req, res) {
   try {
     const { clientId } = req.params;
-    const [rows] = await mainPool.execute(`
+    const rows = await prisma.$queryRaw`
       SELECT client_id, full_name, tier, status, plan_start_date
       FROM fitness_clients
-      WHERE referred_by_client_id = ?
-    `, [clientId]);
+      WHERE referred_by_client_id = ${clientId}
+    `;
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -2302,20 +2109,21 @@ async function createReferral(req, res) {
       return sendValidationError(res, 'Referrer and referred cannot be the same client');
     }
 
-    const [result] = await mainPool.execute(
-      `INSERT INTO fitness_referrals (referrer_client_id, referred_client_id, referral_date, notes)
-       VALUES (?, ?, ?, ?)`,
-      [referrer_client_id, referred_client_id, referral_date || new Date(), notes]
-    );
+    const insertId = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`INSERT INTO fitness_referrals (referrer_client_id, referred_client_id, referral_date, notes)
+       VALUES (${referrer_client_id}, ${referred_client_id}, ${referral_date || new Date()}, ${notes})`;
+      const r = await tx.$queryRaw`SELECT LAST_INSERT_ID() as id`;
+      return Number(r[0].id);
+    });
 
-    const [rows] = await mainPool.execute(`
+    const rows = await prisma.$queryRaw`
       SELECT fr.*,
         rc.full_name as referrer_name, nc.full_name as referred_name
       FROM fitness_referrals fr
       JOIN fitness_clients rc ON fr.referrer_client_id = rc.client_id
       JOIN fitness_clients nc ON fr.referred_client_id = nc.client_id
-      WHERE fr.id = ?
-    `, [result.insertId]);
+      WHERE fr.id = ${insertId}
+    `;
     emitFitnessChanged();
     res.status(201).json({ success: true, data: rows[0] });
   } catch (error) {
@@ -2326,10 +2134,8 @@ async function createReferral(req, res) {
 async function deleteReferral(req, res) {
   try {
     const { id } = req.params;
-    const [result] = await mainPool.execute(
-      "DELETE FROM fitness_referrals WHERE id = ?", [id]
-    );
-    if (result.affectedRows === 0) {
+    const result = await prisma.$executeRaw`DELETE FROM fitness_referrals WHERE id = ${id}`;
+    if (result === 0) {
       return res.status(404).json({ success: false, message: "Referral not found" });
     }
     emitFitnessChanged();
@@ -2345,10 +2151,7 @@ async function deleteReferral(req, res) {
 async function getClientTasks(req, res) {
   try {
     const { clientId } = req.params;
-    const [rows] = await mainPool.execute(
-      "SELECT * FROM fitness_client_tasks WHERE client_id = ? ORDER BY due_date ASC",
-      [clientId]
-    );
+    const rows = await prisma.$queryRaw`SELECT * FROM fitness_client_tasks WHERE client_id = ${clientId} ORDER BY due_date ASC`;
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -2380,15 +2183,14 @@ async function createClientTask(req, res) {
       if (err) return sendValidationError(res, err);
     }
 
-    const [result] = await mainPool.execute(
-      `INSERT INTO fitness_client_tasks (client_id, task_description, due_date, priority, status, period, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [clientId, task_description, due_date, priority || 'Medium', status || 'Open', period, notes]
-    );
+    const insertId = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`INSERT INTO fitness_client_tasks (client_id, task_description, due_date, priority, status, period, notes)
+       VALUES (${clientId}, ${task_description}, ${due_date}, ${priority || 'Medium'}, ${status || 'Open'}, ${period}, ${notes})`;
+      const r = await tx.$queryRaw`SELECT LAST_INSERT_ID() as id`;
+      return Number(r[0].id);
+    });
 
-    const [rows] = await mainPool.execute(
-      "SELECT * FROM fitness_client_tasks WHERE id = ?", [result.insertId]
-    );
+    const rows = await prisma.$queryRaw`SELECT * FROM fitness_client_tasks WHERE id = ${insertId}`;
     emitFitnessChanged();
     res.status(201).json({ success: true, data: rows[0] });
   } catch (error) {
@@ -2422,16 +2224,11 @@ async function updateClientTask(req, res) {
       if (err) return sendValidationError(res, err);
     }
 
-    await mainPool.execute(
-      `UPDATE fitness_client_tasks
-       SET task_description = ?, due_date = ?, priority = ?, status = ?, period = ?, completed_on = ?, notes = ?
-       WHERE id = ?`,
-      [task_description, due_date, priority, status, period, completed_on, notes, id]
-    );
+    await prisma.$executeRaw`UPDATE fitness_client_tasks
+       SET task_description = ${task_description}, due_date = ${due_date}, priority = ${priority}, status = ${status}, period = ${period}, completed_on = ${completed_on}, notes = ${notes}
+       WHERE id = ${id}`;
 
-    const [rows] = await mainPool.execute(
-      "SELECT * FROM fitness_client_tasks WHERE id = ?", [id]
-    );
+    const rows = await prisma.$queryRaw`SELECT * FROM fitness_client_tasks WHERE id = ${id}`;
     if (!rows.length) {
       return res.status(404).json({ success: false, message: "Task not found" });
     }
@@ -2460,14 +2257,9 @@ async function patchClientTaskStatus(req, res) {
       if (err) return sendValidationError(res, err);
     }
 
-    await mainPool.execute(
-      "UPDATE fitness_client_tasks SET status = ?, completed_on = ? WHERE id = ?",
-      [status, completed_on, id]
-    );
+    await prisma.$executeRaw`UPDATE fitness_client_tasks SET status = ${status}, completed_on = ${completed_on} WHERE id = ${id}`;
 
-    const [rows] = await mainPool.execute(
-      "SELECT * FROM fitness_client_tasks WHERE id = ?", [id]
-    );
+    const rows = await prisma.$queryRaw`SELECT * FROM fitness_client_tasks WHERE id = ${id}`;
     if (!rows.length) {
       return res.status(404).json({ success: false, message: "Task not found" });
     }
@@ -2482,10 +2274,8 @@ async function patchClientTaskStatus(req, res) {
 async function deleteClientTask(req, res) {
   try {
     const { id } = req.params;
-    const [result] = await mainPool.execute(
-      "DELETE FROM fitness_client_tasks WHERE id = ?", [id]
-    );
-    if (result.affectedRows === 0) {
+    const result = await prisma.$executeRaw`DELETE FROM fitness_client_tasks WHERE id = ${id}`;
+    if (result === 0) {
       return res.status(404).json({ success: false, message: "Task not found" });
     }
     emitFitnessChanged();
@@ -2500,12 +2290,12 @@ async function deleteClientTask(req, res) {
 // ─────────────────────────────────────────────────────────────────
 async function getAllMealPlans(req, res) {
   try {
-    const [rows] = await mainPool.execute(`
+    const rows = await prisma.$queryRaw`
       SELECT mp.*, fc.full_name
       FROM fitness_meal_plans mp
       JOIN fitness_clients fc ON mp.client_id = fc.client_id
       ORDER BY mp.created_at DESC
-    `);
+    `;
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -2515,10 +2305,7 @@ async function getAllMealPlans(req, res) {
 async function getMealPlans(req, res) {
   try {
     const { clientId } = req.params;
-    const [rows] = await mainPool.execute(
-      "SELECT * FROM fitness_meal_plans WHERE client_id = ? ORDER BY created_at DESC",
-      [clientId]
-    );
+    const rows = await prisma.$queryRaw`SELECT * FROM fitness_meal_plans WHERE client_id = ${clientId} ORDER BY created_at DESC`;
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -2533,13 +2320,14 @@ async function createMealPlan(req, res) {
     if (!clientId) return sendValidationError(res, 'Client ID required');
     if (!plan_name) return sendValidationError(res, 'Plan name required');
 
-    const [result] = await mainPool.execute(
-      `INSERT INTO fitness_meal_plans (client_id, plan_name, start_date, end_date, calories, protein_g, carbs_g, fats_g, plan_pdf_url, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [clientId, plan_name, start_date, end_date, calories, protein_g, carbs_g, fats_g, plan_pdf_url, notes]
-    );
+    const insertId = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`INSERT INTO fitness_meal_plans (client_id, plan_name, start_date, end_date, calories, protein_g, carbs_g, fats_g, plan_pdf_url, notes)
+       VALUES (${clientId}, ${plan_name}, ${start_date}, ${end_date}, ${calories}, ${protein_g}, ${carbs_g}, ${fats_g}, ${plan_pdf_url}, ${notes})`;
+      const r = await tx.$queryRaw`SELECT LAST_INSERT_ID() as id`;
+      return Number(r[0].id);
+    });
 
-    const [rows] = await mainPool.execute("SELECT * FROM fitness_meal_plans WHERE id = ?", [result.insertId]);
+    const rows = await prisma.$queryRaw`SELECT * FROM fitness_meal_plans WHERE id = ${insertId}`;
     emitFitnessChanged();
     res.status(201).json({ success: true, data: rows[0] });
   } catch (error) {
@@ -2550,8 +2338,8 @@ async function createMealPlan(req, res) {
 async function deleteMealPlan(req, res) {
   try {
     const { id } = req.params;
-    const [result] = await mainPool.execute("DELETE FROM fitness_meal_plans WHERE id = ?", [id]);
-    if (result.affectedRows === 0) {
+    const result = await prisma.$executeRaw`DELETE FROM fitness_meal_plans WHERE id = ${id}`;
+    if (result === 0) {
       return res.status(404).json({ success: false, message: "Meal plan not found" });
     }
     emitFitnessChanged();
@@ -2566,52 +2354,40 @@ async function deleteMealPlan(req, res) {
 // ─────────────────────────────────────────────────────────────────
 async function getDashboardStats(req, res) {
   try {
-    const [[{ active }]] = await mainPool.execute(
-      "SELECT COUNT(*) as active FROM fitness_clients WHERE status = 'Active'"
-    );
-    const [[{ onHold }]] = await mainPool.execute(
-      "SELECT COUNT(*) as onHold FROM fitness_clients WHERE status = 'Hold'"
-    );
-    const [[{ needAttention }]] = await mainPool.execute(
-      "SELECT COUNT(*) as needAttention FROM fitness_clients WHERE progress IN ('Poor', 'Very Poor')"
-    );
+    const activeRows = await prisma.$queryRaw`SELECT COUNT(*) as active FROM fitness_clients WHERE status = 'Active'`;
+    const onHoldRows = await prisma.$queryRaw`SELECT COUNT(*) as onHold FROM fitness_clients WHERE status = 'Hold'`;
+    const needAttentionRows = await prisma.$queryRaw`SELECT COUNT(*) as needAttention FROM fitness_clients WHERE progress IN ('Poor', 'Very Poor')`;
     const today = new Date().toISOString().split('T')[0];
-    const [[{ overdueFollowups }]] = await mainPool.execute(
-      "SELECT COUNT(*) as overdueFollowups FROM fitness_clients WHERE next_due_date < ? AND status = 'Active'",
-      [today]
-    );
+    const overdueFollowupsRows = await prisma.$queryRaw`SELECT COUNT(*) as overdueFollowups FROM fitness_clients WHERE next_due_date < ${today} AND status = 'Active'`;
     const nextWeek = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    const [[{ expiringSoon }]] = await mainPool.execute(
-      "SELECT COUNT(*) as expiringSoon FROM fitness_clients WHERE plan_expiry_date BETWEEN ? AND ? AND status = 'Active'",
-      [today, nextWeek]
-    );
-    const [[{ fiveStar }]] = await mainPool.execute(
-      "SELECT COUNT(*) as fiveStar FROM fitness_clients WHERE tier = 5"
-    );
-
-    const [[{ consultCount }]] = await mainPool.execute(
-      "SELECT COUNT(*) as count FROM fitness_consultations WHERE MONTH(consult_date) = MONTH(CURDATE()) AND YEAR(consult_date) = YEAR(CURDATE())"
-    );
-
-    const [[{ highRisk }]] = await mainPool.execute(`
+    const expiringSoonRows = await prisma.$queryRaw`SELECT COUNT(*) as expiringSoon FROM fitness_clients WHERE plan_expiry_date BETWEEN ${today} AND ${nextWeek} AND status = 'Active'`;
+    const fiveStarRows = await prisma.$queryRaw`SELECT COUNT(*) as fiveStar FROM fitness_clients WHERE tier = 5`;
+    const consultCountRows = await prisma.$queryRaw`SELECT COUNT(*) as count FROM fitness_consultations WHERE MONTH(consult_date) = MONTH(CURDATE()) AND YEAR(consult_date) = YEAR(CURDATE())`;
+    const highRiskRows = await prisma.$queryRaw`
       SELECT COUNT(*) as highRisk 
       FROM fitness_clients 
       WHERE progress IN ('Poor', 'Very Poor') 
-      OR next_due_date < ? 
-      OR plan_expiry_date <= ?
-    `, [today, nextWeek]);
-
-    const [notifRows] = await mainPool.execute(
-      `SELECT MIN(id) AS id, title, body, MIN(created_at) AS created_at, entity_type
+      OR next_due_date < ${today} 
+      OR plan_expiry_date <= ${nextWeek}
+    `;
+    const notifRows = await prisma.$queryRaw`
+      SELECT MIN(id) AS id, title, body, MIN(created_at) AS created_at, entity_type
        FROM notifications
-       WHERE user_id = ?
+       WHERE user_id = ${req.user.id}
          AND entity_type IN ('fitness_expiry', 'fitness_due')
          AND is_read = 0
        GROUP BY entity_type, entity_id, title, body
        ORDER BY MIN(created_at) DESC
-       LIMIT 5`,
-      [req.user.id]
-    );
+       LIMIT 5`;
+
+    const active = Number(activeRows[0]?.active || 0);
+    const onHold = Number(onHoldRows[0]?.onHold || 0);
+    const needAttention = Number(needAttentionRows[0]?.needAttention || 0);
+    const overdueFollowups = Number(overdueFollowupsRows[0]?.overdueFollowups || 0);
+    const expiringSoon = Number(expiringSoonRows[0]?.expiringSoon || 0);
+    const fiveStar = Number(fiveStarRows[0]?.fiveStar || 0);
+    const consultCount = Number(consultCountRows[0]?.count || 0);
+    const highRisk = Number(highRiskRows[0]?.highRisk || 0);
 
     res.json({
       success: true,
@@ -2634,7 +2410,7 @@ async function getDashboardStats(req, res) {
 
 async function getAnalyticsSources(req, res) {
   try {
-    const [rows] = await mainPool.execute(`
+    const rows = await prisma.$queryRaw`
       SELECT
         source,
         COUNT(*) as client_count,
@@ -2643,13 +2419,12 @@ async function getAnalyticsSources(req, res) {
       WHERE source IS NOT NULL
       GROUP BY source
       ORDER BY client_count DESC
-    `);
-    const [[{ total }]] = await mainPool.execute(
-      "SELECT COUNT(*) as total FROM fitness_clients WHERE source IS NOT NULL"
-    );
+    `;
+    const totalRows = await prisma.$queryRaw`SELECT COUNT(*) as total FROM fitness_clients WHERE source IS NOT NULL`;
+    const total = Number(totalRows[0].total);
     const data = rows.map(r => ({
       ...r,
-      pct_of_total: total ? Math.round((r.client_count / total) * 100) : 0,
+      pct_of_total: total ? Math.round((Number(r.client_count) / total) * 100) : 0,
     }));
     res.json({ success: true, data });
   } catch (error) {
@@ -2659,18 +2434,19 @@ async function getAnalyticsSources(req, res) {
 
 async function getAnalyticsTiers(req, res) {
   try {
-    const [rows] = await mainPool.execute(`
+    const rows = await prisma.$queryRaw`
       SELECT
         tier,
         COUNT(*) as client_count
       FROM fitness_clients
       GROUP BY tier
       ORDER BY tier DESC
-    `);
-    const [[{ total }]] = await mainPool.execute("SELECT COUNT(*) as total FROM fitness_clients");
+    `;
+    const totalRows = await prisma.$queryRaw`SELECT COUNT(*) as total FROM fitness_clients`;
+    const total = Number(totalRows[0].total);
     const data = rows.map(r => ({
       ...r,
-      pct_of_total: total ? Math.round((r.client_count / total) * 100) : 0,
+      pct_of_total: total ? Math.round((Number(r.client_count) / total) * 100) : 0,
     }));
     res.json({ success: true, data });
   } catch (error) {
@@ -2680,7 +2456,7 @@ async function getAnalyticsTiers(req, res) {
 
 async function getAnalyticsReferrers(req, res) {
   try {
-    const [rows] = await mainPool.execute(`
+    const rows = await prisma.$queryRaw`
       SELECT
         fc.client_id,
         fc.full_name,
@@ -2693,7 +2469,7 @@ async function getAnalyticsReferrers(req, res) {
       HAVING referral_count > 0
       ORDER BY referral_count DESC
       LIMIT 10
-    `);
+    `;
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -2703,7 +2479,7 @@ async function getAnalyticsReferrers(req, res) {
 async function getAnalyticsFinancial(req, res) {
   try {
     const currentYear = new Date().getFullYear();
-    const [rows] = await mainPool.execute(`
+    const rows = await prisma.$queryRaw`
       SELECT
         DATE_FORMAT(transaction_date, '%Y-%m') as month,
         SUM(received_inr) as received,
@@ -2711,10 +2487,10 @@ async function getAnalyticsFinancial(req, res) {
         SUM(cost_inr) as cost,
         SUM(received_inr - cost_inr) as profit
       FROM fitness_transactions
-      WHERE YEAR(transaction_date) = ?
+      WHERE YEAR(transaction_date) = ${currentYear}
       GROUP BY DATE_FORMAT(transaction_date, '%Y-%m')
       ORDER BY month
-    `, [currentYear]);
+    `;
 
     // Get last 3 months
     const last3 = rows.slice(-3);
@@ -2799,43 +2575,31 @@ const importClientsExcel = async (req, res) => {
       };
 
       try {
-        const [existing] = await mainPool.execute('SELECT id FROM fitness_clients WHERE client_id = ?', [clientId]);
+        const existing = await prisma.$queryRaw`SELECT id FROM fitness_clients WHERE client_id = ${clientId}`;
         
         if (existing.length > 0) {
-          await mainPool.execute(
-            `UPDATE fitness_clients SET 
-              full_name = ?, age = ?, phone = ?, email = ?, city = ?, address = ?, occupation = ?,
-              health_goal = ?, plan_type = ?, plan_start_date = ?, plan_expiry_date = ?, 
-              height_cm = ?, start_weight_kg = ?, current_weight_kg = ?, target_weight_kg = ?, bmi = ?,
-              referred_by_name = ?, status = ?, progress = ?, next_due_date = ?
-            WHERE client_id = ?`,
-            [
-              client.full_name, client.age, client.phone, client.email, client.city, client.address, client.occupation,
-              client.health_goal, client.plan_type, client.plan_start_date, client.plan_expiry_date,
-              client.height_cm, client.start_weight_kg, client.current_weight_kg, client.target_weight_kg, client.bmi,
-              client.referred_by_name, client.status, client.progress, client.next_due_date, clientId
-            ]
-          );
+          await prisma.$executeRaw`
+            UPDATE fitness_clients SET 
+              full_name = ${client.full_name}, age = ${client.age}, phone = ${client.phone}, email = ${client.email}, city = ${client.city}, address = ${client.address}, occupation = ${client.occupation},
+              health_goal = ${client.health_goal}, plan_type = ${client.plan_type}, plan_start_date = ${client.plan_start_date}, plan_expiry_date = ${client.plan_expiry_date}, 
+              height_cm = ${client.height_cm}, start_weight_kg = ${client.start_weight_kg}, current_weight_kg = ${client.current_weight_kg}, target_weight_kg = ${client.target_weight_kg}, bmi = ${client.bmi},
+              referred_by_name = ${client.referred_by_name}, status = ${client.status}, progress = ${client.progress}, next_due_date = ${client.next_due_date}
+            WHERE client_id = ${clientId}
+          `;
         } else {
-          await mainPool.execute(
-            `INSERT INTO fitness_clients (
+          await prisma.$executeRaw`
+            INSERT INTO fitness_clients (
               client_id, full_name, age, phone, email, city, address, occupation,
               health_goal, plan_type, plan_start_date, plan_expiry_date, 
               height_cm, start_weight_kg, current_weight_kg, target_weight_kg, bmi,
               referred_by_name, status, progress, next_due_date
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-              clientId, client.full_name, client.age, client.phone, client.email, client.city, client.address, client.occupation,
-              client.health_goal, client.plan_type, client.plan_start_date, client.plan_expiry_date,
-              client.height_cm, client.start_weight_kg, client.current_weight_kg, client.target_weight_kg, client.bmi,
-              client.referred_by_name, client.status, client.progress, client.next_due_date
-            ]
-          );
+            ) VALUES (${clientId}, ${client.full_name}, ${client.age}, ${client.phone}, ${client.email}, ${client.city}, ${client.address}, ${client.occupation},
+              ${client.health_goal}, ${client.plan_type}, ${client.plan_start_date}, ${client.plan_expiry_date}, 
+              ${client.height_cm}, ${client.start_weight_kg}, ${client.current_weight_kg}, ${client.target_weight_kg}, ${client.bmi},
+              ${client.referred_by_name}, ${client.status}, ${client.progress}, ${client.next_due_date})
+          `;
         }
-        const [syncedRows] = await mainPool.execute(
-          "SELECT * FROM fitness_clients WHERE client_id = ?",
-          [clientId]
-        );
+        const syncedRows = await prisma.$queryRaw`SELECT * FROM fitness_clients WHERE client_id = ${clientId}`;
         if (syncedRows[0]) {
           await syncClientDueTask(syncedRows[0], req.user?.id);
         }
@@ -2862,7 +2626,7 @@ const importClientsExcel = async (req, res) => {
 
 const exportClientsExcel = async (req, res) => {
   try {
-    const [clients] = await mainPool.execute('SELECT * FROM fitness_clients ORDER BY created_at DESC');
+    const clients = await prisma.$queryRaw`SELECT * FROM fitness_clients ORDER BY created_at DESC`;
     const worksheet = XLSX.utils.json_to_sheet(clients);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Clients');

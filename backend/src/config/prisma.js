@@ -34,7 +34,13 @@ function sanitizeQueryArgs(args) {
     // $executeRaw / $queryRaw template values
     return args.map((v) => (v === undefined ? null : omitUndefinedDeep(v)));
   }
-  if (typeof args === "object") {
+  if (typeof args === "object" && args !== null) {
+    // Preserve Prisma Sql objects by duck typing (they always have .strings and .values arrays)
+    if (Array.isArray(args.strings) && Array.isArray(args.values)) {
+      args.values = args.values.map((v) => (v === undefined ? null : v));
+      return args;
+    }
+    
     // Prisma may pass { values: [...] } for raw queries
     if (Array.isArray(args.values)) {
       return {

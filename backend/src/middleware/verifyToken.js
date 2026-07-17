@@ -1,5 +1,5 @@
 const jwt = require("jsonwebtoken");
-const { mainPool } = require("../config/database");
+const prisma = require("../config/prisma");
 const { getCookie, verifyAccessToken, REFRESH_COOKIE } = require("../services/authService");
 const { fetchUserRowById, isAdminRole } = require("../utils/userSchema");
 
@@ -149,11 +149,7 @@ async function verifyToken(req, res, next) {
     const canWriteLastLogin = !lastLoginWriteByUser.has(user.id) || now - lastLoginWriteByUser.get(user.id) > LAST_LOGIN_WINDOW_MS;
     if (canWriteLastLogin) {
       lastLoginWriteByUser.set(user.id, now);
-      mainPool
-        .execute(
-          "UPDATE users SET last_login = NOW() WHERE id = ? AND (last_login IS NULL OR last_login < DATE_SUB(NOW(), INTERVAL 5 MINUTE))",
-          [user.id]
-        )
+      prisma.$executeRaw`UPDATE users SET last_login = NOW() WHERE id = ${user.id} AND (last_login IS NULL OR last_login < DATE_SUB(NOW(), INTERVAL 5 MINUTE))`
         .catch(() => { });
     }
 

@@ -1,6 +1,5 @@
 const express = require("express");
 const { verifyToken, requireAdmin } = require("../middleware/verifyToken");
-const { mainPool } = require("../config/database");
 const { emitWorkspaceAccessChanged } = require("../realtime/meetingsRealtime");
 const { clearMustChangePassword, updateProfile, listUsers } = require("../controllers/userController");
 

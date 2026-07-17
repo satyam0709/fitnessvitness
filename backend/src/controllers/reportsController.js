@@ -203,7 +203,7 @@ async function getActivityReport(req, res) {
     const rows = await prisma.$queryRaw`
       SELECT
         u.id AS user_id,
-        u.full_name AS user_name,
+        TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))) AS user_name,
         u.email,
         COALESCE(t.tasks_completed, 0) AS tasks_completed,
         COALESCE(n.notes_added, 0) AS notes_added,

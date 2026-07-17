@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 const bcrypt = require("bcrypt");
-const { mainPool } = require("../config/database");
+const prisma = require("../config/prisma");
 const { sendPasswordReset } = require("../services/emailService");
 const {
   hashPassword,
@@ -227,14 +227,23 @@ function publicUserRow(row) {
 
 
 async function loadUserById(id) {
-  const [rows] = await mainPool.execute(
-    `SELECT id, email, full_name, role, is_active,
-            COALESCE(email_verified, 0) AS email_verified,
-            password_hash
-     FROM users WHERE id = ? LIMIT 1`,
-    [Number(id)]
-  );
-  return rows[0] || null;
+  const user = await prisma.users.findUnique({
+    where: { id: Number(id) },
+    select: {
+      id: true,
+      email: true,
+      first_name: true,
+      last_name: true,
+      role: true,
+      is_active: true,
+      email_verified: true,
+      password_hash: true
+    }
+  });
+  if (user) {
+    user.full_name = [user.first_name, user.last_name].filter(Boolean).join(" ");
+  }
+  return user || null;
 }
 
 async function login(req, res) {
@@ -254,12 +263,13 @@ async function login(req, res) {
       });
     }
 
-    // FIXED: login reads user directly via mainPool (no transaction connection)
-    const [rows] = await mainPool.execute(
-      `SELECT * FROM users WHERE email = ? LIMIT 1`,
-      [email]
-    );
-    let user = rows[0];
+    // FIXED: login reads user directly via prisma
+    const user = await prisma.users.findUnique({
+      where: { email: email }
+    });
+    if (user) {
+      user.full_name = [user.first_name, user.last_name].filter(Boolean).join(" ");
+    }
     if (!user) {
       console.log('[auth] Login failed: user not found');
       return res.status(401).json({
@@ -386,11 +396,14 @@ async function refresh(req, res) {
     }
 
     const tokenHash = sha256hex(validTokenRaw);
-    const [tokRows] = await mainPool.execute(
-      `SELECT id FROM refresh_tokens WHERE token_hash = ? AND user_id = ? AND expires_at > NOW() LIMIT 1`,
-      [tokenHash, userId]
-    );
-    if (!tokRows.length) {
+    const tokRow = await prisma.refresh_tokens.findFirst({
+      where: {
+        token_hash: tokenHash,
+        user_id: userId,
+        expires_at: { gt: new Date() }
+      }
+    });
+    if (!tokRow) {
       return res.status(401).json({ success: false, message: "Refresh token revoked or expired" });
     }
 
@@ -450,11 +463,12 @@ async function forgotPassword(req, res) {
       return res.status(400).json({ success: false, message: "email is required." });
     }
 
-    const [rows] = await mainPool.execute(
-      `SELECT id, email, first_name FROM users WHERE LOWER(email) = ? LIMIT 1`,
-      [email]
-    );
-    const user = rows[0];
+    const user = await prisma.users.findFirst({
+      where: { email: { equals: email } }
+    });
+    if (user) {
+      user.full_name = [user.first_name, user.last_name].filter(Boolean).join(" ");
+    }
     if (!user) {
       return res.json(generic);
     }
@@ -462,10 +476,14 @@ async function forgotPassword(req, res) {
     const plain = crypto.randomBytes(RESET_TOKEN_BYTES).toString("hex");
     const tokenHash = sha256hex(plain);
     const expires = new Date(Date.now() + RESET_EXPIRY_HOURS * 60 * 60 * 1000);
-    await mainPool.execute(
-      `UPDATE users SET password_reset_token = ?, password_reset_expires = ?, updated_at = NOW() WHERE id = ?`,
-      [tokenHash, expires, user.id]
-    );
+    await prisma.users.update({
+      where: { id: user.id },
+      data: {
+        password_reset_token: tokenHash,
+        password_reset_expires: expires,
+        updated_at: new Date()
+      }
+    });
 
     const link = `${frontendBaseUrl()}/reset-password?token=${encodeURIComponent(plain)}`;
     // FIXED: 11 emailService bad SMTP should not block password reset response
@@ -494,23 +512,27 @@ async function resetPassword(req, res) {
     }
 
     const tokenHash = sha256hex(token);
-    const [rows] = await mainPool.execute(
-      `SELECT id FROM users
-       WHERE password_reset_token = ? AND password_reset_expires IS NOT NULL AND password_reset_expires > NOW()
-       LIMIT 1`,
-      [tokenHash]
-    );
-    if (!rows.length) {
+    const user = await prisma.users.findFirst({
+      where: {
+        password_reset_token: tokenHash,
+        password_reset_expires: { gt: new Date() }
+      }
+    });
+    if (!user) {
       return res.status(400).json({ success: false, message: "Invalid or expired reset token." });
     }
 
-    const userId = rows[0].id;
+    const userId = user.id;
     const pw = await hashPassword(newPassword);
-    await mainPool.execute(
-      `UPDATE users SET password_hash = ?, password_reset_token = NULL, password_reset_expires = NULL, updated_at = NOW()
-       WHERE id = ?`,
-      [pw, userId]
-    );
+    await prisma.users.update({
+      where: { id: userId },
+      data: {
+        password_hash: pw,
+        password_reset_token: null,
+        password_reset_expires: null,
+        updated_at: new Date()
+      }
+    });
     await revokeAllUserTokens(userId);
 
     res.json({ success: true, message: "Password updated. You can sign in with your new password." });
@@ -541,14 +563,20 @@ async function signup(req, res) {
 
     let userId;
     try {
-      const [ins] = await mainPool.execute(
-        `INSERT INTO users (email, password_hash, full_name, role, is_active, email_verified)
-          VALUES (?, ?, ?, 'manager', 1, 0)`,
-        [emailNorm, pwHash, name]
-      );
-      userId = ins.insertId;
+      const newUser = await prisma.users.create({
+        data: {
+          email: emailNorm,
+          password_hash: pwHash,
+          first_name: firstName,
+          last_name: lastName,
+          role: "manager",
+          is_active: true,
+          email_verified: false
+        }
+      });
+      userId = newUser.id;
     } catch (e) {
-      if (e.code === "ER_DUP_ENTRY") {
+      if (e.code === "P2002") {
         return res.status(409).json({ success: false, message: "An account with this email already exists." });
       }
       throw e;
@@ -589,8 +617,10 @@ async function updatePassword(req, res) {
       return res.status(400).json({ success: false, message: "New password must be at least 8 characters." });
     }
 
-    const [rows] = await mainPool.execute(`SELECT password_hash FROM users WHERE id = ? LIMIT 1`, [userId]);
-    const user = rows[0];
+    const user = await prisma.users.findUnique({
+      where: { id: userId },
+      select: { password_hash: true }
+    });
     if (!user) return res.status(404).json({ success: false, message: "User not found." });
 
     if (user.password_hash && currentPassword) {
@@ -603,7 +633,13 @@ async function updatePassword(req, res) {
     }
 
     const pwHash = await hashPassword(newPassword);
-    await mainPool.execute(`UPDATE users SET password_hash = ?, updated_at = NOW() WHERE id = ?`, [pwHash, userId]);
+    await prisma.users.update({
+      where: { id: userId },
+      data: {
+        password_hash: pwHash,
+        updated_at: new Date()
+      }
+    });
 
     res.json({ success: true, message: "Password updated successfully." });
   } catch (err) {

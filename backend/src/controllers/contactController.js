@@ -1,4 +1,4 @@
-const { mainPool } = require("../config/database");
+const prisma = require("../config/prisma");
 const { emitAdminChanged } = require("../realtime/meetingsRealtime");
 
 function tenantIdFromReq(req) {
@@ -18,8 +18,6 @@ async function submitContact(req, res) {
 
     const { name, phone, email, message, type = "contact" } = req.body;
 
-    // here date check and verify
-
     if (!name || !phone || !email) {
       return res.status(422).json({
         success: false,
@@ -35,20 +33,21 @@ async function submitContact(req, res) {
       });
     }
 
-    const [result] = await mainPool.execute(
-      `INSERT INTO contact_requests (tenant_id, name, phone, email, message, type, created_by, assigned_to)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [tenantId, name, phone, email, message || null, type, req.user?.id || null, req.user?.id || null]
-    );
+    const insertId = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`INSERT INTO contact_requests (tenant_id, name, phone, email, message, type, created_by, assigned_to)
+       VALUES (${tenantId}, ${name}, ${phone}, ${email}, ${message || null}, ${type}, ${req.user?.id || null}, ${req.user?.id || null})`;
+      const rows = await tx.$queryRaw`SELECT LAST_INSERT_ID() as id`;
+      return Number(rows[0].id);
+    });
 
-    emitAdminChanged({ scope: "contacts", action: "new_request", id: result.insertId });
+    emitAdminChanged({ scope: "contacts", action: "new_request", id: insertId });
     res.status(201).json({
       success: true,
       message:
         type === "demo"
           ? "Demo request received! We'll contact you within 24 hours."
           : "Message sent! We'll get back to you shortly.",
-      data: { id: result.insertId },
+      data: { id: insertId },
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -63,28 +62,23 @@ async function getContacts(req, res) {
     }
 
     const { type, is_read } = req.query;
-    let where = "WHERE 1=1";
-    const params = [tenantId];
-
-    where += " AND tenant_id = ?";
+    
+    // We construct the query string manually since we use raw query, but we pass parameters for safety
+    // Using Prisma.sql to build raw query safely
+    const { Prisma } = require("../generated/prisma");
+    let queryArgs = [Prisma.sql`tenant_id = ${tenantId}`];
 
     if (type) {
-      where += " AND type = ?";
-      params.push(type);
+      queryArgs.push(Prisma.sql`type = ${type}`);
     }
     if (is_read !== undefined) {
-      where += " AND is_read = ?";
-      params.push(is_read === "true" ? 1 : 0);
+      queryArgs.push(Prisma.sql`is_read = ${is_read === "true" ? 1 : 0}`);
     }
     if (isStaff(req)) {
-      where += " AND (assigned_to = ? OR created_by = ?)";
-      params.push(req.user.id, req.user.id);
+      queryArgs.push(Prisma.sql`(assigned_to = ${req.user.id} OR created_by = ${req.user.id})`);
     }
 
-    const [rows] = await mainPool.execute(
-      `SELECT * FROM contact_requests ${where} ORDER BY created_at DESC`,
-      params
-    );
+    const rows = await prisma.$queryRaw`SELECT * FROM contact_requests WHERE ${Prisma.join(queryArgs, " AND ")} ORDER BY created_at DESC`;
 
     res.json({ success: true, total: rows.length, data: rows });
   } catch (err) {
@@ -100,13 +94,14 @@ async function markAsRead(req, res) {
     }
 
     const { id } = req.params;
-    const params = [id, tenantId];
-    let sql = "UPDATE contact_requests SET is_read = 1 WHERE id = ? AND tenant_id = ?";
+    const { Prisma } = require("../generated/prisma");
+    
+    let whereClause = Prisma.sql`id = ${id} AND tenant_id = ${tenantId}`;
     if (isStaff(req)) {
-      sql += " AND (assigned_to = ? OR created_by = ?)";
-      params.push(req.user.id, req.user.id);
+      whereClause = Prisma.sql`${whereClause} AND (assigned_to = ${req.user.id} OR created_by = ${req.user.id})`;
     }
-    await mainPool.execute(sql, params);
+    
+    await prisma.$executeRaw`UPDATE contact_requests SET is_read = 1 WHERE ${whereClause}`;
     emitAdminChanged({ scope: "contacts", action: "mark_read", id });
     res.json({ success: true, message: "Marked as read" });
   } catch (err) {
