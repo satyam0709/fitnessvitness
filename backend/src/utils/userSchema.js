@@ -1,70 +1,43 @@
-const { mainPool } = require("../config/database");
+const prisma = require("../config/prisma");
 
-let usersColumnsCache = null;
 const userCache = new Map();
 const USER_CACHE_TTL = 15000; // 15 seconds
-
-async function getUsersColumns(pool = mainPool) {
-  if (usersColumnsCache) return usersColumnsCache;
-  const [rows] = await pool.execute(
-    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users'`
-  );
-  usersColumnsCache = new Set(rows.map((r) => r.COLUMN_NAME));
-  return usersColumnsCache;
-}
-
-function clearUsersColumnsCache() {
-  usersColumnsCache = null;
-}
-
-function userNameSelectSql(cols, alias = "u") {
-  if (cols.has("full_name")) {
-    return `${alias}.full_name`;
-  }
-  if (cols.has("first_name") || cols.has("last_name")) {
-    return `TRIM(CONCAT_WS(' ', ${alias}.first_name, ${alias}.last_name)) AS full_name`;
-  }
-  return `'' AS full_name`;
-}
 
 function isAdminRole(role) {
   const r = String(role || "").toLowerCase();
   return r === "admin" || r === "owner" || r === "manager";
 }
 
-async function fetchUserRowById(userId, pool = mainPool) {
+async function fetchUserRowById(userId) {
   const now = Date.now();
   const cached = userCache.get(userId);
   if (cached && (now - cached.time < USER_CACHE_TTL)) {
     return cached.data;
   }
 
-  const cols = await getUsersColumns(pool);
-  if (!cols.size) return null;
+  const result = await prisma.users.findUnique({
+    where: { id: userId },
+    select: {
+      id: true,
+      email: true,
+      first_name: true,
+      last_name: true,
+      role: true,
+      is_active: true,
+      created_at: true,
+      is_platform_admin: true,
+      must_change_password: true,
+    }
+  });
 
-  const nameSel = userNameSelectSql(cols, "u");
-  const lastLogin = cols.has("last_login") ? "u.last_login" : "NULL AS last_login";
-  const isPlatformAdmin = cols.has("is_platform_admin")
-    ? "u.is_platform_admin"
-    : "0 AS is_platform_admin";
-  const mustChange = cols.has("must_change_password")
-    ? "u.must_change_password"
-    : "0 AS must_change_password";
-
-  const [rows] = await pool.execute(
-    `SELECT u.id, u.email, ${nameSel}, u.role, u.is_active,
-            ${lastLogin}, u.created_at, ${isPlatformAdmin}, ${mustChange}
-     FROM users u
-     WHERE u.id = ?
-     LIMIT 1`,
-    [userId]
-  );
-  const result = rows[0] || null;
   if (result) {
-    userCache.set(userId, { data: result, time: now });
+    // Map full_name as expected by legacy code
+    const full_name = [result.first_name, result.last_name].filter(Boolean).join(" ");
+    const mapped = { ...result, full_name };
+    userCache.set(userId, { data: mapped, time: now });
+    return mapped;
   }
-  return result;
+  return null;
 }
 
 function clearUserCache(userId) {
@@ -93,11 +66,8 @@ function mapUserRowToProfile(row, jwtRole) {
 }
 
 module.exports = {
-  getUsersColumns,
-  clearUsersColumnsCache,
   fetchUserRowById,
   clearUserCache,
   mapUserRowToProfile,
   isAdminRole,
-  userNameSelectSql,
 };

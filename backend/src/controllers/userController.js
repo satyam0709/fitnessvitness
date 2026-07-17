@@ -1,9 +1,7 @@
-const { mainPool } = require("../config/database");
+const prisma = require("../config/prisma");
 const {
   fetchUserRowById,
   mapUserRowToProfile,
-  getUsersColumns,
-  userNameSelectSql,
   clearUserCache,
 } = require("../utils/userSchema");
 
@@ -26,12 +24,9 @@ async function getMe(req, res) {
       });
     }
 
-    const cols = await getUsersColumns();
-    if (cols.has("last_login")) {
-      mainPool
-        .query("UPDATE users SET last_login = NOW() WHERE id = ?", [row.id])
-        .catch((err) => console.error("last_login update error:", err.message));
-    }
+    // Since last_login is not in Prisma schema, we can safely use $executeRaw
+    prisma.$executeRaw`UPDATE users SET last_login = NOW() WHERE id = ${row.id}`
+      .catch((err) => console.error("last_login update error:", err.message));
 
     return res.json({
       success: true,
@@ -73,14 +68,16 @@ async function clearMustChangePassword(req, res) {
     if (uid == null) {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
-    const cols = await getUsersColumns();
-    if (cols.has("must_change_password")) {
-      await mainPool.query(
-        "UPDATE users SET must_change_password = 0, updated_at = NOW() WHERE id = ?",
-        [uid]
-      );
-      clearUserCache(uid);
-    }
+    
+    await prisma.users.update({
+      where: { id: uid },
+      data: {
+        must_change_password: false,
+        updated_at: new Date()
+      }
+    });
+    
+    clearUserCache(uid);
     return res.json({ success: true });
   } catch (err) {
     console.error("clearMustChangePassword error:", err);
@@ -90,15 +87,21 @@ async function clearMustChangePassword(req, res) {
 
 async function listUsers(req, res) {
   try {
-    const cols = await getUsersColumns();
-    const nameSel = userNameSelectSql(cols);
-    const lastLogin = cols.has("last_login") ? "u.last_login" : "NULL AS last_login";
-    const [rows] = await mainPool.query(
-      `SELECT u.id, u.email, ${nameSel}, u.role, u.is_active, ${lastLogin}, u.created_at
-       FROM users u
-       ORDER BY u.created_at DESC`
-    );
-    res.json({ success: true, total: rows.length, data: rows });
+    const users = await prisma.users.findMany({
+      orderBy: { created_at: "desc" }
+    });
+    
+    const data = users.map(u => ({
+      id: u.id,
+      email: u.email,
+      full_name: `${u.first_name || ""} ${u.last_name || ""}`.trim(),
+      role: u.role,
+      is_active: u.is_active,
+      last_login: null,
+      created_at: u.created_at
+    }));
+
+    res.json({ success: true, total: data.length, data });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -110,35 +113,30 @@ async function updateProfile(req, res) {
     if (!userId) return res.status(401).json({ success: false, message: "Unauthorized" });
 
     const { firstName, lastName, full_name } = req.body;
-    const cols = await getUsersColumns();
-    const updates = [];
-    const params = [];
+    
+    const updateData = { updated_at: new Date() };
 
     let computedFullName = full_name;
     if (!computedFullName && (firstName !== undefined || lastName !== undefined)) {
       computedFullName = `${firstName || ""} ${lastName || ""}`.trim();
     }
-
-    if (cols.has("full_name") && computedFullName !== undefined) {
-      updates.push("full_name = ?");
-      params.push(computedFullName);
-    } else if (cols.has("first_name")) {
-      if (firstName !== undefined) {
-        updates.push("first_name = ?");
-        params.push(firstName);
-      }
-      if (lastName !== undefined && cols.has("last_name")) {
-        updates.push("last_name = ?");
-        params.push(lastName);
-      }
+    
+    // We update first_name and last_name since full_name isn't in schema
+    if (firstName !== undefined) updateData.first_name = firstName;
+    if (lastName !== undefined) updateData.last_name = lastName;
+    
+    // If full_name is provided but not first/last name, try to split it
+    if (computedFullName && firstName === undefined && lastName === undefined) {
+      const parts = computedFullName.split(" ");
+      updateData.first_name = parts[0] || "";
+      updateData.last_name = parts.slice(1).join(" ") || "";
     }
 
-    if (updates.length > 0) {
-      params.push(userId);
-      await mainPool.execute(
-        `UPDATE users SET ${updates.join(", ")}, updated_at = NOW() WHERE id = ?`,
-        params
-      );
+    if (Object.keys(updateData).length > 1) { // more than just updated_at
+      await prisma.users.update({
+        where: { id: userId },
+        data: updateData
+      });
       clearUserCache(userId);
     }
 

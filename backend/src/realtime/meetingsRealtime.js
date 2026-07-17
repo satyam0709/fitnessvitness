@@ -1,6 +1,6 @@
 const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
-const { mainPool } = require("../config/database");
+const prisma = require("../config/prisma");
 
 let ioRef = null;
 
@@ -78,17 +78,16 @@ function initMeetingsRealtime(httpServer) {
     const userId = socket.data.userId;
     if (!userId) return;
 
-    mainPool
-      .query(
-        "SELECT id, role, COALESCE(is_platform_admin, 0) AS is_platform_admin FROM users WHERE id = ? AND is_active = 1 LIMIT 1",
-        [userId]
-      )
-      .then(([rows]) => {
-        const row = rows?.[0];
+    prisma.users
+      .findFirst({
+        where: { id: userId, is_active: true },
+        select: { id: true, role: true, is_platform_admin: true }
+      })
+      .then((row) => {
         if (!row) return;
         socket.data.userDbId = row.id;
         socket.join(`user:${row.id}`);
-        if (Number(row.is_platform_admin) === 1) socket.join("admin");
+        if (row.is_platform_admin === true || row.is_platform_admin === 1) socket.join("admin");
       })
       .catch((err) => console.warn("socket user room:", err.message));
 
@@ -98,10 +97,10 @@ function initMeetingsRealtime(httpServer) {
         const dbId = socket.data.userDbId;
         const tid = Number(threadId);
         if (!dbId || !tid) return;
-        const [[m]] = await mainPool.execute(
-          "SELECT user_id FROM chat_thread_members WHERE thread_id = ? AND user_id = ? LIMIT 1",
-          [tid, dbId]
-        );
+        const m = await prisma.chat_thread_members.findFirst({
+          where: { thread_id: tid, user_id: dbId },
+          select: { user_id: true }
+        });
         if (!m) return;
         socket.join(`chat:thread:${tid}`);
       } catch (e) {
@@ -129,11 +128,11 @@ function initMeetingsRealtime(httpServer) {
     socket.on("meeting:join", async ({ meetingId }) => {
       const mid = Number(meetingId);
       if (!mid) return;
-      const [rows] = await mainPool.execute(
-        "SELECT id FROM meetings WHERE id = ? AND is_deleted = 0 LIMIT 1",
-        [mid]
-      );
-      if (!rows[0]) return;
+      const meeting = await prisma.meetings.findFirst({
+        where: { id: mid, is_deleted: false },
+        select: { id: true }
+      });
+      if (!meeting) return;
       socket.join(`meeting:${mid}`);
     });
 

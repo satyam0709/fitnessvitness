@@ -1,7 +1,7 @@
 const crypto = require("crypto");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-const { mainPool } = require("../config/database");
+const prisma = require("../config/prisma");
 
 const BCRYPT_ROUNDS = 12;
 
@@ -64,18 +64,25 @@ async function saveRefreshToken(userId, token) {
   const expSec = decoded?.exp;
   const expiresAt = expSec ? new Date(expSec * 1000) : new Date(Date.now() + 7 * 864e5);
   const tokenHash = sha256hex(token);
-  await mainPool.execute(
-    `INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)`,
-    [Number(userId), tokenHash, expiresAt]
-  );
+  await prisma.refresh_tokens.create({
+    data: {
+      user_id: Number(userId),
+      token_hash: tokenHash,
+      expires_at: expiresAt
+    }
+  });
 }
 
 async function revokeRefreshToken(tokenHash) {
-  await mainPool.execute(`DELETE FROM refresh_tokens WHERE token_hash = ?`, [tokenHash]);
+  await prisma.refresh_tokens.deleteMany({
+    where: { token_hash: tokenHash }
+  });
 }
 
 async function revokeAllUserTokens(userId) {
-  await mainPool.execute(`DELETE FROM refresh_tokens WHERE user_id = ?`, [Number(userId)]);
+  await prisma.refresh_tokens.deleteMany({
+    where: { user_id: Number(userId) }
+  });
 }
 
 function verifyAccessToken(token) {
