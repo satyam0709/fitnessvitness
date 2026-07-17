@@ -68,15 +68,13 @@ export default function PaymentReceiptView({
     } catch (e) {
       onWhatsAppError?.(e.message || "Could not open WhatsApp");
     }
-  }
-
-  return (
+  }  return (
     <div className={styles.wrap}>
       {showToolbar ? (
         <div className={styles.toolbar}>
           <button type="button" className={`${styles.btn} ${styles.btnPrimary}`} onClick={handlePrint}>
-            <i className="fas fa-download" aria-hidden="true" />
-            Download / Print PDF
+            <i className="fas fa-print" aria-hidden="true" />
+            Print Receipt
           </button>
           <button type="button" className={`${styles.btn} ${styles.btnWa}`} onClick={handleWhatsApp}>
             <i className="fab fa-whatsapp" aria-hidden="true" />
@@ -86,139 +84,155 @@ export default function PaymentReceiptView({
       ) : null}
 
       <article className={styles.paper} id="payment-receipt-print">
-        <header className={styles.header}>
-          <div>
-            <h1 className={styles.brandName}>{company?.company_name || "Payment Receipt"}</h1>
-            {companyLines.map((line, i) => (
-              <p key={i} className={styles.brandMeta}>
-                {line}
-              </p>
-            ))}
-          </div>
-          <div style={{ textAlign: "right" }}>
-            <span className={styles.receiptBadge}>Payment receipt</span>
-            <p className={styles.receiptNo}>{invoice?.invoice_number || "—"}</p>
-            <p className={styles.receiptDate}>Date: {fmtDate(invoice?.invoice_date)}</p>
-            <p className={styles.receiptDate}>Status: {invoice?.status || "paid"}</p>
-          </div>
-        </header>
+        <div className={styles.contentWrapper}>
+          <header className={styles.header}>
+            <div className={styles.headerLeft}>
+              <div className={styles.logoBox}>
+                <img src="/assets/logo.svg" alt="Logo" className={styles.logoImage} />
+              </div>
+              <div className={styles.companyInfo}>
+                <h1 className={styles.brandName}>{company?.company_name || "Company Name"}</h1>
+                {companyLines.map((line, i) => (
+                  <p key={i} className={styles.brandMeta}>
+                    {line}
+                  </p>
+                ))}
+              </div>
+            </div>
+            <div className={styles.headerRight}>
+              <span className={styles.receiptBadge}>Payment receipt</span>
+              <p className={styles.receiptNo}>{invoice?.invoice_number || "—"}</p>
+              <p className={styles.receiptDate}>Date: {fmtDate(invoice?.invoice_date)}</p>
+            </div>
+          </header>
 
-        <div className={styles.grid2}>
-          <div>
-            <p className={styles.blockTitle}>Received from</p>
-            <p className={styles.blockBody}>
-              <strong>{invoice?.customer_name || "—"}</strong>
-            </p>
-            {invoice?.customer_phone ? (
-              <p className={styles.blockBody}>Phone: {invoice.customer_phone}</p>
-            ) : null}
-            {invoice?.customer_email ? (
-              <p className={styles.blockBody}>{invoice.customer_email}</p>
-            ) : null}
+          <div className={styles.grid2}>
+            <div>
+              <p className={styles.blockTitle}>Billed To</p>
+              <p className={styles.blockBody}>
+                <strong>{invoice?.customer_name || "—"}</strong>
+              </p>
+              {invoice?.customer_phone ? (
+                <p className={styles.blockBody}>Phone: {invoice.customer_phone}</p>
+              ) : null}
+              {invoice?.customer_email ? (
+                <p className={styles.blockBody}>{invoice.customer_email}</p>
+              ) : null}
+            </div>
+            <div>
+              <p className={styles.blockTitle}>Payment Details</p>
+              <p className={styles.blockBody}>
+                <strong>Status:</strong> {String(invoice?.status || "Paid").toUpperCase()}
+              </p>
+              {meta.pay_mode ? (
+                <p className={styles.blockBody}>
+                  <strong>Method:</strong> {meta.pay_mode}
+                </p>
+              ) : null}
+              {meta.paid_at ? (
+                <p className={styles.blockBody}>
+                  <strong>Paid On:</strong> {fmtDate(meta.paid_at)}
+                </p>
+              ) : null}
+              {meta.collection_id ? (
+                <p className={styles.blockBody}>
+                  <strong>Ref:</strong> Collection #{meta.collection_id}
+                </p>
+              ) : null}
+              {meta.transaction_id ? (
+                <p className={styles.blockBody}>
+                  <strong>Ref:</strong> TXN #{meta.transaction_id}
+                </p>
+              ) : null}
+            </div>
           </div>
-          <div>
-            <p className={styles.blockTitle}>Payment details</p>
-            {meta.pay_mode ? (
-              <p className={styles.blockBody}>
-                <strong>Mode:</strong> {meta.pay_mode}
-              </p>
-            ) : null}
-            {meta.paid_at ? (
-              <p className={styles.blockBody}>
-                <strong>Paid on:</strong> {fmtDate(meta.paid_at)}
-              </p>
-            ) : null}
-            {meta.collection_id ? (
-              <p className={styles.blockBody}>
-                <strong>Reference:</strong> Collection #{meta.collection_id}
-              </p>
-            ) : null}
-            {meta.transaction_id ? (
-              <p className={styles.blockBody}>
-                <strong>Reference:</strong> Transaction #{meta.transaction_id}
-              </p>
-            ) : null}
-          </div>
-        </div>
 
-        <table className={styles.table}>
-          <thead>
-            <tr>
-              <th>Description</th>
-              <th>Qty</th>
-              <th>Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {lines.length === 0 ? (
-              <tr>
-                <td colSpan={3}>Payment received</td>
-                <td>{fmtInr(invoice?.total)}</td>
-              </tr>
-            ) : (
-              lines.map((row, idx) => (
-                <tr key={idx}>
-                  <td>{row.product_name || "—"}</td>
-                  <td>{row.qty ?? 1}</td>
-                  <td>{fmtInr(row.subtotal ?? row.cost)}</td>
+          <div className={styles.tableContainer}>
+            <table className={styles.table}>
+              <thead>
+                <tr>
+                  <th>Description</th>
+                  <th>Qty</th>
+                  <th>Amount</th>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-
-        <div className={styles.totals}>
-          <div className={styles.totalRow}>
-            <span>Subtotal</span>
-            <span>
-              {Number(invoice?.subtotal || 0).toFixed(2)} {cur}
-            </span>
+              </thead>
+              <tbody>
+                {lines.length === 0 ? (
+                  <tr>
+                    <td>Payment received</td>
+                    <td>1</td>
+                    <td>{fmtInr(invoice?.total)}</td>
+                  </tr>
+                ) : (
+                  lines.map((row, idx) => (
+                    <tr key={idx}>
+                      <td>{row.product_name || "—"}</td>
+                      <td>{row.qty ?? 1}</td>
+                      <td>{fmtInr(row.subtotal ?? row.cost)}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
-          {Number(invoice?.tax) > 0 ? (
-            <div className={styles.totalRow}>
-              <span>Tax</span>
-              <span>
-                {Number(invoice.tax).toFixed(2)} {cur}
-              </span>
+
+          <div className={styles.totalsWrapper}>
+            <div className={styles.totals}>
+              <div className={styles.totalRow}>
+                <span>Subtotal</span>
+                <span>
+                  {Number(invoice?.subtotal || 0).toFixed(2)} {cur}
+                </span>
+              </div>
+              {Number(invoice?.tax) > 0 ? (
+                <div className={styles.totalRow}>
+                  <span>Tax</span>
+                  <span>
+                    {Number(invoice.tax).toFixed(2)} {cur}
+                  </span>
+                </div>
+              ) : null}
+              <div className={styles.totalRowGrand}>
+                <span>Amount Paid</span>
+                <span>{fmtInr(invoice?.total)}</span>
+              </div>
+            </div>
+          </div>
+
+          {meta.collection_pending_inr != null && Number(meta.collection_pending_inr) > 0 ? (
+            <div className={styles.payBox}>
+              Balance remaining on this collection: {fmtInr(meta.collection_pending_inr)}
             </div>
           ) : null}
-          <div className={styles.totalRowGrand}>
-            <span>Amount paid</span>
-            <span>{fmtInr(invoice?.total)}</span>
-          </div>
+
+          {company?.invoice_bank_name ? (
+            <div className={styles.bankBox}>
+              <strong>Bank Details</strong>
+              <br />
+              {company.invoice_bank_name}
+              {company.invoice_account_no ? (
+                <>
+                  <br />
+                  A/C: {company.invoice_account_no}
+                </>
+              ) : null}
+              {company.invoice_ifsc ? (
+                <>
+                  <br />
+                  IFSC: {company.invoice_ifsc}
+                </>
+              ) : null}
+            </div>
+          ) : null}
+
+          {invoice?.notes ? <div className={styles.notes}>{invoice.notes}</div> : null}
+
+          <footer className={styles.footer}>
+            <p className={styles.footerText}>
+              This is a computer-generated payment receipt and does not require a physical signature.
+            </p>
+          </footer>
         </div>
-
-        {meta.collection_pending_inr != null && Number(meta.collection_pending_inr) > 0 ? (
-          <div className={styles.payBox}>
-            Balance remaining on this collection: {fmtInr(meta.collection_pending_inr)}
-          </div>
-        ) : null}
-
-        {company?.invoice_bank_name ? (
-          <div className={styles.bankBox}>
-            <strong>Bank details</strong>
-            <br />
-            {company.invoice_bank_name}
-            {company.invoice_account_no ? (
-              <>
-                <br />
-                A/C: {company.invoice_account_no}
-              </>
-            ) : null}
-            {company.invoice_ifsc ? (
-              <>
-                <br />
-                IFSC: {company.invoice_ifsc}
-              </>
-            ) : null}
-          </div>
-        ) : null}
-
-        {invoice?.notes ? <p className={styles.notes}>{invoice.notes}</p> : null}
-
-        <p className={styles.notes} style={{ marginTop: 24, textAlign: "center" }}>
-          This is a computer-generated payment receipt.
-        </p>
       </article>
     </div>
   );
