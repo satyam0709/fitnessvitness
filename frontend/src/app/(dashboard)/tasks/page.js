@@ -13,6 +13,7 @@ import { useToast } from "@/components/Toast/ToastContext";
 import { taskStatusForDb } from "@/lib/taskStatus";
 import { useListHighlight, itemHighlightClass } from "@/lib/useListHighlight";
 import TaskModal, { CATEGORY_LABEL } from "@/components/Tasks/TaskModal";
+import ManageTaskCustomOptionsModal from "@/components/Tasks/ManageTaskCustomOptionsModal";
 import styles from "./tasksPage.module.css";
 
 const KANBAN = [
@@ -34,7 +35,7 @@ const CATEGORY_EMOJI = {
   general: "✅",
 };
 
-const CATEGORY_FILTER_OPTS = [
+const BASE_CATEGORY_FILTER_OPTS = [
   { value: "", label: "All Categories" },
   { value: "diet_review", label: "Diet Review" },
   { value: "meal_plan", label: "Meal Plan" },
@@ -137,9 +138,11 @@ function TasksPageContent() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
+  const [customCategories, setCustomCategories] = useState([]);
   const [viewMode, setViewMode] = useState("kanban");
   const [calOpen, setCalOpen] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [manageOptionsOpen, setManageOptionsOpen] = useState(false);
   const [editTask, setEditTask] = useState(null);
   const [menuOpenId, setMenuOpenId] = useState(null);
   const [selected, setSelected] = useState(() => new Set());
@@ -231,6 +234,21 @@ function TasksPageContent() {
   }, [isLoaded]);
 
   useEffect(() => {
+    if (!isLoaded) return;
+    (async () => {
+      try {
+        const res = await apiFetch("/tasks/custom-options");
+        const json = await res.json();
+        if (json.success && json.registry?.task_category) {
+          setCustomCategories(json.registry.task_category);
+        }
+      } catch {
+        // non-fatal
+      }
+    })();
+  }, [isLoaded]);
+
+  useEffect(() => {
     const q = clientFilterQ.trim();
     if (q.length < 1) {
       setClientFilterHits([]);
@@ -295,6 +313,18 @@ function TasksPageContent() {
     }
     return map;
   }, [items]);
+
+  const categoryFilterOpts = useMemo(() => {
+    const known = new Set(BASE_CATEGORY_FILTER_OPTS.map((c) => c.value));
+    const merged = [...BASE_CATEGORY_FILTER_OPTS];
+    for (const c of customCategories) {
+      if (!known.has(c.value)) {
+        merged.push({ value: c.value, label: c.label });
+        known.add(c.value);
+      }
+    }
+    return merged;
+  }, [customCategories]);
 
   const sortedList = useMemo(() => {
     const list = [...items];
@@ -529,6 +559,14 @@ function TasksPageContent() {
           <button
             type="button"
             className={styles.btnIcon}
+            onClick={() => setManageOptionsOpen(true)}
+            title="Manage Custom Options"
+          >
+            ⚙️
+          </button>
+          <button
+            type="button"
+            className={styles.btnIcon}
             onClick={() => setCalOpen((v) => !v)}
             title="Calendar view"
           >
@@ -596,7 +634,7 @@ function TasksPageContent() {
           value={categoryFilter}
           onChange={(e) => setCategoryFilter(e.target.value)}
         >
-          {CATEGORY_FILTER_OPTS.map((o) => (
+          {categoryFilterOpts.map((o) => (
             <option key={o.value || "all"} value={o.value}>
               {o.label}
             </option>
@@ -776,6 +814,13 @@ function TasksPageContent() {
         task={editTask}
         onSaved={() => load(true)}
       />
+
+      {manageOptionsOpen ? (
+        <ManageTaskCustomOptionsModal
+          onClose={() => setManageOptionsOpen(false)}
+          onDone={() => load(true)}
+        />
+      ) : null}
     </div>
   );
 }

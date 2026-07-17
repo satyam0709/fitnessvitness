@@ -62,6 +62,75 @@ function emitTaskEvents(req, reason = "tasks") {
   }
 }
 
+router.get("/custom-options", async (req, res) => {
+  try {
+    const rawOpts = await prisma.dropdown_options.findMany({
+      where: { field_name: { in: ["task_category"] } },
+      orderBy: { option_label: "asc" }
+    });
+    const registry = { task_category: [] };
+    rawOpts.forEach((opt) => {
+      registry.task_category.push({ id: opt.id, value: opt.option_value, label: opt.option_label });
+    });
+    res.json({ success: true, registry, data: registry });
+  } catch (err) {
+    console.error("GET /tasks/custom-options", err);
+    res.json({ success: true, registry: { task_category: [] }, data: { task_category: [] } });
+  }
+});
+
+router.put("/custom-options/rename", async (req, res) => {
+  try {
+    const { fieldName, oldValue, newValue } = req.body;
+    if (!fieldName || !oldValue || !newValue) {
+      return res.status(400).json({ success: false, message: "Missing fields" });
+    }
+    const safeNewVal = newValue.trim().toLowerCase().replace(/[^a-z0-9_]+/g, "_");
+
+    if (fieldName === "task_category") {
+      await prisma.tasks.updateMany({
+        where: { task_category: oldValue },
+        data: { task_category: safeNewVal }
+      });
+    }
+
+    await prisma.dropdown_options.updateMany({
+      where: { field_name: fieldName, option_value: oldValue },
+      data: { option_value: safeNewVal, option_label: newValue.trim() }
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("PUT /tasks/custom-options/rename", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.delete("/custom-options", async (req, res) => {
+  try {
+    const { fieldName, optionValue } = req.body;
+    if (!fieldName || !optionValue) {
+      return res.status(400).json({ success: false, message: "Missing fields" });
+    }
+
+    if (fieldName === "task_category") {
+      await prisma.tasks.updateMany({
+        where: { task_category: optionValue },
+        data: { task_category: "general" } 
+      });
+    }
+
+    await prisma.dropdown_options.deleteMany({
+      where: { field_name: fieldName, option_value: optionValue }
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("DELETE /tasks/custom-options", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 router.get("/", async (req, res) => {
   try {
     const {
@@ -399,6 +468,27 @@ router.get("/:id", async (req, res) => {
   }
 });
 
+async function registerTaskCustomOptions(taskCategory) {
+  if (!taskCategory || taskCategory === "general") return;
+  const builtIn = ["diet_review", "meal_plan", "weight_checkin", "supplement_check", "plan_renewal", "payment_followup", "client_call", "admin", "general"];
+  if (builtIn.includes(taskCategory)) return;
+
+  try {
+    const existing = await prisma.dropdown_options.findFirst({
+      where: { field_name: "task_category", option_value: taskCategory }
+    });
+    if (!existing) {
+      // capitalize first letters for label if no label provided
+      const label = taskCategory.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+      await prisma.dropdown_options.create({
+        data: { field_name: "task_category", option_value: taskCategory, option_label: label }
+      });
+    }
+  } catch (err) {
+    console.warn("registerTaskCustomOptions err:", err.message);
+  }
+}
+
 router.post("/", async (req, res) => {
   try {
     const {
@@ -421,7 +511,10 @@ router.post("/", async (req, res) => {
     const assignedUserId = await resolveUserId(assigned_to);
     const clientIdNum = client_id != null && client_id !== "" ? Number(client_id) : null;
     const taskType = task_type || (clientIdNum ? "client" : "internal");
+    
+    // allow passing a label with a newly created custom category, but our basic logic uses the value.
     const taskCategory = task_category || "general";
+    // if task_category_label is passed, we can use it, but let's stick to simple for now.
 
     const apiSt = sanitizeStatus(status) || "new";
     const st = statusToDbEnum(apiSt);
@@ -447,6 +540,8 @@ router.post("/", async (req, res) => {
         status: st,
       }
     });
+
+    setImmediate(() => registerTaskCustomOptions(taskCategory));
 
     const taskWithJoins = await prisma.tasks.findFirst({
       where: { id: createdTask.id },
@@ -576,6 +671,10 @@ router.put("/:id", async (req, res) => {
       where: { id: taskId },
       data
     });
+
+    if (data.task_category) {
+      setImmediate(() => registerTaskCustomOptions(data.task_category));
+    }
 
     const taskWithJoins = await prisma.tasks.findFirst({
       where: { id: taskId },

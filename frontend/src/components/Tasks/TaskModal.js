@@ -24,6 +24,8 @@ const INTERNAL_CATEGORIES = [
   { value: "payment_followup", label: "Payment Follow-up" },
 ];
 
+const OTHER_VALUE = "__OTHER__";
+
 const CATEGORY_LABEL = {
   diet_review: "Diet Review",
   meal_plan: "Meal Plan",
@@ -76,7 +78,22 @@ export default function TaskModal({ open, onClose, task, onSaved }) {
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
 
-  const categories = taskType === "client" ? CLIENT_CATEGORIES : INTERNAL_CATEGORIES;
+  const [customCategories, setCustomCategories] = useState([]);
+  const [categoryOther, setCategoryOther] = useState("");
+
+  const categories = useMemo(() => {
+    const base = taskType === "client" ? CLIENT_CATEGORIES : INTERNAL_CATEGORIES;
+    const known = new Set(base.map((c) => c.value));
+    const merged = [...base];
+    for (const c of customCategories) {
+      if (!known.has(c.value)) {
+        merged.push({ value: c.value, label: c.label });
+        known.add(c.value);
+      }
+    }
+    merged.push({ value: OTHER_VALUE, label: "Other..." });
+    return merged;
+  }, [taskType, customCategories]);
 
   const reset = useCallback(() => {
     setTitle("");
@@ -109,7 +126,15 @@ export default function TaskModal({ open, onClose, task, onSaved }) {
           : null
       );
       setClientQuery(task.client_name || "");
-      setCategory(task.task_category || "general");
+      const taskCat = task.task_category || "general";
+      const isKnown = [...CLIENT_CATEGORIES, ...INTERNAL_CATEGORIES, ...customCategories].some((c) => c.value === taskCat);
+      if (isKnown || taskCat === "general") {
+        setCategory(taskCat);
+        setCategoryOther("");
+      } else {
+        setCategory(OTHER_VALUE);
+        setCategoryOther(taskCat);
+      }
       setPriority(task.priority || "medium");
       setDueDate(task.due_date ? String(task.due_date).slice(0, 10) : "");
       setAssignedTo(task.assigned_to ? String(task.assigned_to) : "");
@@ -131,6 +156,21 @@ export default function TaskModal({ open, onClose, task, onSaved }) {
         }
       } catch {
         setUsers([]);
+      }
+    })();
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    (async () => {
+      try {
+        const res = await apiFetch("/tasks/custom-options");
+        const json = await res.json();
+        if (json.success && json.registry?.task_category) {
+          setCustomCategories(json.registry.task_category);
+        }
+      } catch (e) {
+        console.warn("Failed to load task custom options");
       }
     })();
   }, [open]);
@@ -179,8 +219,9 @@ export default function TaskModal({ open, onClose, task, onSaved }) {
       title: title.trim(),
       description: description.trim() || null,
       task_type: taskType,
+      task_type: taskType,
       client_id: taskType === "client" && clientId ? Number(clientId) : null,
-      task_category: category,
+      task_category: category === OTHER_VALUE ? categoryOther.trim() : category,
       priority,
       due_date: dueDate || null,
       assigned_to: assignedTo ? Number(assignedTo) : null,
@@ -214,6 +255,10 @@ export default function TaskModal({ open, onClose, task, onSaved }) {
     }
     if (taskType === "client" && !clientId) {
       setErr("Please select a client.");
+      return;
+    }
+    if (category === OTHER_VALUE && !categoryOther.trim()) {
+      setErr("Please enter a custom category.");
       return;
     }
     setSaving(true);
@@ -377,6 +422,15 @@ export default function TaskModal({ open, onClose, task, onSaved }) {
                     </option>
                   ))}
                 </select>
+                {category === OTHER_VALUE && (
+                  <input
+                    className={shell.input}
+                    style={{ marginTop: 8 }}
+                    placeholder="Enter custom category"
+                    value={categoryOther}
+                    onChange={(e) => setCategoryOther(e.target.value)}
+                  />
+                )}
               </div>
               <div className={shell.field}>
                 <span className={shell.label} id={`${id}-pri-label`}>
