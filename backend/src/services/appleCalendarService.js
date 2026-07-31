@@ -1,6 +1,6 @@
 const ical = require("node-ical");
 const { createDAVClient } = require("tsdav");
-const { pool } = require("../config/database");
+const { pool } = require("../config/prismaPool");
 
 const DEFAULT_CALDAV_SERVER = "https://caldav.icloud.com";
 const FETCH_TIMEOUT_MS = 20000;

@@ -1,4 +1,4 @@
-const { pool } = require("../config/database");
+const { pool } = require("../config/prismaPool");
 
 async function listChatUsers(req, res) {
   try {

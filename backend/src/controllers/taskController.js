@@ -1,4 +1,4 @@
-const { pool } = require("../config/database");
+const { pool } = require("../config/prismaPool");
 const { emitAdminChanged } = require("../realtime/meetingsRealtime");
 
 async function getTasks(req, res) {
