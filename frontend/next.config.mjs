@@ -1,7 +1,13 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  compress: true,
+  poweredByHeader: false,
   images: {
     remotePatterns: [{ protocol: "https", hostname: "flagcdn.com", pathname: "/**" }],
+    formats: ["image/avif", "image/webp"],
+  },
+  experimental: {
+    optimizePackageImports: ["recharts", "@fortawesome/fontawesome-free"],
   },
   // No rewrite matching /api/**. frontend/src/app/api/[...path]/route.js handles
   // proxying so auth Set-Cookie headers survive on Vercel.

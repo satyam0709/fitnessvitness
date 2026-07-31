@@ -1,6 +1,6 @@
 import ConditionalLayout from "@/components/ConditionalLayout/conditionalLayout";
+import DeferredIconCss from "@/components/DeferredIconCss";
 import "./globals.css";
-import "@fortawesome/fontawesome-free/css/all.min.css";
 import { Inter, Lora, Montserrat } from "next/font/google";
 import { APP_NAME, LOGO_SRC } from "@/lib/branding";
 
@@ -8,14 +8,14 @@ const montserrat = Montserrat({
   subsets: ["latin"],
   variable: "--font-montserrat",
   display: "swap",
-  weight: ["400", "500", "600", "700", "800", "900"],
+  weight: ["400", "600", "700"],
 });
 
 const inter = Inter({
   subsets: ["latin"],
   variable: "--font-inter",
   display: "swap",
-  weight: ["400", "500", "600", "700"],
+  weight: ["400", "500", "600"],
 });
 
 const lora = Lora({
@@ -24,6 +24,7 @@ const lora = Lora({
   display: "swap",
   weight: ["400"],
   style: ["normal", "italic"],
+  preload: false,
 });
 
 export const metadata = {
@@ -48,6 +49,7 @@ export default function RootLayout({ children }) {
         suppressHydrationWarning
         className={`${montserrat.variable} ${inter.variable} ${lora.variable}`}
       >
+        <DeferredIconCss />
         <ConditionalLayout>{children}</ConditionalLayout>
       </body>
     </html>

@@ -115,7 +115,7 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle }) {
     return () => {
       cancelled = true;
     };
-  }, [isLoaded, pathname]);
+  }, [isLoaded]);
 
   useEffect(() => {
     if (!isLoaded) return;
@@ -134,7 +134,7 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle }) {
     return () => {
       cancelled = true;
     };
-  }, [isLoaded, pathname]);
+  }, [isLoaded]);
 
   const toggleMenu = (label) =>
     setOpenMenus((prev) => ({ ...prev, [label]: !prev[label] }));

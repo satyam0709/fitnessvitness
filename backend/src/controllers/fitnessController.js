@@ -4,7 +4,7 @@ const {
   emitFitnessChanged,
   emitTasksChanged,
 } = require("../realtime/meetingsRealtime");
-const XLSX = require("xlsx");
+const ExcelJS = require("exceljs");
 const path = require("path");
 const fs = require("fs");
 const {
@@ -3094,20 +3094,40 @@ const importClientsExcel = async (req, res) => {
   const tmpPath = req.file.path;
   try {
     console.log("[Import] Reading file:", tmpPath);
-    const workbook = XLSX.readFile(tmpPath, { cellDates: true });
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(tmpPath);
 
-    const masterSheetName = workbook.SheetNames.find((n) => n.includes("MASTER"));
-    const masterSheet = masterSheetName ? workbook.Sheets[masterSheetName] : null;
+    const masterSheet =
+      workbook.worksheets.find((ws) => String(ws.name || "").includes("MASTER")) || null;
 
     if (!masterSheet) {
-      console.log("[Import] MASTER sheet not found. Available:", workbook.SheetNames);
+      console.log(
+        "[Import] MASTER sheet not found. Available:",
+        workbook.worksheets.map((ws) => ws.name)
+      );
       return res.status(400).json({
         success: false,
         message: "Invalid file format: MASTER sheet not found",
       });
     }
 
-    const masterData = XLSX.utils.sheet_to_json(masterSheet, { header: 1 });
+    const sheetToAoA = (ws) => {
+      const data = [];
+      ws.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+        const arr = [];
+        row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+          arr[colNumber - 1] = cell.value != null && typeof cell.value === "object" && cell.value.text != null
+            ? cell.value.text
+            : cell.value instanceof Date
+              ? cell.value
+              : cell.value;
+        });
+        data[rowNumber - 1] = arr;
+      });
+      return data;
+    };
+
+    const masterData = sheetToAoA(masterSheet);
     const clientIds = [];
     for (let i = 0; i < masterData.length; i++) {
       const row = masterData[i];
@@ -3122,13 +3142,13 @@ const importClientsExcel = async (req, res) => {
     const errors = [];
 
     for (const clientId of clientIds) {
-      const clientSheet = workbook.Sheets[clientId];
+      const clientSheet = workbook.getWorksheet(clientId);
       if (!clientSheet) {
         errors.push(`Sheet for ${clientId} not found`);
         continue;
       }
 
-      const sheetData = XLSX.utils.sheet_to_json(clientSheet, { header: 1 });
+      const sheetData = sheetToAoA(clientSheet);
       const getVal = (row, col) => {
         const v = sheetData[row] ? sheetData[row][col] : null;
         return v === undefined ? null : v;
@@ -3237,10 +3257,15 @@ const exportClientsExcel = async (req, res) => {
     const clients = await prisma.fitness_clients.findMany({
       orderBy: { created_at: "desc" },
     });
-    const worksheet = XLSX.utils.json_to_sheet(serializeFitnessRows(clients));
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Clients");
-    const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+    const rows = serializeFitnessRows(clients);
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Clients");
+    if (rows.length) {
+      const keys = Object.keys(rows[0]);
+      worksheet.columns = keys.map((key) => ({ header: key, key }));
+      worksheet.addRows(rows);
+    }
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
     res.setHeader("Content-Disposition", "attachment; filename=fitness_clients.xlsx");
     res.setHeader(
       "Content-Type",

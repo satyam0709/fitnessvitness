@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
+import dynamic from "next/dynamic";
 import {
   BarChart,
   Bar,
@@ -14,9 +15,13 @@ import {
   Line,
   Legend,
 } from "recharts";
-import { RevenuePieCard } from "@/components/Dashboard/RevenuePieCard";
 import { apiFetch, getApiBase } from "@/lib/api";
 import styles from "./reports.module.css";
+
+const RevenuePieCard = dynamic(
+  () => import("@/components/Dashboard/RevenuePieCard").then((m) => m.RevenuePieCard),
+  { ssr: false, loading: () => null }
+);
 
 const TABS = [
   { id: "pipeline", label: "Pipeline", exportType: "leads" },

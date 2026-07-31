@@ -8,7 +8,15 @@ import { apiFetch, connectGlobalSocket } from "@/lib/api";
 import { useTodayFeed } from "@/lib/useTodayFeed";
 import { getDashboardStats, getAllClients, importClientsExcel, exportClientsExcel, getTransactionSummaryYearly, getFitnessTransactionCharts } from "@/lib/fitnessApi";
 import { LeadStatusDonut, LeadSourceArea, ChartCardMenu } from "@/components/Dashboard/DashboardCharts";
-import { FitnessTransactionPies } from "@/components/FitnessTransactionPies/FitnessTransactionPies";
+import dynamic from "next/dynamic";
+
+const FitnessTransactionPies = dynamic(
+  () =>
+    import("@/components/FitnessTransactionPies/FitnessTransactionPies").then(
+      (m) => m.FitnessTransactionPies
+    ),
+  { ssr: false, loading: () => null }
+);
 import {
   useConfirmDialog,
   buildDeleteMessage,
@@ -308,7 +316,6 @@ export default function DashboardPage() {
 
   const fetchDashboard = useCallback(async (opts = {}) => {
     if (!isSignedIn) return;
-    if (featuresLoading) return;
     const quiet = opts.quiet === true;
     if (!quiet) setLoading(true);
     setDashboardError(null);
@@ -374,7 +381,7 @@ export default function DashboardPage() {
     } finally {
       if (!quiet) setLoading(false);
     }
-  }, [featuresLoading, hasLeadFeature, hasTaskFeature, isSignedIn]);
+  }, [hasLeadFeature, hasTaskFeature, isSignedIn]);
 
   const queueQuietDashboardRefresh = useCallback(() => {
     if (quietRefreshTimerRef.current) clearTimeout(quietRefreshTimerRef.current);
@@ -395,50 +402,6 @@ export default function DashboardPage() {
     },
     []
   );
-
-  // Single init: run once when auth + features are both ready.
-  // Use a ref so identity changes on fetchDashboard (from hasLeadFeature/hasTaskFeature
-  // settling) don't trigger additional fetches after the first one completes.
-  const initDoneRef = useRef(false);
-  useEffect(() => {
-    if (!isLoaded) return;
-    if (isPlatformAdmin) router.replace("/dashboard");
-  }, [isLoaded, isPlatformAdmin, router]);
-
-  useEffect(() => {
-    if (!isLoaded || featuresLoading) return;
-    if (isPlatformAdmin) return;
-    // Wait until we know the auth state (not null, which means still loading)
-    if (isSignedIn !== true && isSignedIn !== false) return;
-    if (initDoneRef.current) return;
-    initDoneRef.current = true;
-    if (isSignedIn) {
-      const fetchSchedule = async () => {
-        try {
-          setScheduleLoading(true);
-          const today = new Date();
-          const from = today.toLocaleDateString("en-CA"); // YYYY-MM-DD in local TZ
-          const todayPlusSeven = new Date(today);
-          todayPlusSeven.setDate(todayPlusSeven.getDate() + 7);
-          const to = todayPlusSeven.toLocaleDateString("en-CA");
-          const res = await apiFetch(`/calendar/feed?from=${from}&to=${to}`);
-          const json = await res.json().catch(() => ({}));
-          if (res.ok && json.success) {
-            setSchedule(Array.isArray(json.items) ? json.items : []);
-          }
-        } catch {
-          /* ignore */
-        } finally {
-          setScheduleLoading(false);
-        }
-      };
-      
-      void fetchDashboard();
-      void fetchStats();
-      void fetchSchedule();
-      loadFitnessStats();
-    }
-  }, [isLoaded, isSignedIn, featuresLoading, isPlatformAdmin, fetchDashboard, fetchStats]);
 
   // Fetch fitness CRM stats
   const loadFitnessStats = useCallback(async () => {
@@ -471,6 +434,57 @@ export default function DashboardPage() {
       setFitnessLoading(false);
     }
   }, []);
+
+  // Single init: run once when auth is ready (do not wait on features).
+  const initDoneRef = useRef(false);
+  useEffect(() => {
+    if (!isLoaded) return;
+    if (isPlatformAdmin) router.replace("/dashboard");
+  }, [isLoaded, isPlatformAdmin, router]);
+
+  useEffect(() => {
+    if (!isLoaded) return;
+    if (isPlatformAdmin) return;
+    if (isSignedIn !== true && isSignedIn !== false) return;
+    if (initDoneRef.current) return;
+    initDoneRef.current = true;
+    if (isSignedIn) {
+      const fetchSchedule = async () => {
+        try {
+          setScheduleLoading(true);
+          const today = new Date();
+          const from = today.toLocaleDateString("en-CA");
+          const todayPlusSeven = new Date(today);
+          todayPlusSeven.setDate(todayPlusSeven.getDate() + 7);
+          const to = todayPlusSeven.toLocaleDateString("en-CA");
+          const res = await apiFetch(`/calendar/feed?from=${from}&to=${to}`);
+          const json = await res.json().catch(() => ({}));
+          if (res.ok && json.success) {
+            setSchedule(Array.isArray(json.items) ? json.items : []);
+          }
+        } catch {
+          /* ignore */
+        } finally {
+          setScheduleLoading(false);
+        }
+      };
+
+      void fetchDashboard();
+      void fetchStats();
+      void fetchSchedule();
+      void loadFitnessStats();
+    }
+  }, [isLoaded, isSignedIn, isPlatformAdmin, fetchDashboard, fetchStats, loadFitnessStats]);
+
+  // When features finish loading, refresh gated lists once.
+  const featuresInitRef = useRef(false);
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn || isPlatformAdmin) return;
+    if (featuresLoading) return;
+    if (featuresInitRef.current) return;
+    featuresInitRef.current = true;
+    void fetchDashboard({ quiet: true });
+  }, [isLoaded, isSignedIn, isPlatformAdmin, featuresLoading, fetchDashboard]);
 
   const handleImport = async (e) => {
     const file = e.target.files[0];
@@ -505,10 +519,6 @@ export default function DashboardPage() {
       alert("Failed to export clients");
     }
   };
-
-  useEffect(() => {
-    if (isSignedIn && !isPlatformAdmin) loadFitnessStats();
-  }, [isSignedIn, isPlatformAdmin, loadFitnessStats]);
 
   useEffect(() => {
     if (!isLoaded || !isSignedIn) return undefined;
