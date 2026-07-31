@@ -65,6 +65,9 @@ const prisma = basePrisma.$extends({
   },
 });
 
+// Default export is the client. Also expose `.prisma` so
+// `const { prisma } = require(...)` does not silently get undefined.
 module.exports = prisma;
+module.exports.prisma = prisma;
 module.exports.omitUndefinedDeep = omitUndefinedDeep;
 module.exports.__leadBindFix = "2026-07-14-bind-null-v3";

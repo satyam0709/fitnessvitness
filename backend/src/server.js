@@ -16,7 +16,7 @@ const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
 const crypto = require("crypto");
 
-const { prisma } = require("./config/prisma");
+const prisma = require("./config/prisma");
 const { ensureSchema } = require("./config/ensureSchema");
 const { validateRuntimeEnv } = require("./config/runtimeValidation");
 const routes = require("./routes/index");
