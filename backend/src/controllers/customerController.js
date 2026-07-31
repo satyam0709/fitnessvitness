@@ -1,31 +1,36 @@
-const { pool } = require("../config/database");
+const prisma = require("../config/prisma");
 
 async function getCustomers(req, res) {
   try {
-    const tenantId = req.user?.tenantId || null;
     const { search, page = 1, limit = 50 } = req.query;
-    const offset = (Number(page) - 1) * Number(limit);
+    const take = Math.min(200, Math.max(1, Number(limit) || 50));
+    const pageNum = Math.max(1, Number(page) || 1);
+    const skip = (pageNum - 1) * take;
 
-    let where = "is_deleted = 0 AND (? IS NULL OR tenant_id = ?)";
-    const params = [tenantId, tenantId];
+    const where = {
+      is_deleted: false,
+    };
 
-    if (search) {
-      where += " AND (name LIKE ? OR email LIKE ? OR company LIKE ?)";
-      const like = `%${search}%`;
-      params.push(like, like, like);
+    const q = String(search || "").trim();
+    if (q) {
+      where.OR = [
+        { name: { contains: q } },
+        { email: { contains: q } },
+        { company: { contains: q } },
+      ];
     }
 
-    const [[{ total }]] = await pool.execute(
-      `SELECT COUNT(*) as total FROM customers WHERE ${where}`,
-      params
-    );
+    const [total, customers] = await Promise.all([
+      prisma.customers.count({ where }),
+      prisma.customers.findMany({
+        where,
+        orderBy: { created_at: "desc" },
+        take,
+        skip,
+      }),
+    ]);
 
-    const [rows] = await pool.execute(
-      `SELECT * FROM customers WHERE ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
-      [...params, Number(limit), offset]
-    );
-
-    res.json({ success: true, total, customers: rows });
+    res.json({ success: true, total, customers });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -33,23 +38,23 @@ async function getCustomers(req, res) {
 
 async function createCustomer(req, res) {
   try {
-    const tenantId = req.user?.tenantId || null;
     const { name, email, phone, company, city, country, lead_id } = req.body;
-    const [result] = await pool.execute(
-      `INSERT INTO customers (tenant_id, name, email, phone, company, city, country, lead_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        tenantId,
-        name,
-        email || null,
-        phone || null,
-        company || null,
-        city || null,
-        country || "India",
-        lead_id || null,
-      ]
-    );
-    res.json({ success: true, id: result.insertId });
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ success: false, message: "name is required" });
+    }
+
+    const created = await prisma.customers.create({
+      data: {
+        name: String(name).trim(),
+        email: email || null,
+        phone: phone || null,
+        company: company || null,
+        city: city || null,
+        country: country || "India",
+        lead_id: lead_id ? Number(lead_id) : null,
+      },
+    });
+    res.json({ success: true, id: created.id });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -57,23 +62,28 @@ async function createCustomer(req, res) {
 
 async function updateCustomer(req, res) {
   try {
-    const tenantId = req.user?.tenantId || null;
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ success: false, message: "Invalid customer id" });
+
+    const existing = await prisma.customers.findFirst({
+      where: { id, is_deleted: false },
+      select: { id: true },
+    });
+    if (!existing) return res.status(404).json({ success: false, message: "Customer not found" });
+
     const { name, email, phone, company, city, country } = req.body;
-    await pool.execute(
-      `UPDATE customers SET name=?, email=?, phone=?, company=?, city=?, country=?
-       WHERE id=? AND is_deleted = 0 AND (? IS NULL OR tenant_id = ?)`,
-      [
+    await prisma.customers.update({
+      where: { id },
+      data: {
         name,
-        email || null,
-        phone || null,
-        company || null,
-        city || null,
-        country || "India",
-        req.params.id,
-        tenantId,
-        tenantId,
-      ]
-    );
+        email: email || null,
+        phone: phone || null,
+        company: company || null,
+        city: city || null,
+        country: country || "India",
+        updated_at: new Date(),
+      },
+    });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -82,15 +92,23 @@ async function updateCustomer(req, res) {
 
 async function deleteCustomer(req, res) {
   try {
-    const tenantId = req.user?.tenantId || null;
-    await pool.execute(
-      "UPDATE customers SET is_deleted = 1, deleted_at = NOW(), updated_at = NOW() WHERE id = ? AND is_deleted = 0 AND (? IS NULL OR tenant_id = ?)",
-      [
-      req.params.id,
-      tenantId,
-      tenantId,
-      ]
-    );
+    const id = Number(req.params.id);
+    if (!id) return res.status(400).json({ success: false, message: "Invalid customer id" });
+
+    const existing = await prisma.customers.findFirst({
+      where: { id, is_deleted: false },
+      select: { id: true },
+    });
+    if (!existing) return res.status(404).json({ success: false, message: "Customer not found" });
+
+    await prisma.customers.update({
+      where: { id },
+      data: {
+        is_deleted: true,
+        deleted_at: new Date(),
+        updated_at: new Date(),
+      },
+    });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

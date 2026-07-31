@@ -1,12 +1,51 @@
-const { pool } = require("../config/database");
+const prisma = require("../config/prisma");
 const { emitAdminChanged, emitNotesChanged } = require("../realtime/meetingsRealtime");
 
-/** Safe substring for SQL LIKE (default MySQL escape `\`). */
-function likeContains(raw) {
+function searchTerm(raw) {
   const t = String(raw || "").trim();
-  if (!t) return null;
-  const esc = t.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
-  return `%${esc}%`;
+  return t || null;
+}
+
+async function attachLeadNames(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  const leadIds = [...new Set(list.map((n) => n.lead_id).filter((id) => id != null))];
+  const nameById = new Map();
+  if (leadIds.length) {
+    const leads = await prisma.leads.findMany({
+      where: { id: { in: leadIds } },
+      select: { id: true, name: true },
+    });
+    for (const l of leads) nameById.set(l.id, l.name || null);
+  }
+  return list.map((n) => ({
+    ...n,
+    lead_name: n.lead_id != null ? nameById.get(n.lead_id) || null : null,
+  }));
+}
+
+async function buildNotesWhere(userIntId, search) {
+  const where = {
+    is_deleted: false,
+    created_by: userIntId,
+  };
+  if (!search) return where;
+
+  const leadMatches = await prisma.leads.findMany({
+    where: {
+      is_deleted: false,
+      name: { contains: search },
+    },
+    select: { id: true },
+    take: 200,
+  });
+  const leadIds = leadMatches.map((l) => l.id);
+
+  where.OR = [
+    { content: { contains: search } },
+    { title: { contains: search } },
+    ...(leadIds.length ? [{ lead_id: { in: leadIds } }] : []),
+  ];
+  return where;
 }
 
 async function getNotes(req, res) {
@@ -22,28 +61,19 @@ async function getNotes(req, res) {
       rawLimit !== "" &&
       String(rawLimit).toLowerCase() !== "all";
 
-    const searchPat = likeContains(req.query.search);
-
-    const baseFrom = `FROM notes n
-       LEFT JOIN leads l ON l.id = n.lead_id
-       WHERE n.is_deleted = 0 AND n.created_by = ?`;
-    const searchSql = searchPat
-      ? ` AND (n.content LIKE ? OR n.title LIKE ? OR l.name LIKE ?)`
-      : "";
-    const searchParams = searchPat ? [searchPat, searchPat, searchPat] : [];
+    const search = searchTerm(req.query.search);
+    const where = await buildNotesWhere(userIntId, search);
 
     if (!paginated) {
-      const [rows] = await pool.execute(
-        `SELECT n.*, l.name as lead_name
-         ${baseFrom}
-         ${searchSql}
-         ORDER BY n.created_at DESC`,
-        [userIntId, ...searchParams]
-      );
+      const rows = await prisma.notes.findMany({
+        where,
+        orderBy: { created_at: "desc" },
+      });
+      const notes = await attachLeadNames(rows);
       return res.json({
         success: true,
-        notes: rows,
-        total: rows.length,
+        notes,
+        total: notes.length,
         page: 1,
         limit: null,
       });
@@ -52,27 +82,19 @@ async function getNotes(req, res) {
     const limit = Math.min(100, Math.max(1, parseInt(String(rawLimit), 10) || 10));
     const page = Math.max(1, parseInt(String(req.query.page), 10) || 1);
     const offset = (page - 1) * limit;
-    const lim = Number.isFinite(limit) ? Math.floor(limit) : 10;
-    const off = Number.isFinite(offset) ? Math.floor(offset) : 0;
 
-    const [[{ total: totalRaw }]] = await pool.execute(
-      `SELECT COUNT(*) as total ${baseFrom} ${searchSql}`,
-      [userIntId, ...searchParams]
-    );
-    const total = Number(totalRaw) || 0;
-
-    const [rows] = await pool.execute(
-      `SELECT n.*, l.name as lead_name
-       ${baseFrom}
-       ${searchSql}
-       ORDER BY n.created_at DESC
-       LIMIT ${lim} OFFSET ${off}`,
-      [userIntId, ...searchParams]
-    );
+    const total = await prisma.notes.count({ where });
+    const rows = await prisma.notes.findMany({
+      where,
+      orderBy: { created_at: "desc" },
+      take: limit,
+      skip: offset,
+    });
+    const notes = await attachLeadNames(rows);
 
     res.json({
       success: true,
-      notes: rows,
+      notes,
       total,
       page,
       limit,
@@ -95,20 +117,19 @@ async function createNote(req, res) {
       return res.status(400).json({ success: false, message: "Content is required" });
     }
 
-    const [result] = await pool.execute(
-      "INSERT INTO notes (created_by, title, content, lead_id) VALUES (?, ?, ?, ?)",
-      [userIntId, title || null, content, lead_id || null]
-    );
-    const [[created]] = await pool.execute(
-      `SELECT n.*, l.name as lead_name
-       FROM notes n
-       LEFT JOIN leads l ON l.id = n.lead_id
-       WHERE n.id = ? AND n.is_deleted = 0`,
-      [result.insertId]
-    );
-    emitNotesChanged({ scope: "notes", action: "create", id: result.insertId });
+    const created = await prisma.notes.create({
+      data: {
+        created_by: userIntId,
+        title: title || null,
+        content,
+        lead_id: lead_id ? Number(lead_id) : null,
+      },
+    });
+
+    const [withLead] = await attachLeadNames([created]);
+    emitNotesChanged({ scope: "notes", action: "create", id: created.id });
     emitAdminChanged({ scope: "stats", reason: "notes", action: "create" });
-    res.json({ success: true, id: result.insertId, data: created });
+    res.json({ success: true, id: created.id, data: withLead });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -122,10 +143,10 @@ async function updateNote(req, res) {
     const userIntId = req.user?.id;
     if (!userIntId) return res.status(401).json({ success: false, message: "Unauthorized" });
 
-    const [[existing]] = await pool.execute(
-      "SELECT id, created_by, title, content FROM notes WHERE id = ? AND is_deleted = 0",
-      [noteId]
-    );
+    const existing = await prisma.notes.findFirst({
+      where: { id: noteId, is_deleted: false },
+      select: { id: true, created_by: true, title: true, content: true },
+    });
     if (!existing) return res.status(404).json({ success: false, message: "Note not found" });
     if (existing.created_by !== userIntId) {
       return res.status(403).json({ success: false, message: "Not allowed" });
@@ -144,20 +165,22 @@ async function updateNote(req, res) {
       return res.status(400).json({ success: false, message: "Content cannot be empty" });
     }
 
-    await pool.execute(
-      "UPDATE notes SET title = ?, content = ?, updated_at = NOW() WHERE id = ?",
-      [nextTitle, nextContent, noteId]
-    );
-    const [[updated]] = await pool.execute(
-      `SELECT n.*, l.name as lead_name
-       FROM notes n
-       LEFT JOIN leads l ON l.id = n.lead_id
-       WHERE n.id = ? AND n.is_deleted = 0`,
-      [noteId]
-    );
+    await prisma.notes.update({
+      where: { id: noteId },
+      data: {
+        title: nextTitle,
+        content: nextContent,
+        updated_at: new Date(),
+      },
+    });
+
+    const updated = await prisma.notes.findFirst({
+      where: { id: noteId, is_deleted: false },
+    });
+    const [withLead] = await attachLeadNames(updated ? [updated] : []);
     emitNotesChanged({ scope: "notes", action: "update", id: noteId });
     emitAdminChanged({ scope: "stats", reason: "notes", action: "update" });
-    res.json({ success: true, data: updated });
+    res.json({ success: true, data: withLead || null });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -171,19 +194,23 @@ async function deleteNote(req, res) {
     const userIntId = req.user?.id;
     if (!userIntId) return res.status(401).json({ success: false, message: "Unauthorized" });
 
-    const [[row]] = await pool.execute(
-      "SELECT id, created_by FROM notes WHERE id = ? AND is_deleted = 0",
-      [noteId]
-    );
+    const row = await prisma.notes.findFirst({
+      where: { id: noteId, is_deleted: false },
+      select: { id: true, created_by: true },
+    });
     if (!row) return res.status(404).json({ success: false, message: "Note not found" });
     if (row.created_by !== userIntId) {
       return res.status(403).json({ success: false, message: "Not allowed" });
     }
 
-    await pool.execute(
-      "UPDATE notes SET is_deleted = 1, deleted_at = NOW(), updated_at = NOW() WHERE id = ? AND is_deleted = 0",
-      [noteId]
-    );
+    await prisma.notes.update({
+      where: { id: noteId },
+      data: {
+        is_deleted: true,
+        deleted_at: new Date(),
+        updated_at: new Date(),
+      },
+    });
     emitNotesChanged({ scope: "notes", action: "delete", id: noteId });
     emitAdminChanged({ scope: "stats", reason: "notes", action: "delete" });
     res.json({ success: true });
