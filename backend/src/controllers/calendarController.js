@@ -1,4 +1,4 @@
-const { pool } = require("../config/database");
+const { pool, prisma } = require("../config/prismaPool");
 const { tableExists } = require("../utils/schemaHelpers");
 const { ensureCalendarCrmTables } = require("../utils/ensureCalendarCrmTables");
 const {
@@ -1100,41 +1100,47 @@ async function quickAddFromCalendar(req, res) {
       const pri = ["low", "medium", "high"].includes(String(b.priority || "").toLowerCase())
         ? String(b.priority).toLowerCase()
         : "medium";
-      const conn = await pool.getConnection();
-      try {
-        await conn.beginTransaction();
-        let todoId;
+      const todoId = await prisma.$transaction(async (tx) => {
+        let id;
         try {
-          const [result] = await conn.execute(
+          await tx.$executeRawUnsafe(
             `INSERT INTO crm_todos
               (tenant_id, body, frequency, todo_date, priority, carry_forward, status, attachment_json, created_by)
              VALUES (?, ?, 'once', ?, ?, 0, 'pending', NULL, ?)`,
-            [tenantId, body, todoDate, pri, uid]
+            tenantId,
+            body,
+            todoDate,
+            pri,
+            uid
           );
-          todoId = result.insertId;
+          const idRows = await tx.$queryRawUnsafe("SELECT LAST_INSERT_ID() AS id");
+          id = Number(idRows?.[0]?.id || 0);
         } catch (e2) {
           const msg = String(e2?.message || "");
           if (e2?.code !== "ER_BAD_FIELD_ERROR" && !/Unknown column/i.test(msg)) throw e2;
-          const [result] = await conn.execute(
+          await tx.$executeRawUnsafe(
             `INSERT INTO crm_todos
               (body, frequency, todo_date, priority, carry_forward, status, attachment_json, created_by)
              VALUES (?, 'once', ?, ?, 0, 'pending', NULL, ?)`,
-            [body, todoDate, pri, uid]
+            body,
+            todoDate,
+            pri,
+            uid
           );
-          todoId = result.insertId;
+          const idRows = await tx.$queryRawUnsafe("SELECT LAST_INSERT_ID() AS id");
+          id = Number(idRows?.[0]?.id || 0);
         }
-        await conn.execute(`DELETE FROM crm_todo_assignees WHERE todo_id = ?`, [todoId]);
-        await conn.execute(`INSERT INTO crm_todo_assignees (todo_id, user_id) VALUES (?, ?)`, [todoId, uid]);
-        await conn.commit();
-        emitTodosChanged({ action: "create", id: todoId, tenantId: tenantId || undefined });
-        emitCalendarChanged({ reason: "todos", action: "quick_add", id: todoId });
-        return res.status(201).json({ success: true, kind: "todo", id: todoId });
-      } catch (e) {
-        await conn.rollback();
-        throw e;
-      } finally {
-        conn.release();
-      }
+        await tx.$executeRawUnsafe(`DELETE FROM crm_todo_assignees WHERE todo_id = ?`, id);
+        await tx.$executeRawUnsafe(
+          `INSERT INTO crm_todo_assignees (todo_id, user_id) VALUES (?, ?)`,
+          id,
+          uid
+        );
+        return id;
+      });
+      emitTodosChanged({ action: "create", id: todoId, tenantId: tenantId || undefined });
+      emitCalendarChanged({ reason: "todos", action: "quick_add", id: todoId });
+      return res.status(201).json({ success: true, kind: "todo", id: todoId });
     }
 
     if (kind === "lead_followup") {

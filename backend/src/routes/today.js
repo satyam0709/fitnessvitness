@@ -1,6 +1,6 @@
 const express = require("express");
 const { verifyToken } = require("../middleware/verifyToken");
-const { pool } = require("../config/database");
+const { pool } = require("../config/prismaPool");
 const { nextOccurrence } = require("../utils/todoRecurrence");
 const {
   emitCalendarChanged,
