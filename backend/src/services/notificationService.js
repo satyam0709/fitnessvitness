@@ -1,10 +1,25 @@
-const { pool } = require("../config/database");
+const prisma = require("../config/prisma");
 const { emitNotificationCreated } = require("../realtime/meetingsRealtime");
 
 function clipText(v, max) {
   const s = String(v || "").trim();
   if (!s) return "";
   return s.length > max ? `${s.slice(0, max - 1)}...` : s;
+}
+
+function formatNotification(row) {
+  if (!row) return null;
+  const actor = row.users_notifications_actor_user_idTousers;
+  const notification = {
+    ...row,
+    id: Number(row.id),
+    entity_id: row.entity_id != null ? Number(row.entity_id) : null,
+    actor_name: actor
+      ? [actor.first_name, actor.last_name].filter(Boolean).join(" ").trim()
+      : "",
+  };
+  delete notification.users_notifications_actor_user_idTousers;
+  return notification;
 }
 
 async function createUserNotification({
@@ -26,21 +41,28 @@ async function createUserNotification({
   const et = clipText(entityType || "general", 50) || "general";
   const eid = entityId == null ? null : Number(entityId) || null;
 
-  const [result] = await pool.query(
-    `INSERT INTO notifications
-      (user_id, actor_user_id, entity_type, entity_id, title, body, is_read)
-     VALUES (?, ?, ?, ?, ?, ?, 0)`,
-    [uid, aid, et, eid, t, b]
-  );
+  const created = await prisma.notifications.create({
+    data: {
+      user_id: uid,
+      actor_user_id: aid,
+      entity_type: et,
+      entity_id: eid != null ? BigInt(eid) : null,
+      title: t,
+      body: b,
+      is_read: false,
+    },
+  });
 
-  const [rows] = await pool.query(
-    `SELECT n.*, TRIM(CONCAT_WS(' ', u.first_name, u.last_name)) AS actor_name
-     FROM notifications n
-     LEFT JOIN users u ON u.id = n.actor_user_id
-     WHERE n.id = ? LIMIT 1`,
-    [result.insertId]
-  );
-  const notification = rows[0] || null;
+  const row = await prisma.notifications.findFirst({
+    where: { id: created.id },
+    include: {
+      users_notifications_actor_user_idTousers: {
+        select: { first_name: true, last_name: true },
+      },
+    },
+  });
+
+  const notification = formatNotification(row);
   if (notification) {
     try {
       emitNotificationCreated(uid, notification);

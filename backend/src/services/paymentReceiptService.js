@@ -1,5 +1,5 @@
-const { pool } = require("../config/database");
 const prisma = require("../config/prisma");
+const { Prisma } = require("../generated/prisma");
 const { emitInvoicesChanged } = require("../realtime/meetingsRealtime");
 const { ensureInvoicesTable } = require("../config/ensureSchema");
 
@@ -16,37 +16,30 @@ function formatIsoDate(val) {
   return `${y}-${m}-${dateStr}`;
 }
 
-async function hasInvoiceColumn(column) {
-  const [rows] = await pool.execute(
-    `SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'invoices' AND COLUMN_NAME = ? LIMIT 1`,
-    [column]
-  );
-  return rows.length > 0;
-}
-
-async function canLinkSource() {
-  return (await hasInvoiceColumn("source_type")) && (await hasInvoiceColumn("source_id"));
+function toDateOnly(isoYmd) {
+  return new Date(`${isoYmd}T00:00:00.000Z`);
 }
 
 async function findExistingReceipt(sourceType, sourceId) {
-  if (!(await canLinkSource())) return null;
-  const [rows] = await pool.execute(
-    `SELECT id, invoice_number FROM invoices
-     WHERE source_type = ? AND source_id = ? AND is_deleted = 0
-     LIMIT 1`,
-    [sourceType, sourceId]
-  );
-  return rows[0] || null;
+  const row = await prisma.invoices.findFirst({
+    where: {
+      source_type: sourceType,
+      source_id: Number(sourceId),
+      is_deleted: false,
+    },
+    select: { id: true, invoice_number: true },
+  });
+  return row || null;
 }
 
 async function nextReceiptNumber() {
   const year = new Date().getFullYear();
-  const [[{ cnt }]] = await pool.execute(
-    `SELECT COUNT(*) AS cnt FROM invoices WHERE invoice_number LIKE ?`,
-    [`RCP-${year}-%`]
-  );
-  return `RCP-${year}-${String(Number(cnt || 0) + 1).padStart(4, "0")}`;
+  const cnt = await prisma.invoices.count({
+    where: {
+      invoice_number: { startsWith: `RCP-${year}-` },
+    },
+  });
+  return `RCP-${year}-${String(cnt + 1).padStart(4, "0")}`;
 }
 
 async function insertReceiptInvoice({
@@ -66,67 +59,36 @@ async function insertReceiptInvoice({
 }) {
   await ensureInvoicesTable();
   const invoiceNumber = await nextReceiptNumber();
-  const lineJson = JSON.stringify(lineItems || []);
-  const metaJson = paymentMeta ? JSON.stringify(paymentMeta) : null;
+  const invoiceDateIso = formatIsoDate(invoiceDate);
 
-  const cols = [
-    "invoice_number",
-    "type",
-    "customer_name",
-    "customer_email",
-    "vendor_name",
-    "invoice_date",
-    "due_date",
-    "subtotal",
-    "tax",
-    "total",
-    "status",
-    "notes",
-    "created_by",
-    "gst_mode",
-    "currency",
-    "line_items_json",
-  ];
-  const vals = [
-    invoiceNumber,
-    "sales",
-    customerName || null,
-    customerEmail || null,
-    null,
-    invoiceDate,
-    null,
-    subtotal,
-    tax || 0,
-    total,
-    "paid",
-    notes || null,
-    userId,
-    "none",
-    "INR",
-    lineJson,
-  ];
+  const created = await prisma.invoices.create({
+    data: {
+      invoice_number: invoiceNumber,
+      type: "sales",
+      customer_name: customerName || null,
+      customer_email: customerEmail || null,
+      customer_phone: customerPhone || null,
+      vendor_name: null,
+      invoice_date: toDateOnly(invoiceDateIso),
+      due_date: null,
+      subtotal: new Prisma.Decimal(subtotal ?? 0),
+      tax: new Prisma.Decimal(tax || 0),
+      total: new Prisma.Decimal(total ?? 0),
+      status: "paid",
+      notes: notes || null,
+      created_by: userId,
+      gst_mode: "none",
+      currency: "INR",
+      line_items_json: lineItems || [],
+      payment_meta_json: paymentMeta || null,
+      source_type: sourceType || null,
+      source_id: sourceId != null ? Number(sourceId) : null,
+    },
+    select: { id: true, invoice_number: true },
+  });
 
-  if (await hasInvoiceColumn("customer_phone")) {
-    cols.push("customer_phone");
-    vals.push(customerPhone || null);
-  }
-  if (await hasInvoiceColumn("payment_meta_json")) {
-    cols.push("payment_meta_json");
-    vals.push(metaJson);
-  }
-  if (sourceType && sourceId != null && (await canLinkSource())) {
-    cols.push("source_type", "source_id");
-    vals.push(sourceType, sourceId);
-  }
-
-  const placeholders = cols.map(() => "?").join(", ");
-  const [result] = await pool.execute(
-    `INSERT INTO invoices (${cols.join(", ")}) VALUES (${placeholders})`,
-    vals
-  );
-
-  emitInvoicesChanged({ action: "receipt_created", id: result.insertId });
-  return { id: result.insertId, invoice_number: invoiceNumber };
+  emitInvoicesChanged({ action: "receipt_created", id: created.id });
+  return { id: created.id, invoice_number: created.invoice_number };
 }
 
 async function resolveCollectionParty(col) {
@@ -135,24 +97,24 @@ async function resolveCollectionParty(col) {
   let customerEmail = null;
 
   if (col.client_id) {
-    const [rows] = await pool.execute(
-      `SELECT full_name, phone, email FROM fitness_clients WHERE client_id = ? LIMIT 1`,
-      [col.client_id]
-    );
-    if (rows[0]) {
-      customerName = rows[0].full_name || col.client_id;
-      customerPhone = rows[0].phone || null;
-      customerEmail = rows[0].email || null;
+    const client = await prisma.fitness_clients.findFirst({
+      where: { client_id: String(col.client_id) },
+      select: { full_name: true, phone: true, email: true },
+    });
+    if (client) {
+      customerName = client.full_name || col.client_id;
+      customerPhone = client.phone || null;
+      customerEmail = client.email || null;
     } else {
       customerName = col.client_name || col.client_id;
     }
   } else if (col.external_buyer_id) {
-    const [rows] = await pool.execute(
-      `SELECT full_name, phone FROM fitness_external_buyers WHERE id = ? LIMIT 1`,
-      [col.external_buyer_id]
-    );
-    customerName = rows[0]?.full_name || col.external_buyer_name || "Walk-in customer";
-    customerPhone = rows[0]?.phone || null;
+    const buyer = await prisma.fitness_external_buyers.findFirst({
+      where: { id: Number(col.external_buyer_id) },
+      select: { full_name: true, phone: true },
+    });
+    customerName = buyer?.full_name || col.external_buyer_name || "Walk-in customer";
+    customerPhone = buyer?.phone || null;
   } else {
     customerName = col.client_name || col.external_buyer_name || "Customer";
   }
@@ -171,29 +133,45 @@ async function createReceiptForCollectionPayment(paymentId, userId) {
   const existing = await findExistingReceipt(SOURCE_COLLECTION_PAYMENT, pid);
   if (existing) return existing;
 
-  const [payRows] = await pool.execute(
-    `SELECT p.*, c.id AS collection_id, c.title, c.collection_type, c.client_id, c.external_buyer_id,
-            c.total_inr, c.received_inr, c.pending_inr, c.status AS collection_status,
-            fc.full_name AS client_name, eb.full_name AS external_buyer_name
-     FROM fitness_collection_payments p
-     JOIN fitness_collections c ON c.id = p.collection_id
-     LEFT JOIN fitness_clients fc ON fc.client_id = c.client_id
-     LEFT JOIN fitness_external_buyers eb ON eb.id = c.external_buyer_id
-     WHERE p.id = ?`,
-    [pid]
-  );
-  const payment = payRows[0];
-  if (!payment) return null;
+  const payment = await prisma.fitness_collection_payments.findFirst({
+    where: { id: pid },
+    include: {
+      fitness_collections: true,
+    },
+  });
+  if (!payment?.fitness_collections) return null;
+
+  const col = payment.fitness_collections;
+  let clientName = null;
+  let externalBuyerName = null;
+  if (col.client_id) {
+    const client = await prisma.fitness_clients.findFirst({
+      where: { client_id: String(col.client_id) },
+      select: { full_name: true },
+    });
+    clientName = client?.full_name || null;
+  }
+  if (col.external_buyer_id) {
+    const buyer = await prisma.fitness_external_buyers.findFirst({
+      where: { id: Number(col.external_buyer_id) },
+      select: { full_name: true },
+    });
+    externalBuyerName = buyer?.full_name || null;
+  }
 
   const amount = Number(payment.amount_inr) || 0;
   if (amount <= 0) return null;
 
-  const party = await resolveCollectionParty(payment);
+  const party = await resolveCollectionParty({
+    ...col,
+    client_name: clientName,
+    external_buyer_name: externalBuyerName,
+  });
   const paidAt = formatIsoDate(payment.paid_at);
 
   const lineItems = [
     {
-      product_name: payment.title || "Payment",
+      product_name: col.title || "Payment",
       qty: 1,
       cost: amount,
       discount: 0,
@@ -204,19 +182,19 @@ async function createReceiptForCollectionPayment(paymentId, userId) {
 
   const paymentMeta = {
     receipt_kind: SOURCE_COLLECTION_PAYMENT,
-    collection_id: payment.collection_id,
+    collection_id: col.id,
     payment_id: pid,
     pay_mode: payment.pay_mode,
     paid_at: paidAt,
-    collection_type: payment.collection_type,
-    collection_status: payment.collection_status,
-    client_id: payment.client_id,
-    collection_total_inr: Number(payment.total_inr),
-    collection_received_inr: Number(payment.received_inr),
-    collection_pending_inr: Number(payment.pending_inr),
+    collection_type: col.collection_type,
+    collection_status: col.status,
+    client_id: col.client_id,
+    collection_total_inr: Number(col.total_inr),
+    collection_received_inr: Number(col.received_inr),
+    collection_pending_inr: Number(col.pending_inr),
   };
 
-  const notes = `Payment receipt — ${payment.title || "Collection"} (#${payment.collection_id}). Paid via ${payment.pay_mode || "—"} on ${paidAt}.`;
+  const notes = `Payment receipt — ${col.title || "Collection"} (#${col.id}). Paid via ${payment.pay_mode || "—"} on ${paidAt}.`;
 
   return insertReceiptInvoice({
     userId: uid,
@@ -246,24 +224,37 @@ async function createReceiptForFitnessTransaction(transactionId, userId) {
   const existing = await findExistingReceipt(SOURCE_FITNESS_TRANSACTION, txId);
   if (existing) return existing;
 
-  const [rows] = await pool.execute(
-    `SELECT ft.*, fc.full_name AS client_name, fc.phone AS client_phone, fc.email AS client_email,
-            eb.full_name AS external_buyer_name, eb.phone AS external_phone
-     FROM fitness_transactions ft
-     LEFT JOIN fitness_clients fc ON fc.client_id = ft.client_id
-     LEFT JOIN fitness_external_buyers eb ON eb.id = ft.external_buyer_id
-     WHERE ft.id = ?`,
-    [txId]
-  );
-  const tx = rows[0];
+  const tx = await prisma.fitness_transactions.findFirst({
+    where: { id: txId },
+    include: {
+      fitness_external_buyers: {
+        select: { full_name: true, phone: true },
+      },
+    },
+  });
   if (!tx) return null;
+
+  let clientName = null;
+  let clientPhone = null;
+  let clientEmail = null;
+  if (tx.client_id) {
+    const client = await prisma.fitness_clients.findFirst({
+      where: { client_id: String(tx.client_id) },
+      select: { full_name: true, phone: true, email: true },
+    });
+    clientName = client?.full_name || null;
+    clientPhone = client?.phone || null;
+    clientEmail = client?.email || null;
+  }
 
   const amount = Number(tx.received_inr) || 0;
   if (amount <= 0) return null;
 
-  let customerName = tx.client_name || tx.external_buyer_name || "Customer";
-  let customerPhone = tx.client_phone || tx.external_phone || null;
-  let customerEmail = tx.client_email || null;
+  const customerName =
+    clientName || tx.fitness_external_buyers?.full_name || "Customer";
+  const customerPhone =
+    clientPhone || tx.fitness_external_buyers?.phone || null;
+  const customerEmail = clientEmail || null;
 
   const txDate = formatIsoDate(tx.transaction_date);
   const lineItems = [
@@ -311,17 +302,13 @@ async function createReceiptForFitnessTransaction(transactionId, userId) {
 async function createReceiptForLatestCollectionPayment(collectionId, userId) {
   const cid = Number(collectionId);
   if (!Number.isFinite(cid) || cid < 1) return null;
-  const [rows] = await pool.execute(
-    `SELECT id FROM fitness_collection_payments WHERE collection_id = ? ORDER BY id DESC LIMIT 1`,
-    [cid]
-  );
-  if (!rows[0]) return null;
-  return createReceiptForCollectionPayment(rows[0].id, userId);
-}
-
-async function getCompanySettingsRow() {
-  const [rows] = await pool.execute("SELECT * FROM company_settings WHERE id = 1 LIMIT 1");
-  return rows[0] || null;
+  const latest = await prisma.fitness_collection_payments.findFirst({
+    where: { collection_id: cid },
+    orderBy: { id: "desc" },
+    select: { id: true },
+  });
+  if (!latest) return null;
+  return createReceiptForCollectionPayment(latest.id, userId);
 }
 
 function parseJsonField(raw) {
@@ -339,7 +326,7 @@ async function getReceiptPayload(invoiceId, user) {
   if (!Number.isFinite(id) || id < 1) return null;
 
   const row = await prisma.invoices.findFirst({
-    where: { id, is_deleted: false }
+    where: { id, is_deleted: false },
   });
   if (!row) return null;
   if (user?.role !== "admin" && row.created_by !== user?.id) return { forbidden: true };
@@ -349,10 +336,11 @@ async function getReceiptPayload(invoiceId, user) {
   if (row.created_by) {
     const creator = await prisma.users.findUnique({
       where: { id: row.created_by },
-      select: { first_name: true, last_name: true, email: true }
+      select: { first_name: true, last_name: true, email: true },
     });
     if (creator) {
-      creatorName = [creator.first_name, creator.last_name].filter(Boolean).join(" ").trim() || null;
+      creatorName =
+        [creator.first_name, creator.last_name].filter(Boolean).join(" ").trim() || null;
       creatorEmail = creator.email || null;
     }
   }
@@ -371,7 +359,7 @@ async function getReceiptPayload(invoiceId, user) {
   delete invoice.payment_meta_json;
 
   const company = await prisma.company_settings.findUnique({
-    where: { id: 1 }
+    where: { id: 1 },
   });
   return { invoice, company };
 }
