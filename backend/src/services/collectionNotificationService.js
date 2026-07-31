@@ -70,19 +70,48 @@ async function sweepCollectionFollowupNotifications(userId) {
   const today = new Date().toISOString().slice(0, 10);
   const todayDate = new Date(today);
 
-  const rows = await prisma.$queryRaw`
-     SELECT c.id, c.title, c.pending_inr, c.next_followup_date,
-            COALESCE(fc.full_name, eb.full_name) AS client_name,
-            c.assigned_to
-     FROM fitness_collections c
-     LEFT JOIN fitness_clients fc ON fc.client_id = c.client_id
-     LEFT JOIN fitness_external_buyers eb ON eb.id = c.external_buyer_id
-     WHERE c.status IN ('open','partial')
-       AND c.pending_inr > 0
-       AND c.next_followup_date IS NOT NULL
-       AND c.next_followup_date <= ${today}
-       AND (c.assigned_to = ${uid} OR c.created_by = ${uid})
-  `;
+  const collections = await prisma.fitness_collections.findMany({
+    where: {
+      status: { in: ["open", "partial"] },
+      pending_inr: { gt: 0 },
+      next_followup_date: { not: null, lte: todayDate },
+      OR: [{ assigned_to: uid }, { created_by: uid }],
+    },
+    select: {
+      id: true,
+      title: true,
+      pending_inr: true,
+      next_followup_date: true,
+      assigned_to: true,
+      client_id: true,
+      external_buyer_id: true,
+    },
+  });
+  const clientIds = [...new Set(collections.map((c) => c.client_id).filter(Boolean))];
+  const buyerIds = [...new Set(collections.map((c) => c.external_buyer_id).filter(Boolean))];
+  const [clients, buyers] = await Promise.all([
+    clientIds.length
+      ? prisma.fitness_clients.findMany({
+          where: { client_id: { in: clientIds } },
+          select: { client_id: true, full_name: true },
+        })
+      : [],
+    buyerIds.length
+      ? prisma.fitness_external_buyers.findMany({
+          where: { id: { in: buyerIds } },
+          select: { id: true, full_name: true },
+        })
+      : [],
+  ]);
+  const clientNameById = new Map(clients.map((c) => [c.client_id, c.full_name]));
+  const buyerNameById = new Map(buyers.map((b) => [b.id, b.full_name]));
+  const rows = collections.map((c) => ({
+    ...c,
+    client_name:
+      (c.client_id && clientNameById.get(c.client_id)) ||
+      (c.external_buyer_id && buyerNameById.get(c.external_buyer_id)) ||
+      null,
+  }));
   const admins = await getAdminUserIds();
   const isAdmin = admins.includes(uid);
 

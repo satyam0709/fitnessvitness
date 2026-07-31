@@ -144,13 +144,21 @@ async function verifyToken(req, res, next) {
     req.auth.userId = null;
     req.auth.dbUserId = user.id;
 
-    // FIXED: 6 throttle last_login writes to once per 5-minute window per user
+    // Throttle last_login writes to once per 5-minute window per user
     const now = Date.now();
     const canWriteLastLogin = !lastLoginWriteByUser.has(user.id) || now - lastLoginWriteByUser.get(user.id) > LAST_LOGIN_WINDOW_MS;
     if (canWriteLastLogin) {
       lastLoginWriteByUser.set(user.id, now);
-      prisma.$executeRaw`UPDATE users SET last_login = NOW() WHERE id = ${user.id} AND (last_login IS NULL OR last_login < DATE_SUB(NOW(), INTERVAL 5 MINUTE))`
-        .catch(() => { });
+      const threshold = new Date(now - LAST_LOGIN_WINDOW_MS);
+      prisma.users
+        .updateMany({
+          where: {
+            id: user.id,
+            OR: [{ last_login: null }, { last_login: { lt: threshold } }],
+          },
+          data: { last_login: new Date() },
+        })
+        .catch(() => {});
     }
 
     next();

@@ -1,38 +1,56 @@
-const { pool } = require("../config/prismaPool");
+const prisma = require("../config/prisma");
+
+function assignedName(user) {
+  if (!user) return null;
+  return [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || null;
+}
+
+function mapLeadRow(row) {
+  if (!row) return row;
+  const assigned = row.users_leads_assigned_toTousers;
+  const { users_leads_assigned_toTousers, users_leads_created_byTousers, meetings, reminders, tasks, ...rest } = row;
+  return {
+    ...rest,
+    company: rest.company_name ?? null,
+    assigned_name: assignedName(assigned),
+    assigned_email: assigned?.email ?? null,
+  };
+}
 
 async function getLeads(req, res) {
   try {
     const { search, status, page = 1, limit = 20 } = req.query;
     const offset = (Number(page) - 1) * Number(limit);
+    const take = Number(limit);
 
-    let where  = "1=1";
-    const params = [];
-
+    const where = {};
+    if (status) where.status = status;
     if (search) {
-      where += " AND (l.name LIKE ? OR l.email LIKE ? OR l.company LIKE ? OR l.phone LIKE ?)";
-      const like = `%${search}%`;
-      params.push(like, like, like, like);
+      const q = String(search);
+      where.OR = [
+        { name: { contains: q } },
+        { email: { contains: q } },
+        { company_name: { contains: q } },
+        { phone: { contains: q } },
+      ];
     }
-    if (status) { where += " AND l.status = ?"; params.push(status); }
 
-    const [[{ total }]] = await pool.execute(
-      `SELECT COUNT(*) as total FROM leads l WHERE ${where}`,
-      params
-    );
+    const [total, rows] = await Promise.all([
+      prisma.leads.count({ where }),
+      prisma.leads.findMany({
+        where,
+        include: {
+          users_leads_assigned_toTousers: {
+            select: { first_name: true, last_name: true, email: true },
+          },
+        },
+        orderBy: { created_at: "desc" },
+        take,
+        skip: offset,
+      }),
+    ]);
 
-    const [leads] = await pool.execute(
-      `SELECT l.*,
-              u.full_name as assigned_name,
-              u.email as assigned_email
-       FROM leads l
-       LEFT JOIN users u ON u.id = l.assigned_to
-       WHERE ${where}
-       ORDER BY l.created_at DESC
-       LIMIT ? OFFSET ?`,
-      [...params, Number(limit), offset]
-    );
-
-    res.json({ success: true, total, leads });
+    res.json({ success: true, total, leads: rows.map(mapLeadRow) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -40,26 +58,33 @@ async function getLeads(req, res) {
 
 async function getLead(req, res) {
   try {
-    const { id } = req.params;
+    const id = Number(req.params.id);
 
-    const [[lead]] = await pool.execute(
-      `SELECT l.*,
-              u.full_name as assigned_name,
-              u.email as assigned_email
-       FROM leads l
-       LEFT JOIN users u ON u.id = l.assigned_to
-       WHERE l.id = ?`,
-      [id]
-    );
+    const lead = await prisma.leads.findUnique({
+      where: { id },
+      include: {
+        users_leads_assigned_toTousers: {
+          select: { first_name: true, last_name: true, email: true },
+        },
+      },
+    });
     if (!lead) return res.status(404).json({ success: false, message: "Lead not found" });
 
-    // Fetch linked tasks, notes, reminders, meetings
-    const [tasks]     = await pool.execute("SELECT * FROM tasks WHERE lead_id = ? ORDER BY created_at DESC", [id]);
-    const [notes]     = await pool.execute("SELECT * FROM notes WHERE lead_id = ? ORDER BY created_at DESC", [id]);
-    const [reminders] = await pool.execute("SELECT * FROM reminders WHERE lead_id = ? ORDER BY remind_at ASC", [id]);
-    const [meetings]  = await pool.execute("SELECT * FROM meetings WHERE lead_id = ? ORDER BY start_time ASC", [id]);
+    const [tasks, notes, reminders, meetings] = await Promise.all([
+      prisma.tasks.findMany({ where: { lead_id: id }, orderBy: { created_at: "desc" } }),
+      prisma.notes.findMany({ where: { lead_id: id }, orderBy: { created_at: "desc" } }),
+      prisma.reminders.findMany({ where: { lead_id: id }, orderBy: { remind_at: "asc" } }),
+      prisma.meetings.findMany({ where: { lead_id: id }, orderBy: { start_time: "asc" } }),
+    ]);
 
-    res.json({ success: true, lead, tasks, notes, reminders, meetings });
+    res.json({
+      success: true,
+      lead: mapLeadRow(lead),
+      tasks,
+      notes,
+      reminders,
+      meetings,
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -67,27 +92,26 @@ async function getLead(req, res) {
 
 async function createLead(req, res) {
   try {
-    const { name, email, phone, company, source, status, assigned_to, notes } = req.body;
+    const { name, email, phone, company, company_name, source, status, assigned_to, notes } = req.body;
 
     if (!name?.trim()) {
       return res.status(400).json({ success: false, message: "Name is required" });
     }
 
-    const [result] = await pool.execute(
-      `INSERT INTO leads (name, email, phone, company, source, status, assigned_to, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        name.trim(),
-        email    || null,
-        phone    || null,
-        company  || null,
-        source   || "Website",
-        status   || "new",
-        assigned_to ? Number(assigned_to) : null,
-        notes    || null,
-      ]
-    );
-    res.status(201).json({ success: true, id: result.insertId });
+    const created = await prisma.leads.create({
+      data: {
+        name: name.trim(),
+        email: email || null,
+        phone: phone || "",
+        company_name: company_name || company || null,
+        source: source || "Website",
+        status: status || "new",
+        assigned_to: assigned_to ? Number(assigned_to) : null,
+        notes: notes || null,
+        created_by: req.user?.id || 0,
+      },
+    });
+    res.status(201).json({ success: true, id: created.id });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -96,24 +120,22 @@ async function createLead(req, res) {
 async function updateLead(req, res) {
   try {
     const { id } = req.params;
-    const { name, email, phone, company, source, status, assigned_to, notes } = req.body;
+    const { name, email, phone, company, company_name, source, status, assigned_to, notes } = req.body;
 
-    await pool.execute(
-      `UPDATE leads SET
-         name=?, email=?, phone=?, company=?, source=?, status=?, assigned_to=?, notes=?
-       WHERE id=?`,
-      [
-        name    || null,
-        email   || null,
-        phone   || null,
-        company || null,
-        source  || "Website",
-        status  || "new",
-        assigned_to ? Number(assigned_to) : null,
-        notes   || null,
-        id,
-      ]
-    );
+    await prisma.leads.update({
+      where: { id: Number(id) },
+      data: {
+        name: name || null,
+        email: email || null,
+        phone: phone || "",
+        company_name: company_name || company || null,
+        source: source || "Website",
+        status: status || "new",
+        assigned_to: assigned_to ? Number(assigned_to) : null,
+        notes: notes || null,
+        updated_at: new Date(),
+      },
+    });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -123,7 +145,10 @@ async function updateLead(req, res) {
 async function updateLeadStatus(req, res) {
   try {
     const { status } = req.body;
-    await pool.execute("UPDATE leads SET status = ? WHERE id = ?", [status, req.params.id]);
+    await prisma.leads.update({
+      where: { id: Number(req.params.id) },
+      data: { status, updated_at: new Date() },
+    });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -132,7 +157,7 @@ async function updateLeadStatus(req, res) {
 
 async function deleteLead(req, res) {
   try {
-    await pool.execute("DELETE FROM leads WHERE id = ?", [req.params.id]);
+    await prisma.leads.delete({ where: { id: Number(req.params.id) } });
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });

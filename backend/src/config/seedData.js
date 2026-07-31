@@ -1,4 +1,4 @@
-const { pool } = require("./prismaPool");
+const prisma = require("./prisma");
 const { hashPassword } = require("../services/authService");
 require("dotenv").config();
 
@@ -6,83 +6,96 @@ const SUPERADMIN_EMAIL = process.env.SEED_SUPERADMIN_EMAIL || "iamsatyamsingh91@
 const SUPERADMIN_PASSWORD = process.env.SEED_SUPERADMIN_PASSWORD || "Rnd@1234";
 
 const SAMPLE_INTEGRATIONS = [
-  { key: "indiamart", name: "IndiaMart", is_active: 0 },
-  { key: "facebook", name: "Facebook Leads", is_active: 0 },
-  { key: "website_lead", name: "Website Lead", is_active: 0 },
-  { key: "google_ads", name: "Google Ads", is_active: 0 },
-  { key: "99acres", name: "99Acres", is_active: 0 },
-  { key: "housing", name: "Housing.com", is_active: 0 },
-  { key: "magicbricks", name: "MagicBricks", is_active: 0 },
-  { key: "tradeindia", name: "TradeIndia", is_active: 0 },
-  { key: "just_dial", name: "JustDial", is_active: 0 },
-  { key: "wordpress", name: "WordPress", is_active: 0 },
-  { key: "google_form", name: "Google Form", is_active: 0 },
-  { key: "software_suggest", name: "Software Suggest", is_active: 0 },
-  { key: "systeme_io", name: "Systeme.io", is_active: 0 },
-  { key: "referral", name: "Referral", is_active: 0 },
+  { key: "indiamart", name: "IndiaMart", is_active: false },
+  { key: "facebook", name: "Facebook Leads", is_active: false },
+  { key: "website_lead", name: "Website Lead", is_active: false },
+  { key: "google_ads", name: "Google Ads", is_active: false },
+  { key: "99acres", name: "99Acres", is_active: false },
+  { key: "housing", name: "Housing.com", is_active: false },
+  { key: "magicbricks", name: "MagicBricks", is_active: false },
+  { key: "tradeindia", name: "TradeIndia", is_active: false },
+  { key: "just_dial", name: "JustDial", is_active: false },
+  { key: "wordpress", name: "WordPress", is_active: false },
+  { key: "google_form", name: "Google Form", is_active: false },
+  { key: "software_suggest", name: "Software Suggest", is_active: false },
+  { key: "systeme_io", name: "Systeme.io", is_active: false },
+  { key: "referral", name: "Referral", is_active: false },
 ];
 
 async function seedData() {
   try {
     console.log("\nStarting database seeding...\n");
 
-    await pool.execute(
-      `INSERT INTO company_settings (id, company_name, website, phone, email, address, city, state, country, gst_number, pan_number)
-       VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE
-         company_name = VALUES(company_name),
-         website = VALUES(website),
-         phone = VALUES(phone),
-         email = VALUES(email),
-         address = VALUES(address),
-         city = VALUES(city),
-         state = VALUES(state),
-         country = VALUES(country),
-         gst_number = VALUES(gst_number),
-         pan_number = VALUES(pan_number)`,
-      [
-        process.env.SEED_COMPANY_NAME || "RND Office 365 CRM",
-        process.env.SEED_COMPANY_WEBSITE || "https://office365-rnd-crm.example.com",
-        process.env.SEED_COMPANY_PHONE || "+91 90000 00000",
-        process.env.SEED_COMPANY_EMAIL || "support@rnd-crm.example.com",
-        process.env.SEED_COMPANY_ADDRESS || "123 RND Park, Business District",
-        process.env.SEED_COMPANY_CITY || "Vapi",
-        process.env.SEED_COMPANY_STATE || "Gujrat",
-        process.env.SEED_COMPANY_COUNTRY || "India",
-        process.env.SEED_COMPANY_GST || "27AAAAA0000A1Z5",
-        process.env.SEED_COMPANY_PAN || "AAAAA0000A",
-      ]
-    );
+    await prisma.company_settings.upsert({
+      where: { id: 1 },
+      create: {
+        id: 1,
+        company_name: process.env.SEED_COMPANY_NAME || "RND Office 365 CRM",
+        website: process.env.SEED_COMPANY_WEBSITE || "https://office365-rnd-crm.example.com",
+        phone: process.env.SEED_COMPANY_PHONE || "+91 90000 00000",
+        email: process.env.SEED_COMPANY_EMAIL || "support@rnd-crm.example.com",
+        address: process.env.SEED_COMPANY_ADDRESS || "123 RND Park, Business District",
+        city: process.env.SEED_COMPANY_CITY || "Vapi",
+        state: process.env.SEED_COMPANY_STATE || "Gujrat",
+        country: process.env.SEED_COMPANY_COUNTRY || "India",
+        gst_number: process.env.SEED_COMPANY_GST || "27AAAAA0000A1Z5",
+        pan_number: process.env.SEED_COMPANY_PAN || "AAAAA0000A",
+      },
+      update: {
+        company_name: process.env.SEED_COMPANY_NAME || "RND Office 365 CRM",
+        website: process.env.SEED_COMPANY_WEBSITE || "https://office365-rnd-crm.example.com",
+        phone: process.env.SEED_COMPANY_PHONE || "+91 90000 00000",
+        email: process.env.SEED_COMPANY_EMAIL || "support@rnd-crm.example.com",
+        address: process.env.SEED_COMPANY_ADDRESS || "123 RND Park, Business District",
+        city: process.env.SEED_COMPANY_CITY || "Vapi",
+        state: process.env.SEED_COMPANY_STATE || "Gujrat",
+        country: process.env.SEED_COMPANY_COUNTRY || "India",
+        gst_number: process.env.SEED_COMPANY_GST || "27AAAAA0000A1Z5",
+        pan_number: process.env.SEED_COMPANY_PAN || "AAAAA0000A",
+      },
+    });
     console.log("Seeded company settings.");
 
     for (const integration of SAMPLE_INTEGRATIONS) {
-      await pool.execute(
-        `INSERT INTO integrations (` + "`key`" + `, name, is_active
-         ) VALUES (?, ?, ?)
-         ON DUPLICATE KEY UPDATE
-           name = VALUES(name),
-           is_active = VALUES(is_active)`,
-        [integration.key, integration.name, integration.is_active]
-      );
+      await prisma.integrations.upsert({
+        where: { key: integration.key },
+        create: {
+          key: integration.key,
+          name: integration.name,
+          is_active: integration.is_active,
+        },
+        update: {
+          name: integration.name,
+          is_active: integration.is_active,
+        },
+      });
     }
     console.log("Seeded integrations.");
 
     if (SUPERADMIN_EMAIL && SUPERADMIN_PASSWORD) {
       const passwordHash = await hashPassword(SUPERADMIN_PASSWORD);
-      await pool.execute(
-        `INSERT INTO users (email, password_hash, first_name, last_name, role, tenant_id, is_platform_admin, is_active, email_verified)
-         VALUES (?, ?, ?, ?, 'admin', NULL, 1, 1, 1)
-         ON DUPLICATE KEY UPDATE
-           password_hash = VALUES(password_hash),
-           first_name = VALUES(first_name),
-           last_name = VALUES(last_name),
-           role = VALUES(role),
-           tenant_id = VALUES(tenant_id),
-           is_platform_admin = VALUES(is_platform_admin),
-           is_active = VALUES(is_active),
-           email_verified = VALUES(email_verified)`,
-        [SUPERADMIN_EMAIL, passwordHash, "Super", "Admin"]
-      );
+      await prisma.users.upsert({
+        where: { email: SUPERADMIN_EMAIL },
+        create: {
+          email: SUPERADMIN_EMAIL,
+          password_hash: passwordHash,
+          first_name: "Super",
+          last_name: "Admin",
+          role: "admin",
+          is_platform_admin: true,
+          is_active: true,
+          email_verified: true,
+        },
+        update: {
+          password_hash: passwordHash,
+          first_name: "Super",
+          last_name: "Admin",
+          role: "admin",
+          is_platform_admin: true,
+          is_active: true,
+          email_verified: true,
+        },
+      });
       console.log("Seeded platform super-admin user.");
     }
 
@@ -92,59 +105,86 @@ async function seedData() {
     const adminLastName = process.env.SEED_ADMIN_LAST_NAME || "Admin";
 
     if (adminClerkId && adminEmail) {
-      await pool.execute(
-        `INSERT INTO users (clerk_user_id, email, first_name, last_name, role, is_active)
-         VALUES (?, ?, ?, ?, 'admin', 1)
-         ON DUPLICATE KEY UPDATE
-           email = VALUES(email),
-           first_name = VALUES(first_name),
-           last_name = VALUES(last_name),
-           role = VALUES(role),
-           is_active = VALUES(is_active)`,
-        [adminClerkId, adminEmail, adminFirstName, adminLastName]
-      );
+      const existing = await prisma.users.findFirst({
+        where: { OR: [{ clerk_user_id: adminClerkId }, { email: adminEmail }] },
+      });
+      let adminId;
+      if (existing) {
+        const updated = await prisma.users.update({
+          where: { id: existing.id },
+          data: {
+            clerk_user_id: adminClerkId,
+            email: adminEmail,
+            first_name: adminFirstName,
+            last_name: adminLastName,
+            role: "admin",
+            is_active: true,
+          },
+        });
+        adminId = updated.id;
+      } else {
+        const created = await prisma.users.create({
+          data: {
+            clerk_user_id: adminClerkId,
+            email: adminEmail,
+            first_name: adminFirstName,
+            last_name: adminLastName,
+            role: "admin",
+            is_active: true,
+          },
+        });
+        adminId = created.id;
+      }
       console.log("Seeded admin user.");
 
-      const [[adminRow]] = await pool.execute(
-        "SELECT id FROM users WHERE clerk_user_id = ? LIMIT 1",
-        [adminClerkId]
-      );
+      if (adminId) {
+        const existingOrder = await prisma.orders.findFirst({
+          where: { user_id: String(adminClerkId) },
+        });
+        if (!existingOrder) {
+          await prisma.orders.create({
+            data: {
+              user_id: String(adminClerkId),
+              package_name: "Platinum",
+              package_price: 7800,
+              currency: "INR",
+              addons: [],
+              subtotal: 7800,
+              gst: 1404,
+              total: 9204,
+              status: "active",
+            },
+          });
+        }
 
-      if (adminRow?.id) {
-        const adminId = adminRow.id;
+        const lead = await prisma.leads.create({
+          data: {
+            name: "Test Lead",
+            company_name: "RND Solutions",
+            phone: "+91 98765 43210",
+            email: "lead@rnd-example.com",
+            source: "indiamart",
+            status: "new",
+            assigned_to: adminId,
+            created_by: adminId,
+            notes: "Seeded lead created during database setup.",
+          },
+        });
 
-        await pool.execute(
-          `INSERT INTO orders (user_id, package_name, package_price, currency, addons, subtotal, gst, total, status)
-           VALUES (?, 'Platinum', 7800, 'INR', '[]', 7800, 1404, 9204, 'active')
-           ON DUPLICATE KEY UPDATE status = VALUES(status), package_name = VALUES(package_name), total = VALUES(total)`,
-          [adminClerkId]
-        );
-
-        await pool.execute(
-          `INSERT INTO leads (name, company_name, phone, email, source, status, assigned_to, created_by, notes)
-           VALUES (?, ?, ?, ?, 'indiamart', 'new', ?, ?, ?)`,
-          [
-            "Test Lead",
-            "RND Solutions",
-            "+91 98765 43210",
-            "lead@rnd-example.com",
-            adminId,
-            adminId,
-            "Seeded lead created during database setup.",
-          ]
-        );
-
-        await pool.execute(
-          `INSERT INTO tasks (title, description, lead_id, assigned_to, created_by, due_date, priority, status)
-           VALUES (?, ?, (SELECT id FROM leads WHERE created_by = ? ORDER BY created_at DESC LIMIT 1), ?, ?, DATE_ADD(CURDATE(), INTERVAL 7 DAY), 'high', 'new')`,
-          [
-            "Follow up with seeded lead",
-            "Contact the seeded lead and convert them into a customer.",
-            adminId,
-            adminId,
-            adminId,
-          ]
-        );
+        const due = new Date();
+        due.setDate(due.getDate() + 7);
+        await prisma.tasks.create({
+          data: {
+            title: "Follow up with seeded lead",
+            description: "Contact the seeded lead and convert them into a customer.",
+            lead_id: lead.id,
+            assigned_to: adminId,
+            created_by: adminId,
+            due_date: due,
+            priority: "high",
+            status: "new",
+          },
+        });
 
         console.log("Seeded admin order, lead, and task.");
       }
@@ -157,7 +197,7 @@ async function seedData() {
     console.error("Seeding error:", err.message);
     process.exit(1);
   } finally {
-    await pool.end();
+    await prisma.$disconnect();
   }
 }
 

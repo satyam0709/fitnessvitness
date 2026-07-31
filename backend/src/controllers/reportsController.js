@@ -1,5 +1,4 @@
 const prisma = require("../config/prisma");
-const { Prisma } = require("../generated/prisma");
 const { tableExists } = require("../utils/schemaHelpers");
 
 function monthKey(dateLike) {
@@ -37,41 +36,54 @@ function rowsToCsv(rows, headers) {
   return `\uFEFF${lines.join("\n")}`;
 }
 
+function num(v) {
+  if (v == null) return 0;
+  if (typeof v === "object" && typeof v.toNumber === "function") return v.toNumber();
+  return Number(v) || 0;
+}
+
+function createdAtWhere(from, to) {
+  const where = {};
+  if (from || to) {
+    where.created_at = {};
+    if (from) where.created_at.gte = from;
+    if (to) where.created_at.lte = to;
+  }
+  return where;
+}
+
 async function getPipelineReport(req, res) {
   try {
     const { from, to } = rangeFromReq(req);
 
     if (await tableExists("leads")) {
-      const conditions = [];
-      if (from) {
-        conditions.push(Prisma.sql`created_at >= ${from}`);
-      }
-      if (to) {
-        conditions.push(Prisma.sql`created_at <= ${to}`);
-      }
-      const whereSql = conditions.length > 0 ? Prisma.join(conditions, ' AND ') : Prisma.sql`1=1`;
+      const grouped = await prisma.leads.groupBy({
+        by: ["status"],
+        where: createdAtWhere(from, to),
+        _count: { _all: true },
+      });
 
-      const rows = await prisma.$queryRaw`
-        SELECT status, COUNT(*) AS count, COALESCE(SUM(0), 0) AS total_value
-        FROM leads
-        WHERE ${whereSql}
-        GROUP BY status
-        ORDER BY count DESC
-      `;
+      const formattedRows = grouped
+        .map((r) => ({
+          status: r.status,
+          count: Number(r._count._all),
+          total_value: 0,
+        }))
+        .sort((a, b) => b.count - a.count);
 
-      const formattedRows = rows.map(r => ({
-        status: r.status,
-        count: Number(r.count),
-        total_value: Number(r.total_value || 0),
-      }));
-
-      // Append opportunity Closed Won / Lost booked values (leads pipeline has no deal amounts)
       if (await tableExists("opportunities")) {
         try {
-          const { getClosedWonLostInRange, getClosedWonLostLifetime } = require("../services/opportunityRevenueStats");
+          const {
+            getClosedWonLostInRange,
+            getClosedWonLostLifetime,
+          } = require("../services/opportunityRevenueStats");
           const closed =
             from || to
-              ? await getClosedWonLostInRange(req, from || new Date(2000, 0, 1), to || new Date())
+              ? await getClosedWonLostInRange(
+                  req,
+                  from || new Date(2000, 0, 1),
+                  to || new Date()
+                )
               : await getClosedWonLostLifetime(req);
           formattedRows.push({
             status: "closed_won",
@@ -93,39 +105,31 @@ async function getPipelineReport(req, res) {
 
     if (await tableExists("opportunities")) {
       try {
-        const conditions = [Prisma.sql`is_deleted = 0`];
-        if (from) {
-          conditions.push(Prisma.sql`created_at >= ${from}`);
+        const where = { is_deleted: false, ...createdAtWhere(from, to) };
+        const rows = await prisma.opportunities.findMany({
+          where,
+          select: {
+            stage: true,
+            amount: true,
+            final_amount: true,
+            currency: true,
+          },
+        });
+        const byStage = {};
+        for (const o of rows) {
+          const st = o.stage;
+          if (!byStage[st]) byStage[st] = { status: st, count: 0, total_value: 0 };
+          byStage[st].count += 1;
+          const currency = String(o.currency || "INR").toUpperCase();
+          if (currency === "INR") {
+            if (st === "closed_won") {
+              byStage[st].total_value += num(o.final_amount ?? o.amount);
+            } else {
+              byStage[st].total_value += num(o.amount);
+            }
+          }
         }
-        if (to) {
-          conditions.push(Prisma.sql`created_at <= ${to}`);
-        }
-        const whereSql = Prisma.join(conditions, ' AND ');
-
-        const rows = await prisma.$queryRaw`
-          SELECT stage AS status,
-                 COUNT(*) AS count,
-                 COALESCE(SUM(
-                   CASE
-                     WHEN stage = 'closed_won' AND UPPER(COALESCE(currency, 'INR')) = 'INR'
-                       THEN COALESCE(final_amount, amount)
-                     WHEN UPPER(COALESCE(currency, 'INR')) = 'INR'
-                       THEN amount
-                     ELSE 0
-                   END
-                 ), 0) AS total_value
-          FROM opportunities
-          WHERE ${whereSql}
-          GROUP BY stage
-          ORDER BY count DESC
-        `;
-
-        const formattedRows = rows.map(r => ({
-          status: r.status,
-          count: Number(r.count),
-          total_value: Number(r.total_value || 0),
-        }));
-
+        const formattedRows = Object.values(byStage).sort((a, b) => b.count - a.count);
         return res.json({ success: true, data: formattedRows });
       } catch (oppErr) {
         console.warn("getPipelineReport opportunities:", oppErr.message);
@@ -149,18 +153,23 @@ async function getConversionReport(req, res) {
     const fromDate = range.from || sixMonthsAgo;
     const toDate = range.to || new Date();
 
-    const rows = await prisma.$queryRaw`
-      SELECT DATE_FORMAT(created_at, '%Y-%m') AS ym,
-             COUNT(*) AS total_leads,
-             SUM(CASE WHEN status IN ('confirm') THEN 1 ELSE 0 END) AS won_leads
-      FROM leads
-      WHERE created_at >= ${fromDate}
-        AND created_at <= ${toDate}
-      GROUP BY DATE_FORMAT(created_at, '%Y-%m')
-      ORDER BY ym ASC
-    `;
+    const leads = await prisma.leads.findMany({
+      where: {
+        created_at: { gte: fromDate, lte: toDate },
+      },
+      select: { created_at: true, status: true },
+    });
 
-    const byMonth = new Map(rows.map((r) => [String(r.ym), r]));
+    const byMonth = new Map();
+    for (const l of leads) {
+      const key = monthKey(l.created_at);
+      if (!key) continue;
+      if (!byMonth.has(key)) byMonth.set(key, { total_leads: 0, won_leads: 0 });
+      const row = byMonth.get(key);
+      row.total_leads += 1;
+      if (l.status === "confirm") row.won_leads += 1;
+    }
+
     const data = [];
     const cursor = new Date(fromDate.getFullYear(), fromDate.getMonth(), 1);
     const end = new Date(toDate.getFullYear(), toDate.getMonth(), 1);
@@ -189,60 +198,77 @@ async function getConversionReport(req, res) {
 async function getActivityReport(req, res) {
   try {
     const { from, to } = rangeFromReq(req);
-    let dateCondition;
-    if (from && to) {
-      dateCondition = Prisma.sql`BETWEEN ${from} AND ${to}`;
-    } else if (from) {
-      dateCondition = Prisma.sql`>= ${from}`;
-    } else if (to) {
-      dateCondition = Prisma.sql`<= ${to}`;
-    } else {
-      dateCondition = Prisma.sql`>= DATE_SUB(NOW(), INTERVAL 30 DAY)`;
+    let dateFrom = from;
+    let dateTo = to;
+    if (!dateFrom && !dateTo) {
+      dateFrom = new Date();
+      dateFrom.setDate(dateFrom.getDate() - 30);
     }
 
-    const rows = await prisma.$queryRaw`
-      SELECT
-        u.id AS user_id,
-        TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))) AS user_name,
-        u.email,
-        COALESCE(t.tasks_completed, 0) AS tasks_completed,
-        COALESCE(n.notes_added, 0) AS notes_added,
-        COALESCE(f.calls_logged, 0) AS calls_logged,
-        COALESCE(t.tasks_completed, 0) + COALESCE(n.notes_added, 0) + COALESCE(f.calls_logged, 0) AS total_activity
-      FROM users u
-      LEFT JOIN (
-        SELECT created_by AS user_id, COUNT(*) AS tasks_completed
-        FROM tasks
-        WHERE status IN ('completed', 'done')
-          AND updated_at ${dateCondition}
-        GROUP BY created_by
-      ) t ON t.user_id = u.id
-      LEFT JOIN (
-        SELECT created_by AS user_id, COUNT(*) AS notes_added
-        FROM notes
-        WHERE created_at ${dateCondition}
-        GROUP BY created_by
-      ) n ON n.user_id = u.id
-      LEFT JOIN (
-        SELECT lf.created_by AS user_id, COUNT(*) AS calls_logged
-        FROM lead_followups lf
-        INNER JOIN leads l ON l.id = lf.lead_id
-        WHERE lf.created_at ${dateCondition}
-        GROUP BY lf.created_by
-      ) f ON f.user_id = u.id
-      WHERE u.is_active = 1
-      ORDER BY total_activity DESC, user_name ASC
-    `;
+    const updatedAt = {};
+    const createdAt = {};
+    if (dateFrom) {
+      updatedAt.gte = dateFrom;
+      createdAt.gte = dateFrom;
+    }
+    if (dateTo) {
+      updatedAt.lte = dateTo;
+      createdAt.lte = dateTo;
+    }
 
-    const formattedRows = rows.map(r => ({
-      user_id: r.user_id,
-      user_name: r.user_name,
-      email: r.email,
-      tasks_completed: Number(r.tasks_completed),
-      notes_added: Number(r.notes_added),
-      calls_logged: Number(r.calls_logged),
-      total_activity: Number(r.total_activity),
-    }));
+    const users = await prisma.users.findMany({
+      where: { is_active: true },
+      select: { id: true, first_name: true, last_name: true, email: true },
+    });
+
+    const [tasks, notes, followups] = await Promise.all([
+      prisma.tasks.groupBy({
+        by: ["created_by"],
+        where: {
+          status: { in: ["completed", "done"] },
+          updated_at: updatedAt,
+        },
+        _count: { _all: true },
+      }),
+      prisma.notes.groupBy({
+        by: ["created_by"],
+        where: { created_at: createdAt },
+        _count: { _all: true },
+      }),
+      prisma.lead_followups.groupBy({
+        by: ["created_by"],
+        where: { created_at: createdAt },
+        _count: { _all: true },
+      }),
+    ]);
+
+    const taskMap = Object.fromEntries(tasks.map((t) => [t.created_by, t._count._all]));
+    const noteMap = Object.fromEntries(notes.map((n) => [n.created_by, n._count._all]));
+    const callMap = Object.fromEntries(
+      followups.map((f) => [f.created_by, f._count._all])
+    );
+
+    const formattedRows = users
+      .map((u) => {
+        const tasks_completed = Number(taskMap[u.id] || 0);
+        const notes_added = Number(noteMap[u.id] || 0);
+        const calls_logged = Number(callMap[u.id] || 0);
+        const user_name = `${u.first_name || ""} ${u.last_name || ""}`.trim();
+        return {
+          user_id: u.id,
+          user_name,
+          email: u.email,
+          tasks_completed,
+          notes_added,
+          calls_logged,
+          total_activity: tasks_completed + notes_added + calls_logged,
+        };
+      })
+      .sort(
+        (a, b) =>
+          b.total_activity - a.total_activity ||
+          String(a.user_name).localeCompare(String(b.user_name))
+      );
 
     res.json({ success: true, data: formattedRows });
   } catch (err) {
@@ -253,7 +279,11 @@ async function getActivityReport(req, res) {
 
 async function getRevenueReport(req, res) {
   try {
-    const { getClosedWonByMonth, getClosedWonLostInRange, getClosedWonLostLifetime } = require("../services/opportunityRevenueStats");
+    const {
+      getClosedWonByMonth,
+      getClosedWonLostInRange,
+      getClosedWonLostLifetime,
+    } = require("../services/opportunityRevenueStats");
     const range = rangeFromReq(req);
     const twelveMonthsAgo = new Date();
     twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 11);
@@ -262,20 +292,20 @@ async function getRevenueReport(req, res) {
     const fromDate = range.from || twelveMonthsAgo;
     const toDate = range.to || new Date();
 
-    const rows = await prisma.$queryRaw`
-      SELECT DATE_FORMAT(created_at, '%Y-%m') AS ym,
-              COALESCE(SUM(total), 0) AS revenue_total
-       FROM invoices
-       WHERE created_at >= ${fromDate}
-         AND created_at <= ${toDate}
-       GROUP BY DATE_FORMAT(created_at, '%Y-%m')
-       ORDER BY ym ASC
-    `;
+    const invoices = await prisma.invoices.findMany({
+      where: { created_at: { gte: fromDate, lte: toDate } },
+      select: { created_at: true, total: true },
+    });
+    const invByMonth = new Map();
+    for (const inv of invoices) {
+      const key = monthKey(inv.created_at);
+      if (!key) continue;
+      invByMonth.set(key, (invByMonth.get(key) || 0) + num(inv.total));
+    }
 
     const bookedMonths = await getClosedWonByMonth(req, fromDate, toDate);
     const bookedByMonth = new Map(bookedMonths.map((r) => [r.month_key, r]));
 
-    const byMonth = new Map(rows.map((r) => [String(r.ym), Number(r.revenue_total || 0)]));
     const data = [];
     const cursor = new Date(fromDate.getFullYear(), fromDate.getMonth(), 1);
     const end = new Date(toDate.getFullYear(), toDate.getMonth(), 1);
@@ -283,7 +313,7 @@ async function getRevenueReport(req, res) {
     let booked_won_total = 0;
     while (cursor <= end) {
       const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
-      const inv = Number(byMonth.get(key) || 0);
+      const inv = Number(invByMonth.get(key) || 0);
       const booked = Number(bookedByMonth.get(key)?.booked_won_total || 0);
       invoice_total += inv;
       booked_won_total += booked;
@@ -321,7 +351,6 @@ async function getRevenueReport(req, res) {
   }
 }
 
-/** Invoice aggregates for pie charts: by status and by type (same date range as revenue report). */
 async function getInvoiceMixReport(req, res) {
   try {
     const range = rangeFromReq(req);
@@ -331,51 +360,52 @@ async function getInvoiceMixReport(req, res) {
     twelveMonthsAgo.setHours(0, 0, 0, 0);
     const fromDate = range.from || twelveMonthsAgo;
     const toDate = range.to || new Date();
+    const where = { created_at: { gte: fromDate, lte: toDate } };
 
-    const byStatus = await prisma.$queryRaw`
-      SELECT COALESCE(status, 'unknown') AS key_label,
-              COALESCE(SUM(total), 0) AS amount,
-              COUNT(*) AS cnt
-       FROM invoices
-       WHERE created_at >= ${fromDate} AND created_at <= ${toDate}
-       GROUP BY COALESCE(status, 'unknown')
-       ORDER BY amount DESC
-    `;
+    const [byStatusRows, byTypeRows, totalsAgg] = await Promise.all([
+      prisma.invoices.groupBy({
+        by: ["status"],
+        where,
+        _sum: { total: true },
+        _count: { _all: true },
+      }),
+      prisma.invoices.groupBy({
+        by: ["type"],
+        where,
+        _sum: { total: true },
+        _count: { _all: true },
+      }),
+      prisma.invoices.aggregate({
+        where,
+        _sum: { total: true },
+        _count: { _all: true },
+      }),
+    ]);
 
-    const byType = await prisma.$queryRaw`
-      SELECT COALESCE(type, 'unknown') AS key_label,
-              COALESCE(SUM(total), 0) AS amount,
-              COUNT(*) AS cnt
-       FROM invoices
-       WHERE created_at >= ${fromDate} AND created_at <= ${toDate}
-       GROUP BY COALESCE(type, 'unknown')
-       ORDER BY amount DESC
-    `;
+    const byStatus = byStatusRows
+      .map((r) => ({
+        key_label: r.status || "unknown",
+        amount: num(r._sum.total),
+        cnt: Number(r._count._all),
+      }))
+      .sort((a, b) => b.amount - a.amount);
 
-    const totRows = await prisma.$queryRaw`
-      SELECT COALESCE(SUM(total), 0) AS amount, COUNT(*) AS cnt
-       FROM invoices
-       WHERE created_at >= ${fromDate} AND created_at <= ${toDate}
-    `;
-    const totRow = totRows[0] || { amount: 0, cnt: 0 };
+    const byType = byTypeRows
+      .map((r) => ({
+        key_label: r.type || "unknown",
+        amount: num(r._sum.total),
+        cnt: Number(r._count._all),
+      }))
+      .sort((a, b) => b.amount - a.amount);
 
-    const num = (v) => Number(v) || 0;
     res.json({
       success: true,
       data: {
-        byStatus: byStatus.map((r) => ({
-          key_label: r.key_label,
-          amount: num(r.amount),
-          cnt: num(r.cnt),
-        })),
-        byType: byType.map((r) => ({
-          key_label: r.key_label,
-          amount: num(r.amount),
-          cnt: num(r.cnt),
-        })),
+        byStatus,
+        byType,
         totals: {
-          amount: num(totRow.amount),
-          count: num(totRow.cnt),
+          amount: num(totalsAgg._sum.total),
+          count: Number(totalsAgg._count._all || 0),
         },
       },
     });
@@ -389,51 +419,115 @@ async function exportReportCsv(req, res) {
   try {
     const type = String(req.params.type || "").toLowerCase();
     const { from, to } = rangeFromReq(req);
-
-    const conditions = [];
-    if (from) {
-      conditions.push(Prisma.sql`created_at >= ${from}`);
-    }
-    if (to) {
-      conditions.push(Prisma.sql`created_at <= ${to}`);
-    }
-    const whereSql = conditions.length > 0 ? Prisma.join(conditions, ' AND ') : Prisma.sql`1=1`;
+    const where = createdAtWhere(from, to);
 
     let rows = [];
     let headers = [];
 
     if (type === "leads") {
-      rows = await prisma.$queryRaw`
-        SELECT id, name, company_name, phone, email, source, status, created_at
-        FROM leads
-        WHERE ${whereSql}
-        ORDER BY created_at DESC
-      `;
-      headers = ["id", "name", "company_name", "phone", "email", "source", "status", "created_at"];
+      rows = await prisma.leads.findMany({
+        where,
+        select: {
+          id: true,
+          name: true,
+          company_name: true,
+          phone: true,
+          email: true,
+          source: true,
+          status: true,
+          created_at: true,
+        },
+        orderBy: { created_at: "desc" },
+      });
+      headers = [
+        "id",
+        "name",
+        "company_name",
+        "phone",
+        "email",
+        "source",
+        "status",
+        "created_at",
+      ];
     } else if (type === "contacts") {
-      rows = await prisma.$queryRaw`
-        SELECT id, company_name, contact_name, designation, department, email, phone, city, state, created_at
-        FROM contacts
-        WHERE ${whereSql}
-        ORDER BY created_at DESC
-      `;
-      headers = ["id", "company_name", "contact_name", "designation", "department", "email", "phone", "city", "state", "created_at"];
+      rows = await prisma.contacts.findMany({
+        where,
+        select: {
+          id: true,
+          company_name: true,
+          contact_name: true,
+          designation: true,
+          department: true,
+          email: true,
+          phone: true,
+          city: true,
+          state: true,
+          created_at: true,
+        },
+        orderBy: { created_at: "desc" },
+      });
+      headers = [
+        "id",
+        "company_name",
+        "contact_name",
+        "designation",
+        "department",
+        "email",
+        "phone",
+        "city",
+        "state",
+        "created_at",
+      ];
     } else if (type === "tasks") {
-      rows = await prisma.$queryRaw`
-        SELECT id, title, description, priority, status, due_date, created_at
-        FROM tasks
-        WHERE ${whereSql}
-        ORDER BY created_at DESC
-      `;
-      headers = ["id", "title", "description", "priority", "status", "due_date", "created_at"];
+      rows = await prisma.tasks.findMany({
+        where,
+        select: {
+          id: true,
+          title: true,
+          description: true,
+          priority: true,
+          status: true,
+          due_date: true,
+          created_at: true,
+        },
+        orderBy: { created_at: "desc" },
+      });
+      headers = [
+        "id",
+        "title",
+        "description",
+        "priority",
+        "status",
+        "due_date",
+        "created_at",
+      ];
     } else if (type === "invoices") {
-      rows = await prisma.$queryRaw`
-        SELECT id, invoice_number, type, customer_name, invoice_date, due_date, total, status, created_at
-        FROM invoices
-        WHERE ${whereSql}
-        ORDER BY created_at DESC
-      `;
-      headers = ["id", "invoice_number", "type", "customer_name", "invoice_date", "due_date", "total", "status", "created_at"];
+      rows = await prisma.invoices.findMany({
+        where,
+        select: {
+          id: true,
+          invoice_number: true,
+          type: true,
+          customer_name: true,
+          invoice_date: true,
+          due_date: true,
+          total: true,
+          status: true,
+          created_at: true,
+        },
+        orderBy: { created_at: "desc" },
+      });
+      headers = [
+        "id",
+        "invoice_number",
+        "type",
+        "customer_name",
+        "invoice_date",
+        "due_date",
+        "total",
+        "status",
+        "created_at",
+      ];
     } else {
       return res.status(400).json({ success: false, message: "Invalid export type" });
     }

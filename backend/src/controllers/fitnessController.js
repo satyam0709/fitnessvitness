@@ -13,6 +13,19 @@ const {
   sortClientRows,
 } = require("../services/fitnessComputedFields");
 const { body, validationResult } = require("express-validator");
+const {
+  toPrismaDate,
+  toYmd,
+  numOrNull,
+  serializeFitnessRow,
+  serializeFitnessRows,
+  toPrismaSource,
+  toPrismaPlan,
+  toPrismaProgress,
+  toPrismaConsult,
+  toPrismaTaskStatus,
+  toPrismaPayMode,
+} = require("../utils/fitnessPrismaMaps");
 
 // ─────────────────────────────────────────────────────────────────
 // VALIDATION HELPERS
@@ -97,25 +110,6 @@ function optionalNumber(value) {
   return Number.isFinite(n) ? n : null;
 }
 
-const tableExistsCache = new Map();
-const tableColumnsCache = new Map();
-
-async function tableExists(tableName) {
-  if (tableExistsCache.has(tableName)) return tableExistsCache.get(tableName);
-  const rows = await prisma.$queryRaw`SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${tableName} LIMIT 1`;
-  const exists = rows.length > 0;
-  tableExistsCache.set(tableName, exists);
-  return exists;
-}
-
-async function tableColumns(tableName) {
-  if (tableColumnsCache.has(tableName)) return tableColumnsCache.get(tableName);
-  const rows = await prisma.$queryRaw`SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${tableName}`;
-  const cols = new Set(rows.map((r) => r.COLUMN_NAME));
-  tableColumnsCache.set(tableName, cols);
-  return cols;
-}
-
 function normalizeDateOnly(value) {
   if (value === undefined || value === null || value === "") return null;
   const s = String(value).slice(0, 10);
@@ -128,95 +122,108 @@ function emitFitnessAndDueTaskChanged(reason = "client_due") {
   emitCalendarChanged({ reason });
 }
 
+function addDaysYmd(ymd, days) {
+  const d = toPrismaDate(ymd);
+  if (!d) return null;
+  d.setDate(d.getDate() + Number(days) || 0);
+  return d;
+}
+
 /** Set or clear next_due_date from task completion + follow_up_freq_days. */
 async function syncClientNextDueFromCompleted(clientId, completedOn) {
   if (!clientId) return;
   const completedDate = normalizeDateOnly(completedOn);
   if (completedDate) {
-    const clients = await prisma.$queryRaw`SELECT follow_up_freq_days FROM fitness_clients WHERE client_id = ${clientId}`;
-    if (!clients.length) return;
-    const days = Number(clients[0].follow_up_freq_days) || 14;
-    await prisma.$executeRaw`UPDATE fitness_clients SET next_due_date = DATE_ADD(${completedDate}, INTERVAL ${days} DAY), updated_at = NOW() WHERE client_id = ${clientId}`;
+    const client = await prisma.fitness_clients.findUnique({
+      where: { client_id: clientId },
+      select: { follow_up_freq_days: true },
+    });
+    if (!client) return;
+    const days = Number(client.follow_up_freq_days) || 14;
+    await prisma.fitness_clients.update({
+      where: { client_id: clientId },
+      data: {
+        next_due_date: addDaysYmd(completedDate, days),
+        updated_at: new Date(),
+      },
+    });
   } else {
-    await prisma.$executeRaw`UPDATE fitness_clients SET next_due_date = NULL, updated_at = NOW() WHERE client_id = ${clientId}`;
+    await prisma.fitness_clients.update({
+      where: { client_id: clientId },
+      data: { next_due_date: null, updated_at: new Date() },
+    });
   }
 }
 
 async function syncClientDueTask(clientRow, actorUserId) {
-  if (!clientRow?.id || !(await tableExists("tasks"))) return false;
-  const cols = await tableColumns("tasks");
-  const required = ["title", "created_by", "due_date", "status", "client_id", "task_category", "task_type"];
-  if (!required.every((c) => cols.has(c))) return false;
+  if (!clientRow?.id) return false;
+  try {
+    const clientDbId = Number(clientRow.id);
+    const dueDate = normalizeDateOnly(clientRow.next_due_date);
+    const isActive = String(clientRow.status || "Active") === "Active";
 
-  const hasDescription = cols.has("description");
-  const hasAssignedTo = cols.has("assigned_to");
-  const hasPriority = cols.has("priority");
-  const hasUpdatedAt = cols.has("updated_at");
-  const clientDbId = Number(clientRow.id);
-  const dueDate = normalizeDateOnly(clientRow.next_due_date);
-  const isActive = String(clientRow.status || "Active") === "Active";
+    const existing = await prisma.tasks.findFirst({
+      where: {
+        client_id: clientDbId,
+        task_category: "client_due",
+        task_type: "client_due",
+      },
+      orderBy: { id: "desc" },
+      select: { id: true, assigned_to: true },
+    });
+    const taskId = existing?.id;
 
-  const existing = await prisma.$queryRaw`SELECT id FROM tasks WHERE client_id = ${clientDbId} AND task_category = 'client_due' AND task_type = 'client_due' ORDER BY id DESC LIMIT 1`;
-  const taskId = existing[0]?.id;
-
-  if (!dueDate || !isActive) {
-    if (!taskId) return false;
-    const updates = ["status = 'done'"];
-    if (hasUpdatedAt) updates.push("updated_at = NOW()");
-    await prisma.$executeRawUnsafe(`UPDATE tasks SET ${updates.join(", ")} WHERE id = ?`, taskId);
-    return true;
-  }
-
-  const title = `Follow-up due: ${clientRow.full_name || clientRow.client_id}`;
-  const description = `Client ${clientRow.client_id} needs attention on ${dueDate}.`;
-
-  if (taskId) {
-    const updates = ["title = ?", "due_date = ?", "status = 'new'"];
-    const params = [title, dueDate];
-    if (hasDescription) {
-      updates.push("description = ?");
-      params.push(description);
+    if (!dueDate || !isActive) {
+      if (!taskId) return false;
+      await prisma.tasks.update({
+        where: { id: taskId },
+        data: { status: "done", updated_at: new Date() },
+      });
+      return true;
     }
-    if (hasAssignedTo && actorUserId) {
-      updates.push("assigned_to = COALESCE(assigned_to, ?)");
-      params.push(Number(actorUserId));
+
+    const title = `Follow-up due: ${clientRow.full_name || clientRow.client_id}`;
+    const description = `Client ${clientRow.client_id} needs attention on ${dueDate}.`;
+    const due = toPrismaDate(dueDate);
+
+    if (taskId) {
+      const data = {
+        title,
+        due_date: due,
+        status: "new",
+        description,
+        priority: "medium",
+        updated_at: new Date(),
+      };
+      if (actorUserId && !existing.assigned_to) {
+        data.assigned_to = Number(actorUserId);
+      }
+      await prisma.tasks.update({ where: { id: taskId }, data });
+      return true;
     }
-    if (hasPriority) updates.push("priority = 'medium'");
-    if (hasUpdatedAt) updates.push("updated_at = NOW()");
-    params.push(taskId);
-    await prisma.$executeRawUnsafe(`UPDATE tasks SET ${updates.join(", ")} WHERE id = ?`, ...params);
+
+    const createdBy = Number(actorUserId);
+    if (!Number.isFinite(createdBy)) return false;
+
+    await prisma.tasks.create({
+      data: {
+        title,
+        client_id: clientDbId,
+        created_by: createdBy,
+        due_date: due,
+        status: "new",
+        description,
+        assigned_to: createdBy,
+        priority: "medium",
+        task_category: "client_due",
+        task_type: "client_due",
+        frequency: "once",
+      },
+    });
     return true;
+  } catch {
+    return false;
   }
-
-  const fields = ["title", "client_id", "created_by", "due_date", "status"];
-  const values = [title, clientDbId, Number(actorUserId) || null, dueDate, "new"];
-  if (hasDescription) {
-    fields.push("description");
-    values.push(description);
-  }
-  if (hasAssignedTo) {
-    fields.push("assigned_to");
-    values.push(Number(actorUserId) || null);
-  }
-  if (hasPriority) {
-    fields.push("priority");
-    values.push("medium");
-  }
-  fields.push("task_category");
-  values.push("client_due");
-  fields.push("task_type");
-  values.push("client_due");
-  if (cols.has("frequency")) {
-    fields.push("frequency");
-    values.push("once");
-  }
-
-  const placeholders = fields.map(() => "?").join(", ");
-  await prisma.$executeRawUnsafe(
-    `INSERT INTO tasks (${fields.map((f) => `\`${f}\``).join(", ")}) VALUES (${placeholders})`,
-    ...values
-  );
-  return true;
 }
 
 // Helper to extract field-level errors from express-validator
@@ -250,12 +257,13 @@ const createConsultationValidation = [
 // ─────────────────────────────────────────────────────────────────
 async function getFitnessSettings(_req, res) {
   try {
-    const rows = await prisma.$queryRaw`SELECT * FROM fitness_settings`;
+    const rows = await prisma.fitness_settings.findMany();
     const settings = {};
     for (const row of rows) {
-      settings[row.setting_key] = typeof row.setting_value === 'string'
-        ? JSON.parse(row.setting_value)
-        : row.setting_value;
+      settings[row.setting_key] =
+        typeof row.setting_value === "string"
+          ? JSON.parse(row.setting_value)
+          : row.setting_value;
     }
     res.json({ success: true, data: settings });
   } catch (error) {
@@ -263,20 +271,26 @@ async function getFitnessSettings(_req, res) {
   }
 }
 
+async function upsertFitnessSetting(key, value) {
+  await prisma.fitness_settings.upsert({
+    where: { setting_key: key },
+    create: { setting_key: key, setting_value: value },
+    update: { setting_value: value, updated_at: new Date() },
+  });
+}
+
 async function updateFitnessSettings(req, res) {
   try {
-    // Accept either full settings object or single key/value
     const settings = req.body;
     if (typeof settings !== "object" || settings === null) {
       return res.status(400).json({ success: false, message: "Invalid settings object" });
     }
 
-    // If single key/value pair
     if (settings.key && settings.value !== undefined) {
-      await prisma.$executeRaw`INSERT INTO fitness_settings (setting_key, setting_value) VALUES (${settings.key}, ${JSON.stringify(settings.value)}) ON DUPLICATE KEY UPDATE setting_value = ${JSON.stringify(settings.value)}`;
+      await upsertFitnessSetting(settings.key, settings.value);
     } else {
       for (const [key, value] of Object.entries(settings)) {
-        await prisma.$executeRaw`INSERT INTO fitness_settings (setting_key, setting_value) VALUES (${key}, ${JSON.stringify(value)}) ON DUPLICATE KEY UPDATE setting_value = ${JSON.stringify(value)}`;
+        await upsertFitnessSetting(key, value);
       }
     }
     res.json({ success: true });
@@ -328,102 +342,105 @@ function buildClientListWhere(q) {
   const isSpecialView =
     isOverdueView || isHighRiskView || isLowRiskView || isNextDueView;
 
-  const clauses = ["1=1"];
-  const params = [];
+  const where = {};
   const computed = { overdue: false, highRisk: false, lowRisk: false, priority: null };
+  const and = [];
 
   if (statusRaw && !isSpecialView && VALID_ENUMS.status.includes(statusRaw)) {
-    clauses.push("status = ?");
-    params.push(statusRaw);
+    where.status = statusRaw;
   }
 
   if (isOverdueView) {
-    clauses.push("status = 'Active'");
+    where.status = "Active";
     computed.overdue = true;
   } else if (isHighRiskView) {
-    clauses.push("status != 'Inactive'");
+    where.status = { not: "Inactive" };
     computed.highRisk = true;
   } else if (isLowRiskView) {
-    clauses.push("status != 'Inactive'");
+    where.status = { not: "Inactive" };
     computed.lowRisk = true;
   } else if (isNextDueView) {
-    clauses.push("status != 'Inactive'", "next_due_date IS NOT NULL");
+    where.status = { not: "Inactive" };
+    where.next_due_date = { not: null };
   }
 
   if (q.progress && VALID_ENUMS.progress.includes(String(q.progress))) {
-    clauses.push("progress = ?");
-    params.push(q.progress);
+    where.progress = toPrismaProgress(q.progress);
   }
 
   if (q.source && VALID_ENUMS.source.includes(String(q.source))) {
-    clauses.push("source = ?");
-    params.push(q.source);
+    where.source = toPrismaSource(q.source);
   }
 
   if (q.plan_type && VALID_ENUMS.plan_type.includes(String(q.plan_type))) {
-    clauses.push("plan_type = ?");
-    params.push(q.plan_type);
+    where.plan_type = toPrismaPlan(q.plan_type);
   }
 
   const tierMin = q.tier_min != null && q.tier_min !== "" ? Number(q.tier_min) : null;
   const tierMax = q.tier_max != null && q.tier_max !== "" ? Number(q.tier_max) : null;
   if (tierMin != null && !Number.isNaN(tierMin) && tierMax != null && !Number.isNaN(tierMax)) {
-    clauses.push("tier BETWEEN ? AND ?");
-    params.push(Math.min(tierMin, tierMax), Math.max(tierMin, tierMax));
+    where.tier = { gte: Math.min(tierMin, tierMax), lte: Math.max(tierMin, tierMax) };
   } else if (tierMin != null && !Number.isNaN(tierMin)) {
-    clauses.push("tier >= ?");
-    params.push(tierMin);
+    where.tier = { gte: tierMin };
   } else if (tierMax != null && !Number.isNaN(tierMax)) {
-    clauses.push("tier <= ?");
-    params.push(tierMax);
+    where.tier = { lte: tierMax };
   }
 
   if (q.city && String(q.city).trim()) {
-    clauses.push("city LIKE ?");
-    params.push(`%${String(q.city).trim()}%`);
+    where.city = { contains: String(q.city).trim() };
   }
 
   const nextDueFrom = parseClientListYmd(q.next_due_from);
   const nextDueTo = parseClientListYmd(q.next_due_to);
-  if (nextDueFrom) {
-    clauses.push("next_due_date >= ?");
-    params.push(nextDueFrom);
-  }
-  if (nextDueTo) {
-    clauses.push("next_due_date <= ?");
-    params.push(nextDueTo);
+  if (nextDueFrom || nextDueTo) {
+    where.next_due_date = { ...(where.next_due_date || {}) };
+    if (where.next_due_date.not === null) {
+      /* keep not null + range */
+    }
+    const range = {};
+    if (nextDueFrom) range.gte = toPrismaDate(nextDueFrom);
+    if (nextDueTo) range.lte = toPrismaDate(nextDueTo);
+    if (where.next_due_date.not === null) {
+      and.push({ next_due_date: { not: null } }, { next_due_date: range });
+      delete where.next_due_date;
+    } else {
+      where.next_due_date = range;
+    }
   }
 
   const planExpiryFrom = parseClientListYmd(q.plan_expiry_from);
   const planExpiryTo = parseClientListYmd(q.plan_expiry_to);
-  if (planExpiryFrom) {
-    clauses.push("plan_expiry_date >= ?");
-    params.push(planExpiryFrom);
-  }
-  if (planExpiryTo) {
-    clauses.push("plan_expiry_date <= ?");
-    params.push(planExpiryTo);
+  if (planExpiryFrom || planExpiryTo) {
+    where.plan_expiry_date = {};
+    if (planExpiryFrom) where.plan_expiry_date.gte = toPrismaDate(planExpiryFrom);
+    if (planExpiryTo) where.plan_expiry_date.lte = toPrismaDate(planExpiryTo);
   }
 
   if (q.has_next_due === "1") {
-    clauses.push("next_due_date IS NOT NULL");
+    where.next_due_date = { ...(typeof where.next_due_date === "object" ? where.next_due_date : {}), not: null };
   } else if (q.has_next_due === "0") {
-    clauses.push("next_due_date IS NULL");
+    where.next_due_date = null;
   }
 
   const expiringWithin = Number(q.expiring_within);
   if ([7, 14, 30].includes(expiringWithin)) {
-    clauses.push(
-      "plan_expiry_date IS NOT NULL",
-      "plan_expiry_date >= CURDATE()",
-      `plan_expiry_date <= DATE_ADD(CURDATE(), INTERVAL ${expiringWithin} DAY)`
-    );
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const until = new Date(today);
+    until.setDate(until.getDate() + expiringWithin);
+    where.plan_expiry_date = { gte: today, lte: until };
   }
 
   if (q.search && String(q.search).trim()) {
-    const searchTerm = `%${String(q.search).trim()}%`;
-    clauses.push("(full_name LIKE ? OR client_id LIKE ? OR phone LIKE ? OR email LIKE ?)");
-    params.push(searchTerm, searchTerm, searchTerm, searchTerm);
+    const searchTerm = String(q.search).trim();
+    and.push({
+      OR: [
+        { full_name: { contains: searchTerm } },
+        { client_id: { contains: searchTerm } },
+        { phone: { contains: searchTerm } },
+        { email: { contains: searchTerm } },
+      ],
+    });
   }
 
   const priority = String(q.priority || "").toLowerCase();
@@ -440,9 +457,10 @@ function buildClientListWhere(q) {
     computed.highRisk = false;
   }
 
+  if (and.length) where.AND = and;
+
   return {
-    whereSql: clauses.join(" AND "),
-    params,
+    where,
     computed,
     isNextDueView,
     isSpecialView,
@@ -474,53 +492,6 @@ const CLIENT_SORT_LABELS = {
   days_desc: "Days remaining: Most first",
 };
 
-function buildClientListOrder(sortRaw, isNextDueView) {
-  let sort = String(sortRaw || "").toLowerCase().trim();
-  if (!CLIENT_LIST_SORTS.has(sort)) {
-    sort = isNextDueView ? "next_due" : "created";
-  }
-
-  switch (sort) {
-    case "id_asc":
-      return "ORDER BY client_id ASC";
-    case "id_desc":
-      return "ORDER BY client_id DESC";
-    case "status_asc":
-      return "ORDER BY status ASC, full_name ASC";
-    case "status_desc":
-      return "ORDER BY status DESC, full_name ASC";
-    case "progress_asc":
-      return "ORDER BY progress ASC, full_name ASC";
-    case "progress_desc":
-      return "ORDER BY progress DESC, full_name ASC";
-    case "days_asc":
-      return "ORDER BY (plan_expiry_date IS NULL), plan_expiry_date ASC, full_name ASC";
-    case "days_desc":
-      return "ORDER BY (plan_expiry_date IS NULL), plan_expiry_date DESC, full_name ASC";
-    case "next_due":
-      return "ORDER BY (next_due_date IS NULL), next_due_date ASC, full_name ASC";
-    case "next_due_desc":
-      return "ORDER BY (next_due_date IS NULL), next_due_date DESC, full_name ASC";
-    case "plan_expiry":
-      return "ORDER BY (plan_expiry_date IS NULL), plan_expiry_date ASC, full_name ASC";
-    case "plan_expiry_desc":
-      return "ORDER BY (plan_expiry_date IS NULL), plan_expiry_date DESC, full_name ASC";
-    case "name":
-      return "ORDER BY full_name ASC";
-    case "name_desc":
-      return "ORDER BY full_name DESC";
-    case "tier":
-      return "ORDER BY tier ASC, full_name ASC";
-    case "tier_desc":
-      return "ORDER BY tier DESC, full_name ASC";
-    case "created_asc":
-      return "ORDER BY created_at ASC";
-    case "created":
-    default:
-      return "ORDER BY created_at DESC";
-  }
-}
-
 function applyComputedClientFilters(rows, computed) {
   let out = rows;
   if (computed.overdue) {
@@ -551,13 +522,11 @@ function resolveClientListSort(sortRaw, isNextDueView) {
 async function getAllClients(req, res) {
   try {
     const { sort: sortQuery } = req.query;
-    const { whereSql, params, computed, isNextDueView } = buildClientListWhere(req.query);
+    const { where, computed, isNextDueView } = buildClientListWhere(req.query);
     const sort = resolveClientListSort(sortQuery, isNextDueView);
-    const orderSql = buildClientListOrder(sort, isNextDueView);
 
-    const query = `SELECT * FROM fitness_clients WHERE ${whereSql} ${orderSql}`;
-    const rows = await prisma.$queryRawUnsafe(query, ...params);
-    let result = rows.map(computeClientFields);
+    const rows = await prisma.fitness_clients.findMany({ where });
+    let result = serializeFitnessRows(rows).map(computeClientFields);
     result = applyComputedClientFilters(result, computed);
     result = sortClientRows(result, sort);
 
@@ -581,11 +550,20 @@ async function searchClients(req, res) {
     if (!q || q.length < 1) {
       return res.json({ success: true, data: [] });
     }
-    const searchTerm = `%${q}%`;
-    const rows = await prisma.$queryRaw`SELECT client_id, full_name, phone, status, tier
-       FROM fitness_clients
-       WHERE status != 'Inactive' AND (client_id LIKE ${searchTerm} OR full_name LIKE ${searchTerm} OR phone LIKE ${searchTerm} OR email LIKE ${searchTerm})
-       LIMIT 20`;
+    const searchTerm = String(q);
+    const rows = await prisma.fitness_clients.findMany({
+      where: {
+        status: { not: "Inactive" },
+        OR: [
+          { client_id: { contains: searchTerm } },
+          { full_name: { contains: searchTerm } },
+          { phone: { contains: searchTerm } },
+          { email: { contains: searchTerm } },
+        ],
+      },
+      select: { client_id: true, full_name: true, phone: true, status: true, tier: true },
+      take: 20,
+    });
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -595,15 +573,27 @@ async function searchClients(req, res) {
 async function getClientSummary(req, res) {
   try {
     const { clientId } = req.params;
-    const rows = await prisma.$queryRaw`
-      SELECT client_id, full_name, status, progress, plan_type, plan_start_date,
-             plan_expiry_date, last_consultation_date, next_due_date, tier, source
-      FROM fitness_clients WHERE client_id = ${clientId}`;
-    if (!rows.length) {
+    const row = await prisma.fitness_clients.findUnique({
+      where: { client_id: clientId },
+      select: {
+        client_id: true,
+        full_name: true,
+        status: true,
+        progress: true,
+        plan_type: true,
+        plan_start_date: true,
+        plan_expiry_date: true,
+        last_consultation_date: true,
+        next_due_date: true,
+        tier: true,
+        source: true,
+      },
+    });
+    if (!row) {
       return res.status(404).json({ success: false, message: "Client not found" });
     }
     emitFitnessChanged();
-    res.json({ success: true, data: computeClientFields(rows[0]) });
+    res.json({ success: true, data: computeClientFields(serializeFitnessRow(row)) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -612,41 +602,66 @@ async function getClientSummary(req, res) {
 async function getClientById(req, res) {
   try {
     const { clientId } = req.params;
-    const rows = await prisma.$queryRaw`
-      SELECT * FROM fitness_clients WHERE client_id = ${clientId}`;
-    if (!rows.length) {
+    const row = await prisma.fitness_clients.findUnique({ where: { client_id: clientId } });
+    if (!row) {
       return res.status(404).json({ success: false, message: "Client not found" });
     }
-    const client = computeClientFields(rows[0]);
+    const client = computeClientFields(serializeFitnessRow(row));
 
-    // Fetch related data
-    const consultations = await prisma.$queryRaw`SELECT * FROM fitness_consultations WHERE client_id = ${clientId} ORDER BY consult_date DESC`;
-    const bodyStats = await prisma.$queryRaw`SELECT * FROM fitness_body_stats WHERE client_id = ${clientId} ORDER BY recorded_date DESC`;
-    const supplements = await prisma.$queryRaw`SELECT * FROM fitness_supplements WHERE client_id = ${clientId} ORDER BY prescribed_date DESC`;
-    const transactions = await prisma.$queryRaw`SELECT * FROM fitness_transactions WHERE client_id = ${clientId} ORDER BY transaction_date DESC`;
-    const tasks = await prisma.$queryRaw`SELECT * FROM fitness_client_tasks WHERE client_id = ${clientId} ORDER BY due_date ASC`;
-    const referralsGiven = await prisma.$queryRaw`
-      SELECT fr.*, fc.full_name as referred_name
-      FROM fitness_referrals fr
-      JOIN fitness_clients fc ON fr.referred_client_id = fc.client_id
-      WHERE fr.referrer_client_id = ${clientId}`;
-    const referralsReceived = await prisma.$queryRaw`
-      SELECT fr.*, fc.full_name as referrer_name
-      FROM fitness_referrals fr
-      JOIN fitness_clients fc ON fr.referrer_client_id = fc.client_id
-      WHERE fr.referred_client_id = ${clientId}`;
+    const [consultations, bodyStats, supplements, transactions, tasks, referralsGiven, referralsReceived] =
+      await Promise.all([
+        prisma.fitness_consultations.findMany({
+          where: { client_id: clientId },
+          orderBy: { consult_date: "desc" },
+        }),
+        prisma.fitness_body_stats.findMany({
+          where: { client_id: clientId },
+          orderBy: { recorded_date: "desc" },
+        }),
+        prisma.fitness_supplements.findMany({
+          where: { client_id: clientId },
+          orderBy: { prescribed_date: "desc" },
+        }),
+        prisma.fitness_transactions.findMany({
+          where: { client_id: clientId },
+          orderBy: { transaction_date: "desc" },
+        }),
+        prisma.fitness_client_tasks.findMany({
+          where: { client_id: clientId },
+          orderBy: { due_date: "asc" },
+        }),
+        prisma.fitness_referrals.findMany({ where: { referrer_client_id: clientId } }),
+        prisma.fitness_referrals.findMany({ where: { referred_client_id: clientId } }),
+      ]);
+
+    const referredIds = referralsGiven.map((r) => r.referred_client_id);
+    const referrerIds = referralsReceived.map((r) => r.referrer_client_id);
+    const nameIds = [...new Set([...referredIds, ...referrerIds])];
+    const nameRows = nameIds.length
+      ? await prisma.fitness_clients.findMany({
+          where: { client_id: { in: nameIds } },
+          select: { client_id: true, full_name: true },
+        })
+      : [];
+    const nameMap = Object.fromEntries(nameRows.map((c) => [c.client_id, c.full_name]));
 
     res.json({
       success: true,
       data: {
         ...client,
-        consultations,
-        body_stats: bodyStats,
-        supplements,
-        transactions,
-        tasks,
-        referrals_given: referralsGiven,
-        referrals_received: referralsReceived,
+        consultations: serializeFitnessRows(consultations),
+        body_stats: serializeFitnessRows(bodyStats),
+        supplements: serializeFitnessRows(supplements),
+        transactions: serializeFitnessRows(transactions),
+        tasks: serializeFitnessRows(tasks),
+        referrals_given: serializeFitnessRows(referralsGiven).map((r) => ({
+          ...r,
+          referred_name: nameMap[r.referred_client_id] || null,
+        })),
+        referrals_received: serializeFitnessRows(referralsReceived).map((r) => ({
+          ...r,
+          referrer_name: nameMap[r.referrer_client_id] || null,
+        })),
       },
     });
   } catch (error) {
@@ -753,12 +768,9 @@ async function createClient(req, res) {
       return sendValidationError(res, 'Invalid email format');
     }
 
-    // Get next client ID
-    const countRows = await prisma.$queryRaw`SELECT COUNT(*) as count FROM fitness_clients`;
-    const count = Number(countRows[0].count);
+    const count = await prisma.fitness_clients.count();
     const clientId = generateClientId(count);
 
-    // Calculate derived fields
     let plan_expiry_date = null;
     if (plan_start_date && plan_type) {
       const { calculatePlanExpiryDate } = require("../services/fitnessComputedFields");
@@ -771,27 +783,48 @@ async function createClient(req, res) {
       bmi = calculateBMI(height_cm, current_weight_kg);
     }
 
-    await prisma.$executeRaw`INSERT INTO fitness_clients (
-        client_id, full_name, phone, email, age, city, address, occupation, emergency_contact,
-        referred_by_client_id, referred_by_name, source, tier, health_goal, plan_type, plan_start_date,
-        plan_expiry_date, next_due_date, follow_up_freq_days, medical_conditions, allergies, activity_level,
-        current_medications, height_cm, start_weight_kg, current_weight_kg, target_weight_kg, bmi,
-        status, progress
-      ) VALUES (
-        ${clientId}, ${full_name}, ${phone}, ${email}, ${age}, ${city}, ${address}, ${occupation}, ${emergency_contact},
-        ${referred_by_client_id || null}, ${referred_by_name || null}, ${source || "Walk-in"}, ${tier || 3},
-        ${health_goal}, ${plan_type}, ${plan_start_date}, ${plan_expiry_date}, ${next_due_date}, ${follow_up_freq_days || 14},
-        ${medical_conditions}, ${allergies}, ${activity_level}, ${current_medications},
-        ${height_cm}, ${start_weight_kg}, ${current_weight_kg}, ${target_weight_kg}, ${bmi},
-        ${status || "Active"}, ${progress || "Neutral"}
-      )`;
+    const created = await prisma.fitness_clients.create({
+      data: {
+        client_id: clientId,
+        full_name,
+        phone,
+        email,
+        age: age != null ? Math.round(age) : null,
+        city,
+        address,
+        occupation,
+        emergency_contact,
+        referred_by_client_id: referred_by_client_id || null,
+        referred_by_name: referred_by_name || null,
+        source: toPrismaSource(source || "Walk-in"),
+        tier: tier || 3,
+        health_goal,
+        plan_type: plan_type ? toPrismaPlan(plan_type) : null,
+        plan_start_date: toPrismaDate(plan_start_date),
+        plan_expiry_date: toPrismaDate(plan_expiry_date),
+        next_due_date: toPrismaDate(next_due_date),
+        follow_up_freq_days: follow_up_freq_days || 14,
+        medical_conditions,
+        allergies,
+        activity_level,
+        current_medications,
+        height_cm,
+        start_weight_kg,
+        current_weight_kg,
+        target_weight_kg,
+        bmi,
+        status: status || "Active",
+        progress: toPrismaProgress(progress || "Neutral"),
+      },
+    });
 
-    const rows = await prisma.$queryRaw`SELECT * FROM fitness_clients WHERE client_id = ${clientId}`;
-
-    const taskChanged = await syncClientDueTask(rows[0], req.user?.id);
+    const taskChanged = await syncClientDueTask(created, req.user?.id);
     if (taskChanged) emitFitnessAndDueTaskChanged("client_due_create");
     else emitFitnessChanged();
-    res.status(201).json({ success: true, data: computeClientFields(rows[0]) });
+    res.status(201).json({
+      success: true,
+      data: computeClientFields(serializeFitnessRow(created)),
+    });
   } catch (error) {
     console.error("POST /api/fitness/clients createClient:", error.message);
     res.status(500).json({ success: false, message: error.message });
@@ -857,56 +890,74 @@ async function updateClient(req, res) {
       if (err) return sendValidationError(res, err);
     }
 
-    // Build dynamic update
     const allowedFields = [
-      'full_name', 'status', 'progress', 'phone', 'email', 'age', 'city', 'address',
-      'occupation', 'emergency_contact', 'referred_by_client_id', 'source', 'tier',
-      'health_goal', 'plan_type', 'plan_start_date', 'plan_expiry_date', 'follow_up_freq_days',
-      'last_consultation_date', 'next_due_date', 'medical_conditions', 'allergies',
-      'activity_level', 'current_medications', 'height_cm', 'start_weight_kg',
-      'current_weight_kg', 'target_weight_kg', 'coach_notes'
+      "full_name", "status", "progress", "phone", "email", "age", "city", "address",
+      "occupation", "emergency_contact", "referred_by_client_id", "source", "tier",
+      "health_goal", "plan_type", "plan_start_date", "plan_expiry_date", "follow_up_freq_days",
+      "last_consultation_date", "next_due_date", "medical_conditions", "allergies",
+      "activity_level", "current_medications", "height_cm", "start_weight_kg",
+      "current_weight_kg", "target_weight_kg", "coach_notes",
     ];
 
-    const updates = [];
-    const values = [];
-
+    const data = {};
     for (const [key, value] of Object.entries(fields)) {
-      if (allowedFields.includes(key)) {
-        updates.push(`\`${key}\` = ?`);
-        values.push(emptyToNull(value));
+      if (!allowedFields.includes(key)) continue;
+      let v = emptyToNull(value);
+      if (key === "source") v = toPrismaSource(v);
+      else if (key === "plan_type") v = toPrismaPlan(v);
+      else if (key === "progress") v = toPrismaProgress(v);
+      else if (
+        [
+          "plan_start_date",
+          "plan_expiry_date",
+          "last_consultation_date",
+          "next_due_date",
+        ].includes(key)
+      ) {
+        v = toPrismaDate(v);
+      } else if (key === "age" || key === "tier" || key === "follow_up_freq_days") {
+        v = v == null ? null : Number(v);
       }
+      data[key] = v;
     }
 
-    if (updates.length === 0) {
+    if (Object.keys(data).length === 0) {
       return res.status(400).json({ success: false, message: "No valid fields to update" });
     }
 
-    // Recalculate BMI if height or weight changed
-    if (fields.height_cm || fields.current_weight_kg) {
-      const client = await prisma.$queryRaw`SELECT height_cm, current_weight_kg FROM fitness_clients WHERE client_id = ${clientId}`;
-      const height = fields.height_cm ?? client[0]?.height_cm;
-      const weight = fields.current_weight_kg ?? client[0]?.current_weight_kg;
+    if (fields.height_cm !== undefined || fields.current_weight_kg !== undefined) {
+      const client = await prisma.fitness_clients.findUnique({
+        where: { client_id: clientId },
+        select: { height_cm: true, current_weight_kg: true },
+      });
+      const height = fields.height_cm ?? numOrNull(client?.height_cm);
+      const weight = fields.current_weight_kg ?? numOrNull(client?.current_weight_kg);
       if (height && weight) {
         const { calculateBMI } = require("../services/fitnessComputedFields");
-        const bmi = calculateBMI(height, weight);
-        updates.push('bmi = ?');
-        values.push(bmi);
+        data.bmi = calculateBMI(height, weight);
       }
     }
 
-    values.push(clientId);
-    await prisma.$executeRawUnsafe(`UPDATE fitness_clients SET ${updates.join(', ')} WHERE client_id = ?`, ...values);
+    data.updated_at = new Date();
 
-    const rows = await prisma.$queryRaw`SELECT * FROM fitness_clients WHERE client_id = ${clientId}`;
-
-    if (!rows.length) {
-      return res.status(404).json({ success: false, message: "Client not found" });
+    try {
+      const updated = await prisma.fitness_clients.update({
+        where: { client_id: clientId },
+        data,
+      });
+      const taskChanged = await syncClientDueTask(updated, req.user?.id);
+      if (taskChanged) emitFitnessAndDueTaskChanged("client_due_update");
+      else emitFitnessChanged();
+      res.json({
+        success: true,
+        data: computeClientFields(serializeFitnessRow(updated)),
+      });
+    } catch (err) {
+      if (err.code === "P2025") {
+        return res.status(404).json({ success: false, message: "Client not found" });
+      }
+      throw err;
     }
-
-    const taskChanged = await syncClientDueTask(rows[0], req.user?.id);
-    if (taskChanged) emitFitnessAndDueTaskChanged("client_due_update");
-    else emitFitnessChanged();
-    res.json({ success: true, data: computeClientFields(rows[0]) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -934,8 +985,11 @@ async function deleteClient(req, res) {
 
   if (soft) {
     try {
-      const result = await prisma.$executeRaw`UPDATE fitness_clients SET status = 'Inactive' WHERE client_id = ${clientId}`;
-      if (result === 0) {
+      const result = await prisma.fitness_clients.updateMany({
+        where: { client_id: clientId },
+        data: { status: "Inactive", updated_at: new Date() },
+      });
+      if (result.count === 0) {
         return res.status(404).json({ success: false, message: "Client not found" });
       }
       emitFitnessChanged();
@@ -947,25 +1001,42 @@ async function deleteClient(req, res) {
 
   try {
     await prisma.$transaction(async (tx) => {
-      const clients = await tx.$queryRaw`SELECT id FROM fitness_clients WHERE client_id = ${clientId} FOR UPDATE`;
-      if (!clients.length) {
-        throw new Error("Client not found");
-      }
-      const internalId = clients[0].id;
+      const client = await tx.fitness_clients.findUnique({
+        where: { client_id: clientId },
+        select: { id: true },
+      });
+      if (!client) throw new Error("Client not found");
+      const internalId = BigInt(client.id);
 
-      await tx.$executeRaw`DELETE FROM notifications WHERE entity_type IN ('fitness_expiry', 'fitness_due') AND entity_id = ${internalId}`;
-      await tx.$executeRaw`DELETE FROM fitness_referrals WHERE referrer_client_id = ${clientId} OR referred_client_id = ${clientId}`;
-      await tx.$executeRaw`DELETE FROM fitness_meal_plans WHERE client_id = ${clientId}`;
-      await tx.$executeRaw`DELETE FROM fitness_client_tasks WHERE client_id = ${clientId}`;
-      await tx.$executeRaw`DELETE FROM fitness_supplements WHERE client_id = ${clientId}`;
-      await tx.$executeRaw`DELETE FROM fitness_transactions WHERE client_id = ${clientId}`;
-      await tx.$executeRaw`DELETE FROM fitness_body_stats WHERE client_id = ${clientId}`;
-      await tx.$executeRaw`DELETE FROM fitness_consultations WHERE client_id = ${clientId}`;
-      await tx.$executeRaw`UPDATE fitness_clients SET referred_by_client_id = NULL WHERE referred_by_client_id = ${clientId}`;
-      const delResult = await tx.$executeRaw`DELETE FROM fitness_clients WHERE client_id = ${clientId}`;
-      if (delResult === 0) {
-        throw new Error("Client not found");
-      }
+      await tx.notifications.deleteMany({
+        where: {
+          entity_type: { in: ["fitness_expiry", "fitness_due"] },
+          entity_id: internalId,
+        },
+      });
+      await tx.fitness_referrals.deleteMany({
+        where: {
+          OR: [
+            { referrer_client_id: clientId },
+            { referred_client_id: clientId },
+          ],
+        },
+      });
+      await tx.fitness_meal_plans.deleteMany({ where: { client_id: clientId } });
+      await tx.fitness_client_tasks.deleteMany({ where: { client_id: clientId } });
+      await tx.fitness_supplements.deleteMany({ where: { client_id: clientId } });
+      await tx.fitness_transactions.deleteMany({ where: { client_id: clientId } });
+      await tx.fitness_body_stats.deleteMany({ where: { client_id: clientId } });
+      await tx.fitness_consultations.deleteMany({ where: { client_id: clientId } });
+      await tx.fitness_clients.updateMany({
+        where: { referred_by_client_id: clientId },
+        data: { referred_by_client_id: null },
+      });
+      await tx.fitness_external_buyers.updateMany({
+        where: { referred_by_client_id: clientId },
+        data: { referred_by_client_id: null },
+      });
+      await tx.fitness_clients.delete({ where: { client_id: clientId } });
     });
 
     emitFitnessChanged();
@@ -974,7 +1045,7 @@ async function deleteClient(req, res) {
       message: "Client and all related fitness records were removed from the database",
     });
   } catch (error) {
-    if (error.message === "Client not found") {
+    if (error.message === "Client not found" || error.code === "P2025") {
       return res.status(404).json({ success: false, message: "Client not found" });
     }
     res.status(500).json({ success: false, message: error.message });
@@ -986,14 +1057,26 @@ async function deleteClient(req, res) {
 // ─────────────────────────────────────────────────────────────────
 async function getAllConsultations(req, res) {
   try {
-    const rows = await prisma.$queryRaw`
-      SELECT c.*, fc.full_name, fc.status as client_status
-      FROM fitness_consultations c
-      JOIN fitness_clients fc ON c.client_id = fc.client_id
-      ORDER BY c.consult_date DESC
-      LIMIT 500
-    `;
-    res.json({ success: true, data: rows });
+    const rows = await prisma.fitness_consultations.findMany({
+      orderBy: { consult_date: "desc" },
+      take: 500,
+    });
+    const clientIds = [...new Set(rows.map((r) => r.client_id))];
+    const clients = clientIds.length
+      ? await prisma.fitness_clients.findMany({
+          where: { client_id: { in: clientIds } },
+          select: { client_id: true, full_name: true, status: true },
+        })
+      : [];
+    const cmap = Object.fromEntries(clients.map((c) => [c.client_id, c]));
+    res.json({
+      success: true,
+      data: serializeFitnessRows(rows).map((c) => ({
+        ...c,
+        full_name: cmap[c.client_id]?.full_name || null,
+        client_status: cmap[c.client_id]?.status || null,
+      })),
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1002,8 +1085,11 @@ async function getAllConsultations(req, res) {
 async function getConsultations(req, res) {
   try {
     const { clientId } = req.params;
-    const rows = await prisma.$queryRaw`SELECT * FROM fitness_consultations WHERE client_id = ${clientId} ORDER BY consult_date DESC`;
-    res.json({ success: true, data: rows });
+    const rows = await prisma.fitness_consultations.findMany({
+      where: { client_id: clientId },
+      orderBy: { consult_date: "desc" },
+    });
+    res.json({ success: true, data: serializeFitnessRows(rows) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1014,59 +1100,66 @@ async function createConsultation(req, res) {
     const { clientId } = req.params;
     const { consult_date, consult_type, weight_kg, key_observations, diet_changes, next_steps, next_appointment } = req.body;
 
-    // Express-validator validation
     const fieldErrors = extractValidationErrors(req);
     if (fieldErrors) {
       return res.status(400).json({ success: false, errors: fieldErrors });
     }
 
-    // Existing validation
-    if (!clientId || typeof clientId !== 'string') {
-      return sendValidationError(res, 'Invalid client ID');
+    if (!clientId || typeof clientId !== "string") {
+      return sendValidationError(res, "Invalid client ID");
     }
-    const reqError = validateRequired({ consult_date, consult_type }, ['consult_date', 'consult_type']);
+    const reqError = validateRequired({ consult_date, consult_type }, ["consult_date", "consult_type"]);
     if (reqError) return sendValidationError(res, reqError);
 
-    const dateErr = validateDate(consult_date, 'consult_date');
+    const dateErr = validateDate(consult_date, "consult_date");
     if (dateErr) return sendValidationError(res, dateErr);
 
-    const typeErr = validateEnum(consult_type, VALID_ENUMS.consult_type, 'consult_type');
+    const typeErr = validateEnum(consult_type, VALID_ENUMS.consult_type, "consult_type");
     if (typeErr) return sendValidationError(res, typeErr);
 
     if (weight_kg !== undefined) {
-      const weightErr = validateNumber(weight_kg, 'weight_kg', 1, 500);
+      const weightErr = validateNumber(weight_kg, "weight_kg", 1, 500);
       if (weightErr) return sendValidationError(res, weightErr);
     }
 
-    const insertId = await prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`INSERT INTO fitness_consultations (client_id, consult_date, consult_type, weight_kg, key_observations, diet_changes, next_steps, next_appointment)
-       VALUES (${clientId}, ${consult_date}, ${consult_type}, ${weight_kg}, ${key_observations}, ${diet_changes}, ${next_steps}, ${next_appointment})`;
-      const r = await tx.$queryRaw`SELECT LAST_INSERT_ID() as id`;
-      return Number(r[0].id);
+    const created = await prisma.fitness_consultations.create({
+      data: {
+        client_id: clientId,
+        consult_date: toPrismaDate(consult_date),
+        consult_type: toPrismaConsult(consult_type),
+        weight_kg: weight_kg != null ? weight_kg : null,
+        key_observations: key_observations ?? null,
+        diet_changes: diet_changes ?? null,
+        next_steps: next_steps ?? null,
+        next_appointment: next_appointment ?? null,
+      },
     });
 
-    // Update client's last_consultation_date and recalculate next_due_date
-    await prisma.$executeRaw`UPDATE fitness_clients SET last_consultation_date = ${consult_date} WHERE client_id = ${clientId}`;
-
-    // Recalculate next_due_date
-    const client = await prisma.$queryRaw`SELECT follow_up_freq_days FROM fitness_clients WHERE client_id = ${clientId}`;
-    if (client.length && client[0].follow_up_freq_days) {
-      const { calculateNextDueDate } = require("../services/fitnessComputedFields");
-      const nextDue = calculateNextDueDate(consult_date, client[0].follow_up_freq_days);
-      if (nextDue) {
-        await prisma.$executeRaw`UPDATE fitness_clients SET next_due_date = ${nextDue} WHERE client_id = ${clientId}`;
+    const client = await prisma.fitness_clients.findUnique({
+      where: { client_id: clientId },
+    });
+    if (client) {
+      const clientData = {
+        last_consultation_date: toPrismaDate(consult_date),
+        updated_at: new Date(),
+      };
+      if (client.follow_up_freq_days) {
+        const { calculateNextDueDate } = require("../services/fitnessComputedFields");
+        const nextDue = calculateNextDueDate(consult_date, client.follow_up_freq_days);
+        if (nextDue) clientData.next_due_date = toPrismaDate(nextDue);
       }
+      const updatedClient = await prisma.fitness_clients.update({
+        where: { client_id: clientId },
+        data: clientData,
+      });
+      const taskChanged = await syncClientDueTask(updatedClient, req.user?.id);
+      if (taskChanged) emitFitnessAndDueTaskChanged("client_due_consultation");
+      else emitFitnessChanged();
+    } else {
+      emitFitnessChanged();
     }
 
-    const clientRows = await prisma.$queryRaw`SELECT * FROM fitness_clients WHERE client_id = ${clientId}`;
-    const taskChanged = clientRows[0]
-      ? await syncClientDueTask(clientRows[0], req.user?.id)
-      : false;
-
-    const rows = await prisma.$queryRaw`SELECT * FROM fitness_consultations WHERE id = ${insertId}`;
-    if (taskChanged) emitFitnessAndDueTaskChanged("client_due_consultation");
-    else emitFitnessChanged();
-    res.status(201).json({ success: true, data: rows[0] });
+    res.status(201).json({ success: true, data: serializeFitnessRow(created) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1077,33 +1170,43 @@ async function updateConsultation(req, res) {
     const { id } = req.params;
     const { consult_date, consult_type, weight_kg, key_observations, diet_changes, next_steps, next_appointment } = req.body;
 
-    // Validate ID
     const idNum = parseInt(id, 10);
-    if (isNaN(idNum)) return sendValidationError(res, 'Invalid consultation ID');
+    if (isNaN(idNum)) return sendValidationError(res, "Invalid consultation ID");
 
     if (consult_date) {
-      const err = validateDate(consult_date, 'consult_date');
+      const err = validateDate(consult_date, "consult_date");
       if (err) return sendValidationError(res, err);
     }
     if (consult_type) {
-      const err = validateEnum(consult_type, VALID_ENUMS.consult_type, 'consult_type');
+      const err = validateEnum(consult_type, VALID_ENUMS.consult_type, "consult_type");
       if (err) return sendValidationError(res, err);
     }
     if (weight_kg !== undefined) {
-      const err = validateNumber(weight_kg, 'weight_kg', 1, 500);
+      const err = validateNumber(weight_kg, "weight_kg", 1, 500);
       if (err) return sendValidationError(res, err);
     }
 
-    await prisma.$executeRaw`UPDATE fitness_consultations
-       SET consult_date = ${consult_date}, consult_type = ${consult_type}, weight_kg = ${weight_kg}, key_observations = ${key_observations}, diet_changes = ${diet_changes}, next_steps = ${next_steps}, next_appointment = ${next_appointment}
-       WHERE id = ${id}`;
-
-    const rows = await prisma.$queryRaw`SELECT * FROM fitness_consultations WHERE id = ${id}`;
-    if (!rows.length) {
-      return res.status(404).json({ success: false, message: "Consultation not found" });
+    try {
+      const updated = await prisma.fitness_consultations.update({
+        where: { id: idNum },
+        data: {
+          consult_date: toPrismaDate(consult_date),
+          consult_type: consult_type != null ? toPrismaConsult(consult_type) : undefined,
+          weight_kg: weight_kg ?? null,
+          key_observations: key_observations ?? null,
+          diet_changes: diet_changes ?? null,
+          next_steps: next_steps ?? null,
+          next_appointment: next_appointment ?? null,
+        },
+      });
+      emitFitnessChanged();
+      res.json({ success: true, data: serializeFitnessRow(updated) });
+    } catch (err) {
+      if (err.code === "P2025") {
+        return res.status(404).json({ success: false, message: "Consultation not found" });
+      }
+      throw err;
     }
-    emitFitnessChanged();
-    res.json({ success: true, data: rows[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1112,8 +1215,10 @@ async function updateConsultation(req, res) {
 async function deleteConsultation(req, res) {
   try {
     const { id } = req.params;
-    const result = await prisma.$executeRaw`DELETE FROM fitness_consultations WHERE id = ${id}`;
-    if (result === 0) {
+    const result = await prisma.fitness_consultations.deleteMany({
+      where: { id: Number(id) },
+    });
+    if (result.count === 0) {
       return res.status(404).json({ success: false, message: "Consultation not found" });
     }
     emitFitnessChanged();
@@ -1129,8 +1234,11 @@ async function deleteConsultation(req, res) {
 async function getBodyStats(req, res) {
   try {
     const { clientId } = req.params;
-    const rows = await prisma.$queryRaw`SELECT * FROM fitness_body_stats WHERE client_id = ${clientId} ORDER BY recorded_date DESC`;
-    res.json({ success: true, data: rows });
+    const rows = await prisma.fitness_body_stats.findMany({
+      where: { client_id: clientId },
+      orderBy: { recorded_date: "desc" },
+    });
+    res.json({ success: true, data: serializeFitnessRows(rows) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1141,50 +1249,58 @@ async function createBodyStat(req, res) {
     const { clientId } = req.params;
     const { recorded_date, weight_kg, body_fat_pct, muscle_mass_kg, waist_cm, notes } = req.body;
 
-    // Validation
-    if (!clientId || typeof clientId !== 'string') {
-      return sendValidationError(res, 'Invalid client ID');
+    if (!clientId || typeof clientId !== "string") {
+      return sendValidationError(res, "Invalid client ID");
     }
-    const reqError = validateRequired({ recorded_date }, ['recorded_date']);
+    const reqError = validateRequired({ recorded_date }, ["recorded_date"]);
     if (reqError) return sendValidationError(res, reqError);
 
-    const dateErr = validateDate(recorded_date, 'recorded_date');
+    const dateErr = validateDate(recorded_date, "recorded_date");
     if (dateErr) return sendValidationError(res, dateErr);
 
     if (weight_kg !== undefined) {
-      const err = validateNumber(weight_kg, 'weight_kg', 1, 500);
+      const err = validateNumber(weight_kg, "weight_kg", 1, 500);
       if (err) return sendValidationError(res, err);
     }
     if (body_fat_pct !== undefined) {
-      const err = validateNumber(body_fat_pct, 'body_fat_pct', 0, 100);
+      const err = validateNumber(body_fat_pct, "body_fat_pct", 0, 100);
       if (err) return sendValidationError(res, err);
     }
     if (waist_cm !== undefined) {
-      const err = validateNumber(waist_cm, 'waist_cm', 1, 300);
+      const err = validateNumber(waist_cm, "waist_cm", 1, 300);
       if (err) return sendValidationError(res, err);
     }
 
-    const insertId = await prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`INSERT INTO fitness_body_stats (client_id, recorded_date, weight_kg, body_fat_pct, muscle_mass_kg, waist_cm, notes)
-       VALUES (${clientId}, ${recorded_date}, ${weight_kg}, ${body_fat_pct}, ${muscle_mass_kg}, ${waist_cm}, ${notes})`;
-      const r = await tx.$queryRaw`SELECT LAST_INSERT_ID() as id`;
-      return Number(r[0].id);
+    const created = await prisma.fitness_body_stats.create({
+      data: {
+        client_id: clientId,
+        recorded_date: toPrismaDate(recorded_date),
+        weight_kg: weight_kg ?? null,
+        body_fat_pct: body_fat_pct ?? null,
+        muscle_mass_kg: muscle_mass_kg ?? null,
+        waist_cm: waist_cm ?? null,
+        notes: notes ?? null,
+      },
     });
 
-    // Update current_weight_kg on client
     if (weight_kg) {
       const { calculateBMI } = require("../services/fitnessComputedFields");
-      const client = await prisma.$queryRaw`SELECT height_cm FROM fitness_clients WHERE client_id = ${clientId}`;
+      const client = await prisma.fitness_clients.findUnique({
+        where: { client_id: clientId },
+        select: { height_cm: true },
+      });
       let bmi = null;
-      if (client.length && client[0].height_cm) {
-        bmi = calculateBMI(client[0].height_cm, weight_kg);
+      if (client?.height_cm) {
+        bmi = calculateBMI(numOrNull(client.height_cm), weight_kg);
       }
-      await prisma.$executeRaw`UPDATE fitness_clients SET current_weight_kg = ${weight_kg}, bmi = ${bmi} WHERE client_id = ${clientId}`;
+      await prisma.fitness_clients.update({
+        where: { client_id: clientId },
+        data: { current_weight_kg: weight_kg, bmi, updated_at: new Date() },
+      });
     }
 
-    const rows = await prisma.$queryRaw`SELECT * FROM fitness_body_stats WHERE id = ${insertId}`;
     emitFitnessChanged();
-    res.status(201).json({ success: true, data: rows[0] });
+    res.status(201).json({ success: true, data: serializeFitnessRow(created) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1193,8 +1309,10 @@ async function createBodyStat(req, res) {
 async function deleteBodyStat(req, res) {
   try {
     const { id } = req.params;
-    const result = await prisma.$executeRaw`DELETE FROM fitness_body_stats WHERE id = ${id}`;
-    if (result === 0) {
+    const result = await prisma.fitness_body_stats.deleteMany({
+      where: { id: Number(id) },
+    });
+    if (result.count === 0) {
       return res.status(404).json({ success: false, message: "Body stat not found" });
     }
     res.json({ success: true });
@@ -1209,8 +1327,11 @@ async function deleteBodyStat(req, res) {
 async function getSupplements(req, res) {
   try {
     const { clientId } = req.params;
-    const rows = await prisma.$queryRaw`SELECT * FROM fitness_supplements WHERE client_id = ${clientId} ORDER BY prescribed_date DESC`;
-    res.json({ success: true, data: rows });
+    const rows = await prisma.fitness_supplements.findMany({
+      where: { client_id: clientId },
+      orderBy: { prescribed_date: "desc" },
+    });
+    res.json({ success: true, data: serializeFitnessRows(rows) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1221,40 +1342,42 @@ async function createSupplement(req, res) {
     const { clientId } = req.params;
     const { product_name, prescribed_date, quantity, mrp_inr, rate_inr, notes } = req.body;
 
-    // Validation
-    if (!clientId || typeof clientId !== 'string') {
-      return sendValidationError(res, 'Invalid client ID');
+    if (!clientId || typeof clientId !== "string") {
+      return sendValidationError(res, "Invalid client ID");
     }
-    const reqError = validateRequired({ product_name }, ['product_name']);
+    const reqError = validateRequired({ product_name }, ["product_name"]);
     if (reqError) return sendValidationError(res, reqError);
 
     if (prescribed_date) {
-      const err = validateDate(prescribed_date, 'prescribed_date');
+      const err = validateDate(prescribed_date, "prescribed_date");
       if (err) return sendValidationError(res, err);
     }
     if (quantity !== undefined) {
-      const err = validatePositiveInt(quantity, 'quantity');
+      const err = validatePositiveInt(quantity, "quantity");
       if (err) return sendValidationError(res, err);
     }
     if (mrp_inr !== undefined) {
-      const err = validateNumber(mrp_inr, 'mrp_inr', 0);
+      const err = validateNumber(mrp_inr, "mrp_inr", 0);
       if (err) return sendValidationError(res, err);
     }
     if (rate_inr !== undefined) {
-      const err = validateNumber(rate_inr, 'rate_inr', 0);
+      const err = validateNumber(rate_inr, "rate_inr", 0);
       if (err) return sendValidationError(res, err);
     }
 
-    const insertId = await prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`INSERT INTO fitness_supplements (client_id, product_name, prescribed_date, quantity, mrp_inr, rate_inr, notes)
-       VALUES (${clientId}, ${product_name}, ${prescribed_date}, ${quantity}, ${mrp_inr}, ${rate_inr}, ${notes})`;
-      const r = await tx.$queryRaw`SELECT LAST_INSERT_ID() as id`;
-      return Number(r[0].id);
+    const created = await prisma.fitness_supplements.create({
+      data: {
+        client_id: clientId,
+        product_name,
+        prescribed_date: toPrismaDate(prescribed_date),
+        quantity: quantity != null ? Number(quantity) : null,
+        mrp_inr: mrp_inr ?? null,
+        rate_inr: rate_inr ?? null,
+        notes: notes ?? null,
+      },
     });
-
-    const rows = await prisma.$queryRaw`SELECT * FROM fitness_supplements WHERE id = ${insertId}`;
     emitFitnessChanged();
-    res.status(201).json({ success: true, data: rows[0] });
+    res.status(201).json({ success: true, data: serializeFitnessRow(created) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1265,37 +1388,46 @@ async function updateSupplement(req, res) {
     const { id } = req.params;
     const { product_name, prescribed_date, quantity, mrp_inr, rate_inr, notes } = req.body;
 
-    // Validate ID
     const idNum = parseInt(id, 10);
-    if (isNaN(idNum)) return sendValidationError(res, 'Invalid supplement ID');
+    if (isNaN(idNum)) return sendValidationError(res, "Invalid supplement ID");
 
     if (prescribed_date) {
-      const err = validateDate(prescribed_date, 'prescribed_date');
+      const err = validateDate(prescribed_date, "prescribed_date");
       if (err) return sendValidationError(res, err);
     }
     if (quantity !== undefined) {
-      const err = validatePositiveInt(quantity, 'quantity');
+      const err = validatePositiveInt(quantity, "quantity");
       if (err) return sendValidationError(res, err);
     }
     if (mrp_inr !== undefined) {
-      const err = validateNumber(mrp_inr, 'mrp_inr', 0);
+      const err = validateNumber(mrp_inr, "mrp_inr", 0);
       if (err) return sendValidationError(res, err);
     }
     if (rate_inr !== undefined) {
-      const err = validateNumber(rate_inr, 'rate_inr', 0);
+      const err = validateNumber(rate_inr, "rate_inr", 0);
       if (err) return sendValidationError(res, err);
     }
 
-    await prisma.$executeRaw`UPDATE fitness_supplements
-       SET product_name = ${product_name}, prescribed_date = ${prescribed_date}, quantity = ${quantity}, mrp_inr = ${mrp_inr}, rate_inr = ${rate_inr}, notes = ${notes}
-       WHERE id = ${id}`;
-
-    const rows = await prisma.$queryRaw`SELECT * FROM fitness_supplements WHERE id = ${id}`;
-    if (!rows.length) {
-      return res.status(404).json({ success: false, message: "Supplement not found" });
+    try {
+      const updated = await prisma.fitness_supplements.update({
+        where: { id: idNum },
+        data: {
+          product_name,
+          prescribed_date: toPrismaDate(prescribed_date),
+          quantity: quantity != null ? Number(quantity) : null,
+          mrp_inr: mrp_inr ?? null,
+          rate_inr: rate_inr ?? null,
+          notes: notes ?? null,
+        },
+      });
+      emitFitnessChanged();
+      res.json({ success: true, data: serializeFitnessRow(updated) });
+    } catch (err) {
+      if (err.code === "P2025") {
+        return res.status(404).json({ success: false, message: "Supplement not found" });
+      }
+      throw err;
     }
-    emitFitnessChanged();
-    res.json({ success: true, data: rows[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1304,8 +1436,10 @@ async function updateSupplement(req, res) {
 async function deleteSupplement(req, res) {
   try {
     const { id } = req.params;
-    const result = await prisma.$executeRaw`DELETE FROM fitness_supplements WHERE id = ${id}`;
-    if (result === 0) {
+    const result = await prisma.fitness_supplements.deleteMany({
+      where: { id: Number(id) },
+    });
+    if (result.count === 0) {
       return res.status(404).json({ success: false, message: "Supplement not found" });
     }
     emitFitnessChanged();
@@ -1318,6 +1452,98 @@ async function deleteSupplement(req, res) {
 // ─────────────────────────────────────────────────────────────────
 // TRANSACTIONS
 // ─────────────────────────────────────────────────────────────────
+async function enrichFitnessTransactions(rows) {
+  if (!rows.length) return [];
+  const clientIds = [...new Set(rows.map((r) => r.client_id).filter(Boolean))];
+  const extIds = [...new Set(rows.map((r) => r.external_buyer_id).filter(Boolean))];
+
+  const [clients, buyers] = await Promise.all([
+    clientIds.length
+      ? prisma.fitness_clients.findMany({
+          where: { client_id: { in: clientIds } },
+          select: { client_id: true, full_name: true },
+        })
+      : [],
+    extIds.length
+      ? prisma.fitness_external_buyers.findMany({
+          where: { id: { in: extIds } },
+          select: {
+            id: true,
+            full_name: true,
+            phone: true,
+            referred_by_client_id: true,
+          },
+        })
+      : [],
+  ]);
+  const clientMap = Object.fromEntries(clients.map((c) => [c.client_id, c]));
+  const buyerMap = Object.fromEntries(buyers.map((b) => [b.id, b]));
+
+  const refClientIds = [
+    ...new Set(buyers.map((b) => b.referred_by_client_id).filter(Boolean)),
+  ];
+  const refClients = refClientIds.length
+    ? await prisma.fitness_clients.findMany({
+        where: { client_id: { in: refClientIds } },
+        select: { client_id: true, full_name: true },
+      })
+    : [];
+  const refMap = Object.fromEntries(refClients.map((c) => [c.client_id, c.full_name]));
+
+  const visitCounts = {};
+  const byBuyer = {};
+  for (const r of rows) {
+    if (!r.external_buyer_id) continue;
+    if (!byBuyer[r.external_buyer_id]) byBuyer[r.external_buyer_id] = [];
+    byBuyer[r.external_buyer_id].push(r);
+  }
+  for (const list of Object.values(byBuyer)) {
+    list.sort((a, b) => {
+      const da = toYmd(a.transaction_date) || "";
+      const db = toYmd(b.transaction_date) || "";
+      if (da !== db) return da < db ? -1 : 1;
+      return a.id - b.id;
+    });
+    list.forEach((r, i) => {
+      visitCounts[r.id] = i + 1;
+    });
+  }
+
+  // For visit_index accuracy across all buyer txs (not just filtered set), count prior txs
+  const missingBuyerIds = extIds.filter((id) => {
+    const present = (byBuyer[id] || []).length;
+    return present > 0;
+  });
+  if (missingBuyerIds.length) {
+    const allBuyerTxs = await prisma.fitness_transactions.findMany({
+      where: { external_buyer_id: { in: missingBuyerIds } },
+      select: { id: true, external_buyer_id: true, transaction_date: true },
+      orderBy: [{ transaction_date: "asc" }, { id: "asc" }],
+    });
+    const idx = {};
+    const counters = {};
+    for (const t of allBuyerTxs) {
+      counters[t.external_buyer_id] = (counters[t.external_buyer_id] || 0) + 1;
+      idx[t.id] = counters[t.external_buyer_id];
+    }
+    Object.assign(visitCounts, idx);
+  }
+
+  return serializeFitnessRows(rows).map((r) => {
+    const buyer = r.external_buyer_id ? buyerMap[r.external_buyer_id] : null;
+    return {
+      ...r,
+      client_name: r.client_id ? clientMap[r.client_id]?.full_name || null : null,
+      external_buyer_name: buyer?.full_name || null,
+      external_buyer_phone: buyer?.phone || null,
+      referred_by_client_name: buyer?.referred_by_client_id
+        ? refMap[buyer.referred_by_client_id] || null
+        : null,
+      visit_index: r.external_buyer_id ? visitCounts[r.id] ?? null : null,
+    };
+  });
+}
+
 async function getAllTransactions(req, res) {
   try {
     const { client_id, month, type, scope } = req.query;
@@ -1326,31 +1552,23 @@ async function getAllTransactions(req, res) {
       return res.status(400).json({ success: false, message: "scope must be client, external, or all" });
     }
 
-    let query = `${sqlFitnessTransactionsJoined()} WHERE 1=1`;
-    const params = [];
-
-    if (scopeNorm === "client") {
-      query += " AND ft.client_id IS NOT NULL";
-    } else if (scopeNorm === "external") {
-      query += " AND ft.external_buyer_id IS NOT NULL";
+    const where = {};
+    if (scopeNorm === "client") where.client_id = { not: null };
+    else if (scopeNorm === "external") where.external_buyer_id = { not: null };
+    if (client_id) where.client_id = String(client_id);
+    if (type) where.type = type;
+    if (month && /^\d{4}-\d{2}$/.test(String(month))) {
+      const [y, m] = String(month).split("-").map(Number);
+      const start = new Date(y, m - 1, 1);
+      const end = new Date(y, m, 0);
+      where.transaction_date = { gte: start, lte: end };
     }
 
-    if (client_id) {
-      query += " AND ft.client_id = ?";
-      params.push(client_id);
-    }
-    if (month) {
-      query += " AND DATE_FORMAT(ft.transaction_date, '%Y-%m') = ?";
-      params.push(month);
-    }
-    if (type) {
-      query += " AND ft.type = ?";
-      params.push(type);
-    }
-
-    query += " ORDER BY ft.transaction_date DESC";
-    const rows = await prisma.$queryRawUnsafe(query, ...params);
-    res.json({ success: true, data: rows });
+    const rows = await prisma.fitness_transactions.findMany({
+      where,
+      orderBy: { transaction_date: "desc" },
+    });
+    res.json({ success: true, data: await enrichFitnessTransactions(rows) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1359,8 +1577,11 @@ async function getAllTransactions(req, res) {
 async function getClientTransactions(req, res) {
   try {
     const { clientId } = req.params;
-    const rows = await prisma.$queryRaw`SELECT * FROM fitness_transactions WHERE client_id = ${clientId} ORDER BY transaction_date DESC`;
-    res.json({ success: true, data: rows });
+    const rows = await prisma.fitness_transactions.findMany({
+      where: { client_id: clientId },
+      orderBy: { transaction_date: "desc" },
+    });
+    res.json({ success: true, data: serializeFitnessRows(rows) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1455,8 +1676,11 @@ async function createTransaction(req, res) {
       }
       finalClientId = cid;
     } else if (hasExplicitExtId) {
-      const buyers = await prisma.$queryRaw`SELECT id FROM fitness_external_buyers WHERE id = ${extIdParsed}`;
-      if (!buyers.length) {
+      const buyer = await prisma.fitness_external_buyers.findUnique({
+        where: { id: extIdParsed },
+        select: { id: true },
+      });
+      if (!buyer) {
         return res.status(400).json({ success: false, message: "external_buyer_id not found" });
       }
       finalExtBuyerId = extIdParsed;
@@ -1472,34 +1696,44 @@ async function createTransaction(req, res) {
           ? String(eb.referred_by_client_id).trim()
           : null;
       if (refId) {
-        const cref = await prisma.$queryRaw`SELECT client_id FROM fitness_clients WHERE client_id = ${refId}`;
-        if (!cref.length) {
+        const cref = await prisma.fitness_clients.findUnique({
+          where: { client_id: refId },
+          select: { client_id: true },
+        });
+        if (!cref) {
           return sendValidationError(res, "external_buyer.referred_by_client_id not found");
         }
       }
       let buyerId;
       if (phoneNorm) {
-        const found = await prisma.$queryRaw`SELECT id FROM fitness_external_buyers WHERE phone = ${phoneNorm} LIMIT 1`;
-        if (found.length) {
-          buyerId = found[0].id;
-        }
+        const found = await prisma.fitness_external_buyers.findUnique({
+          where: { phone: phoneNorm },
+          select: { id: true },
+        });
+        if (found) buyerId = found.id;
       }
       if (!buyerId) {
         const noteVal = eb.notes != null ? String(eb.notes) : null;
         try {
-          const insId = await prisma.$transaction(async (tx) => {
-            await tx.$executeRaw`INSERT INTO fitness_external_buyers (full_name, phone, referred_by_client_id, notes) VALUES (${name}, ${phoneNorm}, ${refId}, ${noteVal})`;
-            const r = await tx.$queryRaw`SELECT LAST_INSERT_ID() as id`;
-            return Number(r[0].id);
+          const createdBuyer = await prisma.fitness_external_buyers.create({
+            data: {
+              full_name: name,
+              phone: phoneNorm,
+              referred_by_client_id: refId,
+              notes: noteVal,
+            },
           });
-          buyerId = insId;
+          buyerId = createdBuyer.id;
         } catch (insErr) {
           if (phoneNorm) {
-            const found2 = await prisma.$queryRaw`SELECT id FROM fitness_external_buyers WHERE phone = ${phoneNorm} LIMIT 1`;
-            if (!found2.length) {
+            const found2 = await prisma.fitness_external_buyers.findUnique({
+              where: { phone: phoneNorm },
+              select: { id: true },
+            });
+            if (!found2) {
               return res.status(500).json({ success: false, message: insErr.message });
             }
-            buyerId = found2[0].id;
+            buyerId = found2.id;
           } else {
             return res.status(500).json({ success: false, message: insErr.message });
           }
@@ -1509,13 +1743,24 @@ async function createTransaction(req, res) {
     }
 
     try {
-      const insertId = await prisma.$transaction(async (tx) => {
-        await tx.$executeRaw`INSERT INTO fitness_transactions (client_id, external_buyer_id, transaction_date, payment_due_date, product_plan, type, mrp_inr, rate_inr, received_inr, pending_inr, cost_inr, pay_mode, notes)
-         VALUES (${finalClientId}, ${finalExtBuyerId}, ${transaction_date}, ${payment_due_date || null}, ${product_plan}, ${type}, ${mrp_inr}, ${rate_inr}, ${received_inr || 0}, ${pending_inr || 0}, ${cost_inr || 0}, ${pay_mode || "GPay"}, ${notes})`;
-        const r = await tx.$queryRaw`SELECT LAST_INSERT_ID() as id`;
-        return Number(r[0].id);
+      const created = await prisma.fitness_transactions.create({
+        data: {
+          client_id: finalClientId,
+          external_buyer_id: finalExtBuyerId,
+          transaction_date: toPrismaDate(transaction_date),
+          payment_due_date: toPrismaDate(payment_due_date),
+          product_plan,
+          type,
+          mrp_inr: mrp_inr ?? null,
+          rate_inr: rate_inr ?? null,
+          received_inr: received_inr || 0,
+          pending_inr: pending_inr || 0,
+          cost_inr: cost_inr || 0,
+          pay_mode: toPrismaPayMode(pay_mode || "GPay"),
+          notes: notes ?? null,
+        },
       });
-      const rows = await prisma.$queryRawUnsafe(`${sqlFitnessTransactionsJoined()} WHERE ft.id = ?`, insertId);
+      const enriched = await enrichFitnessTransactions([created]);
       emitFitnessChanged();
 
       let receipt_invoice_id = null;
@@ -1523,7 +1768,7 @@ async function createTransaction(req, res) {
         try {
           const { createReceiptForFitnessTransaction } = require("../services/paymentReceiptService");
           const receipt = await createReceiptForFitnessTransaction(
-            insertId,
+            created.id,
             Number(req.user?.id)
           );
           receipt_invoice_id = receipt?.id || null;
@@ -1534,7 +1779,7 @@ async function createTransaction(req, res) {
 
       res.status(201).json({
         success: true,
-        data: { ...rows[0], receipt_invoice_id },
+        data: { ...enriched[0], receipt_invoice_id },
       });
     } catch (err) {
       throw err;
@@ -1586,16 +1831,32 @@ async function updateTransaction(req, res) {
       if (err) return sendValidationError(res, err);
     }
 
-    await prisma.$executeRaw`UPDATE fitness_transactions
-       SET transaction_date = ${transaction_date}, payment_due_date = ${payment_due_date || null}, product_plan = ${product_plan}, type = ${type}, mrp_inr = ${mrp_inr}, rate_inr = ${rate_inr}, received_inr = ${received_inr}, pending_inr = ${pending_inr}, cost_inr = ${cost_inr}, pay_mode = ${pay_mode}, notes = ${notes}
-       WHERE id = ${id}`;
-
-    const rows = await prisma.$queryRawUnsafe(`${sqlFitnessTransactionsJoined()} WHERE ft.id = ?`, id);
-    if (!rows.length) {
-      return res.status(404).json({ success: false, message: "Transaction not found" });
+    try {
+      const updated = await prisma.fitness_transactions.update({
+        where: { id: idNum },
+        data: {
+          transaction_date: toPrismaDate(transaction_date),
+          payment_due_date: toPrismaDate(payment_due_date),
+          product_plan,
+          type,
+          mrp_inr: mrp_inr ?? null,
+          rate_inr: rate_inr ?? null,
+          received_inr: received_inr ?? null,
+          pending_inr: pending_inr ?? null,
+          cost_inr: cost_inr ?? null,
+          pay_mode: pay_mode != null ? toPrismaPayMode(pay_mode) : null,
+          notes: notes ?? null,
+        },
+      });
+      const enriched = await enrichFitnessTransactions([updated]);
+      emitFitnessChanged();
+      res.json({ success: true, data: enriched[0] });
+    } catch (err) {
+      if (err.code === "P2025") {
+        return res.status(404).json({ success: false, message: "Transaction not found" });
+      }
+      throw err;
     }
-    emitFitnessChanged();
-    res.json({ success: true, data: rows[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -1604,8 +1865,10 @@ async function updateTransaction(req, res) {
 async function deleteTransaction(req, res) {
   try {
     const { id } = req.params;
-    const result = await prisma.$executeRaw`DELETE FROM fitness_transactions WHERE id = ${id}`;
-    if (result === 0) {
+    const result = await prisma.fitness_transactions.deleteMany({
+      where: { id: Number(id) },
+    });
+    if (result.count === 0) {
       return res.status(404).json({ success: false, message: "Transaction not found" });
     }
     emitFitnessChanged();
@@ -1615,38 +1878,63 @@ async function deleteTransaction(req, res) {
   }
 }
 
-function sqlFitnessTransactionsJoined() {
-  return `SELECT ft.*,
-    fc.full_name AS client_name,
-    feb.full_name AS external_buyer_name,
-    feb.phone AS external_buyer_phone,
-    fr.full_name AS referred_by_client_name,
-    (CASE WHEN ft.external_buyer_id IS NULL THEN NULL ELSE (
-      SELECT COUNT(*) FROM fitness_transactions tx2
-      WHERE tx2.external_buyer_id = ft.external_buyer_id
-      AND (tx2.transaction_date < ft.transaction_date OR (tx2.transaction_date = ft.transaction_date AND tx2.id <= ft.id))
-    ) END) AS visit_index
-    FROM fitness_transactions ft
-    LEFT JOIN fitness_clients fc ON ft.client_id = fc.client_id
-    LEFT JOIN fitness_external_buyers feb ON ft.external_buyer_id = feb.id
-    LEFT JOIN fitness_clients fr ON feb.referred_by_client_id = fr.client_id`;
-}
-
 async function getExternalBuyers(req, res) {
   try {
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
     const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
-    const rows = await prisma.$queryRawUnsafe(`SELECT feb.id, feb.full_name, feb.phone, feb.referred_by_client_id, feb.notes, feb.created_at, feb.updated_at,
-        COALESCE(SUM(ft.received_inr), 0) AS lifetime_received,
-        COUNT(ft.id) AS visit_count,
-        MAX(ft.transaction_date) AS last_visit,
-        MAX(fc.full_name) AS referred_by_client_name
-       FROM fitness_external_buyers feb
-       LEFT JOIN fitness_transactions ft ON ft.external_buyer_id = feb.id
-       LEFT JOIN fitness_clients fc ON feb.referred_by_client_id = fc.client_id
-       GROUP BY feb.id
-       ORDER BY last_visit IS NULL, last_visit DESC, feb.id DESC
-       LIMIT ? OFFSET ?`, limit, offset);
+    const buyers = await prisma.fitness_external_buyers.findMany({
+      orderBy: { id: "desc" },
+    });
+    const txs = await prisma.fitness_transactions.findMany({
+      where: { external_buyer_id: { not: null } },
+      select: {
+        external_buyer_id: true,
+        received_inr: true,
+        transaction_date: true,
+      },
+    });
+    const refIds = [...new Set(buyers.map((b) => b.referred_by_client_id).filter(Boolean))];
+    const refs = refIds.length
+      ? await prisma.fitness_clients.findMany({
+          where: { client_id: { in: refIds } },
+          select: { client_id: true, full_name: true },
+        })
+      : [];
+    const refMap = Object.fromEntries(refs.map((c) => [c.client_id, c.full_name]));
+    const agg = {};
+    for (const t of txs) {
+      const id = t.external_buyer_id;
+      if (!agg[id]) agg[id] = { lifetime_received: 0, visit_count: 0, last_visit: null };
+      agg[id].lifetime_received += Number(t.received_inr || 0);
+      agg[id].visit_count += 1;
+      const d = toYmd(t.transaction_date);
+      if (d && (!agg[id].last_visit || d > agg[id].last_visit)) agg[id].last_visit = d;
+    }
+    let rows = buyers.map((b) => {
+      const a = agg[b.id] || { lifetime_received: 0, visit_count: 0, last_visit: null };
+      return {
+        id: b.id,
+        full_name: b.full_name,
+        phone: b.phone,
+        referred_by_client_id: b.referred_by_client_id,
+        notes: b.notes,
+        created_at: b.created_at,
+        updated_at: b.updated_at,
+        lifetime_received: a.lifetime_received,
+        visit_count: a.visit_count,
+        last_visit: a.last_visit,
+        referred_by_client_name: b.referred_by_client_id
+          ? refMap[b.referred_by_client_id] || null
+          : null,
+      };
+    });
+    rows.sort((a, b) => {
+      if (!a.last_visit && b.last_visit) return 1;
+      if (a.last_visit && !b.last_visit) return -1;
+      if (a.last_visit !== b.last_visit) return a.last_visit < b.last_visit ? 1 : -1;
+      return b.id - a.id;
+    });
+    rows = rows.slice(offset, offset + limit);
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1657,39 +1945,38 @@ async function getExternalStats(req, res) {
   try {
     const fromStr = parseYmdQuery(req.query.date_from);
     const toStr = parseYmdQuery(req.query.date_to);
-    let dateCond = "";
-    const params = [];
-    if (fromStr && toStr) {
-      dateCond = " AND ft.transaction_date >= ? AND ft.transaction_date <= ?";
-      params.push(fromStr, toStr);
-    } else if (fromStr) {
-      dateCond = " AND ft.transaction_date >= ?";
-      params.push(fromStr);
-    } else if (toStr) {
-      dateCond = " AND ft.transaction_date <= ?";
-      params.push(toStr);
+    const where = { external_buyer_id: { not: null } };
+    if (fromStr || toStr) {
+      where.transaction_date = {};
+      if (fromStr) where.transaction_date.gte = toPrismaDate(fromStr);
+      if (toStr) where.transaction_date.lte = toPrismaDate(toStr);
     }
-    const aggRows = await prisma.$queryRawUnsafe(`SELECT COUNT(*) AS transaction_count,
-        COALESCE(SUM(ft.received_inr), 0) AS total_received,
-        COALESCE(SUM(ft.received_inr - ft.cost_inr), 0) AS total_profit,
-        COUNT(DISTINCT ft.external_buyer_id) AS distinct_buyers
-       FROM fitness_transactions ft
-       WHERE ft.external_buyer_id IS NOT NULL ${dateCond}`, ...params);
-    const agg = aggRows[0];
-    const repeatRows = await prisma.$queryRawUnsafe(`SELECT COUNT(*) AS repeat_buyers FROM (
-         SELECT ft.external_buyer_id FROM fitness_transactions ft
-         WHERE ft.external_buyer_id IS NOT NULL ${dateCond}
-         GROUP BY ft.external_buyer_id HAVING COUNT(*) > 1
-       ) t`, ...params);
-    const repeatRow = repeatRows[0];
+    const txs = await prisma.fitness_transactions.findMany({
+      where,
+      select: {
+        external_buyer_id: true,
+        received_inr: true,
+        cost_inr: true,
+      },
+    });
+    const buyerCounts = {};
+    let total_received = 0;
+    let total_profit = 0;
+    for (const t of txs) {
+      total_received += Number(t.received_inr || 0);
+      total_profit += Number(t.received_inr || 0) - Number(t.cost_inr || 0);
+      if (t.external_buyer_id) {
+        buyerCounts[t.external_buyer_id] = (buyerCounts[t.external_buyer_id] || 0) + 1;
+      }
+    }
     res.json({
       success: true,
       data: {
-        transaction_count: Number(agg.transaction_count || 0),
-        total_received: Number(agg.total_received || 0),
-        total_profit: Number(agg.total_profit || 0),
-        distinct_buyers: Number(agg.distinct_buyers || 0),
-        repeat_buyers: Number(repeatRow.repeat_buyers || 0),
+        transaction_count: txs.length,
+        total_received,
+        total_profit,
+        distinct_buyers: Object.keys(buyerCounts).length,
+        repeat_buyers: Object.values(buyerCounts).filter((n) => n > 1).length,
       },
     });
   } catch (error) {
@@ -1703,18 +1990,16 @@ async function searchExternalBuyers(req, res) {
     if (q.length < 2) {
       return res.json({ success: true, data: [] });
     }
-    const namePat = `%${q}%`;
     const qDigits = normalizePhoneDigits(q);
-    const params = [namePat];
-    let sql = `SELECT id, full_name, phone, referred_by_client_id, notes, created_at, updated_at
-      FROM fitness_external_buyers
-      WHERE full_name LIKE ?`;
+    const or = [{ full_name: { contains: q } }];
     if (qDigits && qDigits.length >= 2) {
-      sql += " OR (phone IS NOT NULL AND phone LIKE ?)";
-      params.push(`%${qDigits}%`);
+      or.push({ phone: { contains: qDigits } });
     }
-    sql += " ORDER BY id DESC LIMIT 30";
-    const rows = await prisma.$queryRawUnsafe(sql, ...params);
+    const rows = await prisma.fitness_external_buyers.findMany({
+      where: { OR: or },
+      orderBy: { id: "desc" },
+      take: 30,
+    });
     res.json({ success: true, data: rows });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -1723,62 +2008,113 @@ async function searchExternalBuyers(req, res) {
 
 async function getTransactionSummary(req, res) {
   try {
-    const { period } = req.query; // 'monthly' or 'yearly'
+    const { period } = req.query;
     const currentYear = new Date().getFullYear();
+    const yearStart = new Date(currentYear, 0, 1);
+    const yearEnd = new Date(currentYear, 11, 31);
+    const txs = await prisma.fitness_transactions.findMany({
+      where: { transaction_date: { gte: yearStart, lte: yearEnd } },
+      select: {
+        transaction_date: true,
+        type: true,
+        received_inr: true,
+        pending_inr: true,
+        cost_inr: true,
+      },
+    });
 
-    if (period === 'yearly') {
-      const rows = await prisma.$queryRaw`
-        SELECT
-          SUM(received_inr) as total_received,
-          SUM(pending_inr) as total_pending,
-          SUM(cost_inr) as total_cost,
-          SUM(received_inr - cost_inr) as total_profit,
-          SUM(CASE WHEN type = 'Membership' THEN received_inr ELSE 0 END) as membership_rev,
-          SUM(CASE WHEN type = 'Supplement' THEN received_inr ELSE 0 END) as supplement_rev,
-          COUNT(*) as total_transactions
-        FROM fitness_transactions
-        WHERE YEAR(transaction_date) = ${currentYear}
-      `;
-      return res.json({ success: true, data: rows[0] });
-    }
-
-    // Monthly summary for current year
-    const rows = await prisma.$queryRaw`
-      SELECT
-        DATE_FORMAT(transaction_date, '%Y-%m') as month,
-        SUM(received_inr) as received,
-        SUM(pending_inr) as pending,
-        SUM(cost_inr) as cost,
-        SUM(received_inr - cost_inr) as profit,
-        SUM(CASE WHEN type = 'Membership' THEN received_inr ELSE 0 END) as membership,
-        SUM(CASE WHEN type = 'Supplement' THEN received_inr ELSE 0 END) as supplement,
-        COUNT(*) as transactions
-      FROM fitness_transactions
-      WHERE YEAR(transaction_date) = ${currentYear}
-      GROUP BY DATE_FORMAT(transaction_date, '%Y-%m')
-      ORDER BY month
-    `;
-
-    // Fill missing months with zeros
-    const months = [];
-    for (let i = 1; i <= 12; i++) {
-      const monthStr = `${currentYear}-${String(i).padStart(2, '0')}`;
-      const found = rows.find(r => r.month === monthStr);
-      months.push(found || {
-        month: monthStr, received: 0, pending: 0, cost: 0, profit: 0, membership: 0, supplement: 0, transactions: 0
+    if (period === "yearly") {
+      let total_received = 0;
+      let total_pending = 0;
+      let total_cost = 0;
+      let membership_rev = 0;
+      let supplement_rev = 0;
+      for (const t of txs) {
+        const rec = Number(t.received_inr || 0);
+        total_received += rec;
+        total_pending += Number(t.pending_inr || 0);
+        total_cost += Number(t.cost_inr || 0);
+        if (t.type === "Membership") membership_rev += rec;
+        if (t.type === "Supplement") supplement_rev += rec;
+      }
+      return res.json({
+        success: true,
+        data: {
+          total_received,
+          total_pending,
+          total_cost,
+          total_profit: total_received - total_cost,
+          membership_rev,
+          supplement_rev,
+          total_transactions: txs.length,
+        },
       });
     }
 
-    // Calculate totals
-    const totals = months.reduce((acc, m) => ({
-      received: acc.received + Number(m.received || 0),
-      pending: acc.pending + Number(m.pending || 0),
-      cost: acc.cost + Number(m.cost || 0),
-      profit: acc.profit + Number(m.profit || 0),
-      membership: acc.membership + Number(m.membership || 0),
-      supplement: acc.supplement + Number(m.supplement || 0),
-      transactions: acc.transactions + Number(m.transactions || 0),
-    }), { received: 0, pending: 0, cost: 0, profit: 0, membership: 0, supplement: 0, transactions: 0 });
+    const byMonth = {};
+    for (const t of txs) {
+      const month = toYmd(t.transaction_date)?.slice(0, 7);
+      if (!month) continue;
+      if (!byMonth[month]) {
+        byMonth[month] = {
+          month,
+          received: 0,
+          pending: 0,
+          cost: 0,
+          profit: 0,
+          membership: 0,
+          supplement: 0,
+          transactions: 0,
+        };
+      }
+      const rec = Number(t.received_inr || 0);
+      const cost = Number(t.cost_inr || 0);
+      byMonth[month].received += rec;
+      byMonth[month].pending += Number(t.pending_inr || 0);
+      byMonth[month].cost += cost;
+      byMonth[month].profit += rec - cost;
+      byMonth[month].transactions += 1;
+      if (t.type === "Membership") byMonth[month].membership += rec;
+      if (t.type === "Supplement") byMonth[month].supplement += rec;
+    }
+
+    const months = [];
+    for (let i = 1; i <= 12; i++) {
+      const monthStr = `${currentYear}-${String(i).padStart(2, "0")}`;
+      months.push(
+        byMonth[monthStr] || {
+          month: monthStr,
+          received: 0,
+          pending: 0,
+          cost: 0,
+          profit: 0,
+          membership: 0,
+          supplement: 0,
+          transactions: 0,
+        }
+      );
+    }
+
+    const totals = months.reduce(
+      (acc, m) => ({
+        received: acc.received + Number(m.received || 0),
+        pending: acc.pending + Number(m.pending || 0),
+        cost: acc.cost + Number(m.cost || 0),
+        profit: acc.profit + Number(m.profit || 0),
+        membership: acc.membership + Number(m.membership || 0),
+        supplement: acc.supplement + Number(m.supplement || 0),
+        transactions: acc.transactions + Number(m.transactions || 0),
+      }),
+      {
+        received: 0,
+        pending: 0,
+        cost: 0,
+        profit: 0,
+        membership: 0,
+        supplement: 0,
+        transactions: 0,
+      }
+    );
 
     res.json({ success: true, data: { months, totals } });
   } catch (error) {
@@ -1793,7 +2129,6 @@ function parseYmdQuery(value) {
   return t;
 }
 
-/** Aggregates for pie charts: by transaction type and pay mode in a date range. */
 async function getFitnessTransactionCharts(req, res) {
   try {
     const today = new Date();
@@ -1814,58 +2149,62 @@ async function getFitnessTransactionCharts(req, res) {
       fromStr = toStr;
     }
     if (fromStr > toStr) {
-      return res.status(400).json({ success: false, message: "date_from must be on or before date_to" });
+      return res
+        .status(400)
+        .json({ success: false, message: "date_from must be on or before date_to" });
     }
 
-    const byType = await prisma.$queryRaw`SELECT COALESCE(type, 'Other') AS key_label,
-              SUM(received_inr) AS received,
-              SUM(pending_inr) AS pending,
-              SUM(received_inr - cost_inr) AS profit,
-              COUNT(*) AS cnt
-       FROM fitness_transactions
-       WHERE transaction_date >= ${fromStr} AND transaction_date <= ${toStr}
-       GROUP BY COALESCE(type, 'Other')
-       ORDER BY received DESC`;
-    const byPayMode = await prisma.$queryRaw`SELECT COALESCE(pay_mode, 'Unknown') AS key_label,
-              SUM(received_inr) AS received,
-              SUM(pending_inr) AS pending,
-              COUNT(*) AS cnt
-       FROM fitness_transactions
-       WHERE transaction_date >= ${fromStr} AND transaction_date <= ${toStr}
-       GROUP BY COALESCE(pay_mode, 'Unknown')
-       ORDER BY received DESC`;
-    const totalsRows = await prisma.$queryRaw`SELECT SUM(received_inr) AS received,
-              SUM(pending_inr) AS pending,
-              SUM(received_inr - cost_inr) AS profit,
-              COUNT(*) AS cnt
-       FROM fitness_transactions
-       WHERE transaction_date >= ${fromStr} AND transaction_date <= ${toStr}`;
-    const totals = totalsRows[0];
+    const txs = await prisma.fitness_transactions.findMany({
+      where: {
+        transaction_date: {
+          gte: toPrismaDate(fromStr),
+          lte: toPrismaDate(toStr),
+        },
+      },
+      select: {
+        type: true,
+        pay_mode: true,
+        received_inr: true,
+        pending_inr: true,
+        cost_inr: true,
+      },
+    });
 
-    const num = (v) => Number(v) || 0;
+    const typeMap = {};
+    const payMap = {};
+    const totals = { received: 0, pending: 0, profit: 0, cnt: 0 };
+    for (const t of txs) {
+      const rec = Number(t.received_inr || 0);
+      const pend = Number(t.pending_inr || 0);
+      const profit = rec - Number(t.cost_inr || 0);
+      const typeKey = t.type || "Other";
+      const payKey = serializeFitnessRow({ pay_mode: t.pay_mode }).pay_mode || "Unknown";
+      if (!typeMap[typeKey]) {
+        typeMap[typeKey] = { key_label: typeKey, received: 0, pending: 0, profit: 0, cnt: 0 };
+      }
+      typeMap[typeKey].received += rec;
+      typeMap[typeKey].pending += pend;
+      typeMap[typeKey].profit += profit;
+      typeMap[typeKey].cnt += 1;
+      if (!payMap[payKey]) {
+        payMap[payKey] = { key_label: payKey, received: 0, pending: 0, cnt: 0 };
+      }
+      payMap[payKey].received += rec;
+      payMap[payKey].pending += pend;
+      payMap[payKey].cnt += 1;
+      totals.received += rec;
+      totals.pending += pend;
+      totals.profit += profit;
+      totals.cnt += 1;
+    }
+
     res.json({
       success: true,
       data: {
         range: { from: fromStr, to: toStr },
-        byType: byType.map((r) => ({
-          key_label: r.key_label,
-          received: num(r.received),
-          pending: num(r.pending),
-          profit: num(r.profit),
-          cnt: num(r.cnt),
-        })),
-        byPayMode: byPayMode.map((r) => ({
-          key_label: r.key_label,
-          received: num(r.received),
-          pending: num(r.pending),
-          cnt: num(r.cnt),
-        })),
-        totals: {
-          received: num(totals.received),
-          pending: num(totals.pending),
-          profit: num(totals.profit),
-          cnt: num(totals.cnt),
-        },
+        byType: Object.values(typeMap).sort((a, b) => b.received - a.received),
+        byPayMode: Object.values(payMap).sort((a, b) => b.received - a.received),
+        totals,
       },
     });
   } catch (error) {
@@ -1874,23 +2213,32 @@ async function getFitnessTransactionCharts(req, res) {
   }
 }
 
-/** Revenue split: plans/diet (Membership + Other) vs Supplement sales. */
 async function getRevenueSplit(req, res) {
   try {
     const window = String(req.query.window || "month").toLowerCase();
     if (!["day", "month", "year"].includes(window)) {
-      return res.status(400).json({ success: false, message: "window must be day, month, or year" });
+      return res
+        .status(400)
+        .json({ success: false, message: "window must be day, month, or year" });
     }
-    const refRaw = req.query.date != null && String(req.query.date).trim() !== "" ? String(req.query.date).trim() : null;
+    const refRaw =
+      req.query.date != null && String(req.query.date).trim() !== ""
+        ? String(req.query.date).trim()
+        : null;
     const today = new Date();
     const defaultRef = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-    const ref = refRaw && /^\d{4}-\d{2}-\d{2}$/.test(refRaw.slice(0, 10)) ? refRaw.slice(0, 10) : defaultRef;
+    const ref =
+      refRaw && /^\d{4}-\d{2}-\d{2}$/.test(refRaw.slice(0, 10))
+        ? refRaw.slice(0, 10)
+        : defaultRef;
     const [yStr, mStr] = ref.split("-");
     const y = Number(yStr);
     const mo = Number(mStr);
     const da = Number(ref.split("-")[2]);
     if (!Number.isFinite(y) || mo < 1 || mo > 12 || da < 1 || da > 31) {
-      return res.status(400).json({ success: false, message: "date must be a valid YYYY-MM-DD" });
+      return res
+        .status(400)
+        .json({ success: false, message: "date must be a valid YYYY-MM-DD" });
     }
 
     let fromStr;
@@ -1900,60 +2248,117 @@ async function getRevenueSplit(req, res) {
       fromStr = ref;
       toStr = ref;
       const d = new Date(y, mo - 1, da);
-      periodLabel = d.toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+      periodLabel = d.toLocaleDateString(undefined, {
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      });
     } else if (window === "month") {
       const lastDay = new Date(y, mo, 0).getDate();
       fromStr = `${yStr}-${mStr}-01`;
       toStr = `${yStr}-${mStr}-${String(lastDay).padStart(2, "0")}`;
-      periodLabel = new Date(y, mo - 1, 1).toLocaleString(undefined, { month: "long", year: "numeric" });
+      periodLabel = new Date(y, mo - 1, 1).toLocaleString(undefined, {
+        month: "long",
+        year: "numeric",
+      });
     } else {
       fromStr = `${y}-01-01`;
       toStr = `${y}-12-31`;
       periodLabel = `Year ${y}`;
     }
 
-    const dietCond = `type IN ('Membership','Other')`;
-    const supCond = `type = 'Supplement'`;
+    const periodTxs = await prisma.fitness_transactions.findMany({
+      where: {
+        transaction_date: {
+          gte: toPrismaDate(fromStr),
+          lte: toPrismaDate(toStr),
+        },
+      },
+      select: { type: true, received_inr: true, pending_inr: true, cost_inr: true },
+    });
 
-    const periodAggRows = await prisma.$queryRawUnsafe(
-      `SELECT
-         SUM(CASE WHEN ${dietCond} THEN received_inr ELSE 0 END) AS diet_received,
-         SUM(CASE WHEN ${dietCond} THEN pending_inr ELSE 0 END) AS diet_pending,
-         SUM(CASE WHEN ${dietCond} THEN cost_inr ELSE 0 END) AS diet_cost,
-         SUM(CASE WHEN ${dietCond} THEN (received_inr - cost_inr) ELSE 0 END) AS diet_profit,
-         SUM(CASE WHEN ${dietCond} THEN 1 ELSE 0 END) AS diet_count,
-         SUM(CASE WHEN ${supCond} THEN received_inr ELSE 0 END) AS sup_received,
-         SUM(CASE WHEN ${supCond} THEN pending_inr ELSE 0 END) AS sup_pending,
-         SUM(CASE WHEN ${supCond} THEN cost_inr ELSE 0 END) AS sup_cost,
-         SUM(CASE WHEN ${supCond} THEN (received_inr - cost_inr) ELSE 0 END) AS sup_profit,
-         SUM(CASE WHEN ${supCond} THEN 1 ELSE 0 END) AS sup_count
-       FROM fitness_transactions
-       WHERE transaction_date >= ? AND transaction_date <= ?`,
-      fromStr, toStr
-    );
-    const periodAgg = periodAggRows[0];
+    const periodAgg = {
+      diet_received: 0,
+      diet_pending: 0,
+      diet_cost: 0,
+      diet_profit: 0,
+      diet_count: 0,
+      sup_received: 0,
+      sup_pending: 0,
+      sup_cost: 0,
+      sup_profit: 0,
+      sup_count: 0,
+    };
+    for (const t of periodTxs) {
+      const rec = Number(t.received_inr || 0);
+      const pend = Number(t.pending_inr || 0);
+      const cost = Number(t.cost_inr || 0);
+      if (t.type === "Supplement") {
+        periodAgg.sup_received += rec;
+        periodAgg.sup_pending += pend;
+        periodAgg.sup_cost += cost;
+        periodAgg.sup_profit += rec - cost;
+        periodAgg.sup_count += 1;
+      } else {
+        periodAgg.diet_received += rec;
+        periodAgg.diet_pending += pend;
+        periodAgg.diet_cost += cost;
+        periodAgg.diet_profit += rec - cost;
+        periodAgg.diet_count += 1;
+      }
+    }
 
     const endYear = today.getFullYear();
     const startYear = endYear - 9;
-    const yearRows = await prisma.$queryRawUnsafe(
-      `SELECT
-         YEAR(transaction_date) AS yr,
-         SUM(CASE WHEN ${dietCond} THEN received_inr ELSE 0 END) AS diet_received,
-         SUM(CASE WHEN ${dietCond} THEN pending_inr ELSE 0 END) AS diet_pending,
-         SUM(CASE WHEN ${dietCond} THEN (received_inr - cost_inr) ELSE 0 END) AS diet_profit,
-         SUM(CASE WHEN ${dietCond} THEN 1 ELSE 0 END) AS diet_count,
-         SUM(CASE WHEN ${supCond} THEN received_inr ELSE 0 END) AS sup_received,
-         SUM(CASE WHEN ${supCond} THEN pending_inr ELSE 0 END) AS sup_pending,
-         SUM(CASE WHEN ${supCond} THEN (received_inr - cost_inr) ELSE 0 END) AS sup_profit,
-         SUM(CASE WHEN ${supCond} THEN 1 ELSE 0 END) AS sup_count
-       FROM fitness_transactions
-       WHERE YEAR(transaction_date) >= ? AND YEAR(transaction_date) <= ?
-       GROUP BY YEAR(transaction_date)
-       ORDER BY yr ASC`,
-      startYear, endYear
-    );
+    const yearTxs = await prisma.fitness_transactions.findMany({
+      where: {
+        transaction_date: {
+          gte: new Date(startYear, 0, 1),
+          lte: new Date(endYear, 11, 31),
+        },
+      },
+      select: {
+        transaction_date: true,
+        type: true,
+        received_inr: true,
+        pending_inr: true,
+        cost_inr: true,
+      },
+    });
+    const byYear = new Map();
+    for (const t of yearTxs) {
+      const yr = t.transaction_date ? new Date(t.transaction_date).getFullYear() : null;
+      if (!yr) continue;
+      if (!byYear.has(yr)) {
+        byYear.set(yr, {
+          diet_received: 0,
+          diet_pending: 0,
+          diet_profit: 0,
+          diet_count: 0,
+          sup_received: 0,
+          sup_pending: 0,
+          sup_profit: 0,
+          sup_count: 0,
+        });
+      }
+      const r = byYear.get(yr);
+      const rec = Number(t.received_inr || 0);
+      const pend = Number(t.pending_inr || 0);
+      const cost = Number(t.cost_inr || 0);
+      if (t.type === "Supplement") {
+        r.sup_received += rec;
+        r.sup_pending += pend;
+        r.sup_profit += rec - cost;
+        r.sup_count += 1;
+      } else {
+        r.diet_received += rec;
+        r.diet_pending += pend;
+        r.diet_profit += rec - cost;
+        r.diet_count += 1;
+      }
+    }
 
-    const byYear = new Map(yearRows.map((r) => [Number(r.yr), r]));
     const years = [];
     for (let yy = startYear; yy <= endYear; yy += 1) {
       const r = byYear.get(yy);
@@ -1975,8 +2380,10 @@ async function getRevenueSplit(req, res) {
     }
 
     const num = (v) => Number(v || 0);
-
-    const { getClosedWonLostInRange, getClosedWonLostLifetime } = require("../services/opportunityRevenueStats");
+    const {
+      getClosedWonLostInRange,
+      getClosedWonLostLifetime,
+    } = require("../services/opportunityRevenueStats");
     const fromDateObj = new Date(`${fromStr}T00:00:00`);
     const toDateObj = new Date(`${toStr}T23:59:59`);
     const [windowClosed, lifetimeClosed] = await Promise.all([
@@ -2024,9 +2431,11 @@ async function getRevenueSplit(req, res) {
         years,
         yearRange: { from: startYear, to: endYear },
         classification: {
-          diet_course: "Transaction types Membership and Other (plans, coaching, diet programs, misc services).",
+          diet_course:
+            "Transaction types Membership and Other (plans, coaching, diet programs, misc services).",
           supplements: "Transaction type Supplement (product sales).",
-          booked_closed_won: "Opportunity Closed Won final_amount for this window (booked, not cash).",
+          booked_closed_won:
+            "Opportunity Closed Won final_amount for this window (booked, not cash).",
           closed_lost: "Opportunity Closed Lost forecast amounts for this window.",
         },
       },
@@ -2037,22 +2446,35 @@ async function getRevenueSplit(req, res) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────
-// REFERRALS
-// ─────────────────────────────────────────────────────────────────
 async function getAllReferrals(req, res) {
   try {
-    const rows = await prisma.$queryRaw`
-      SELECT fr.*,
-        rc.full_name as referrer_name, rc.client_id as referrer_client_id,
-        rc.tier as referrer_tier,
-        nc.full_name as referred_name, nc.client_id as referred_client_id
-      FROM fitness_referrals fr
-      JOIN fitness_clients rc ON fr.referrer_client_id = rc.client_id
-      JOIN fitness_clients nc ON fr.referred_client_id = nc.client_id
-      ORDER BY fr.referral_date DESC
-    `;
-    res.json({ success: true, data: rows });
+    const rows = await prisma.fitness_referrals.findMany({
+      orderBy: { referral_date: "desc" },
+    });
+    const ids = [
+      ...new Set([
+        ...rows.map((r) => r.referrer_client_id),
+        ...rows.map((r) => r.referred_client_id),
+      ]),
+    ];
+    const clients = ids.length
+      ? await prisma.fitness_clients.findMany({
+          where: { client_id: { in: ids } },
+          select: { client_id: true, full_name: true, tier: true },
+        })
+      : [];
+    const cmap = Object.fromEntries(clients.map((c) => [c.client_id, c]));
+    res.json({
+      success: true,
+      data: serializeFitnessRows(rows).map((fr) => ({
+        ...fr,
+        referrer_name: cmap[fr.referrer_client_id]?.full_name || null,
+        referrer_client_id: fr.referrer_client_id,
+        referrer_tier: cmap[fr.referrer_client_id]?.tier ?? null,
+        referred_name: cmap[fr.referred_client_id]?.full_name || null,
+        referred_client_id: fr.referred_client_id,
+      })),
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -2061,13 +2483,24 @@ async function getAllReferrals(req, res) {
 async function getClientReferrals(req, res) {
   try {
     const { clientId } = req.params;
-    const rows = await prisma.$queryRaw`
-      SELECT fr.*, fc.full_name as referred_name
-      FROM fitness_referrals fr
-      JOIN fitness_clients fc ON fr.referred_client_id = fc.client_id
-      WHERE fr.referrer_client_id = ${clientId}
-    `;
-    res.json({ success: true, data: rows });
+    const rows = await prisma.fitness_referrals.findMany({
+      where: { referrer_client_id: clientId },
+    });
+    const ids = rows.map((r) => r.referred_client_id);
+    const clients = ids.length
+      ? await prisma.fitness_clients.findMany({
+          where: { client_id: { in: ids } },
+          select: { client_id: true, full_name: true },
+        })
+      : [];
+    const cmap = Object.fromEntries(clients.map((c) => [c.client_id, c.full_name]));
+    res.json({
+      success: true,
+      data: serializeFitnessRows(rows).map((fr) => ({
+        ...fr,
+        referred_name: cmap[fr.referred_client_id] || null,
+      })),
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -2076,12 +2509,17 @@ async function getClientReferrals(req, res) {
 async function getReferralsReceived(req, res) {
   try {
     const { clientId } = req.params;
-    const rows = await prisma.$queryRaw`
-      SELECT client_id, full_name, tier, status, plan_start_date
-      FROM fitness_clients
-      WHERE referred_by_client_id = ${clientId}
-    `;
-    res.json({ success: true, data: rows });
+    const rows = await prisma.fitness_clients.findMany({
+      where: { referred_by_client_id: clientId },
+      select: {
+        client_id: true,
+        full_name: true,
+        tier: true,
+        status: true,
+        plan_start_date: true,
+      },
+    });
+    res.json({ success: true, data: serializeFitnessRows(rows) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -2091,41 +2529,61 @@ async function createReferral(req, res) {
   try {
     const { referrer_client_id, referred_client_id, referral_date, notes } = req.body;
 
-    // Validation
-    const reqError = validateRequired({ referrer_client_id, referred_client_id }, ['referrer_client_id', 'referred_client_id']);
+    const reqError = validateRequired(
+      { referrer_client_id, referred_client_id },
+      ["referrer_client_id", "referred_client_id"]
+    );
     if (reqError) return sendValidationError(res, reqError);
 
-    if (referrer_client_id && (typeof referrer_client_id !== 'string' || referrer_client_id.length > 20)) {
-      return sendValidationError(res, 'Invalid referrer_client_id');
+    if (
+      referrer_client_id &&
+      (typeof referrer_client_id !== "string" || referrer_client_id.length > 20)
+    ) {
+      return sendValidationError(res, "Invalid referrer_client_id");
     }
-    if (referred_client_id && (typeof referred_client_id !== 'string' || referred_client_id.length > 20)) {
-      return sendValidationError(res, 'Invalid referred_client_id');
+    if (
+      referred_client_id &&
+      (typeof referred_client_id !== "string" || referred_client_id.length > 20)
+    ) {
+      return sendValidationError(res, "Invalid referred_client_id");
     }
     if (referral_date) {
-      const err = validateDate(referral_date, 'referral_date');
+      const err = validateDate(referral_date, "referral_date");
       if (err) return sendValidationError(res, err);
     }
     if (referrer_client_id === referred_client_id) {
-      return sendValidationError(res, 'Referrer and referred cannot be the same client');
+      return sendValidationError(res, "Referrer and referred cannot be the same client");
     }
 
-    const insertId = await prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`INSERT INTO fitness_referrals (referrer_client_id, referred_client_id, referral_date, notes)
-       VALUES (${referrer_client_id}, ${referred_client_id}, ${referral_date || new Date()}, ${notes})`;
-      const r = await tx.$queryRaw`SELECT LAST_INSERT_ID() as id`;
-      return Number(r[0].id);
+    const created = await prisma.fitness_referrals.create({
+      data: {
+        referrer_client_id,
+        referred_client_id,
+        referral_date: toPrismaDate(referral_date) || new Date(),
+        notes: notes ?? null,
+      },
     });
 
-    const rows = await prisma.$queryRaw`
-      SELECT fr.*,
-        rc.full_name as referrer_name, nc.full_name as referred_name
-      FROM fitness_referrals fr
-      JOIN fitness_clients rc ON fr.referrer_client_id = rc.client_id
-      JOIN fitness_clients nc ON fr.referred_client_id = nc.client_id
-      WHERE fr.id = ${insertId}
-    `;
+    const [rc, nc] = await Promise.all([
+      prisma.fitness_clients.findUnique({
+        where: { client_id: referrer_client_id },
+        select: { full_name: true },
+      }),
+      prisma.fitness_clients.findUnique({
+        where: { client_id: referred_client_id },
+        select: { full_name: true },
+      }),
+    ]);
+
     emitFitnessChanged();
-    res.status(201).json({ success: true, data: rows[0] });
+    res.status(201).json({
+      success: true,
+      data: {
+        ...serializeFitnessRow(created),
+        referrer_name: rc?.full_name || null,
+        referred_name: nc?.full_name || null,
+      },
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -2134,8 +2592,10 @@ async function createReferral(req, res) {
 async function deleteReferral(req, res) {
   try {
     const { id } = req.params;
-    const result = await prisma.$executeRaw`DELETE FROM fitness_referrals WHERE id = ${id}`;
-    if (result === 0) {
+    const result = await prisma.fitness_referrals.deleteMany({
+      where: { id: Number(id) },
+    });
+    if (result.count === 0) {
       return res.status(404).json({ success: false, message: "Referral not found" });
     }
     emitFitnessChanged();
@@ -2145,14 +2605,14 @@ async function deleteReferral(req, res) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────
-// CLIENT TASKS
-// ─────────────────────────────────────────────────────────────────
 async function getClientTasks(req, res) {
   try {
     const { clientId } = req.params;
-    const rows = await prisma.$queryRaw`SELECT * FROM fitness_client_tasks WHERE client_id = ${clientId} ORDER BY due_date ASC`;
-    res.json({ success: true, data: rows });
+    const rows = await prisma.fitness_client_tasks.findMany({
+      where: { client_id: clientId },
+      orderBy: { due_date: "asc" },
+    });
+    res.json({ success: true, data: serializeFitnessRows(rows) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -2163,36 +2623,38 @@ async function createClientTask(req, res) {
     const { clientId } = req.params;
     const { task_description, due_date, priority, status, period, notes } = req.body;
 
-    // Validation
-    if (!clientId || typeof clientId !== 'string') {
-      return sendValidationError(res, 'Invalid client ID');
+    if (!clientId || typeof clientId !== "string") {
+      return sendValidationError(res, "Invalid client ID");
     }
-    const reqError = validateRequired({ task_description }, ['task_description']);
+    const reqError = validateRequired({ task_description }, ["task_description"]);
     if (reqError) return sendValidationError(res, reqError);
 
     if (due_date) {
-      const err = validateDate(due_date, 'due_date');
+      const err = validateDate(due_date, "due_date");
       if (err) return sendValidationError(res, err);
     }
     if (priority) {
-      const err = validateEnum(priority, VALID_ENUMS.task_priority, 'priority');
+      const err = validateEnum(priority, VALID_ENUMS.task_priority, "priority");
       if (err) return sendValidationError(res, err);
     }
     if (status) {
-      const err = validateEnum(status, VALID_ENUMS.task_status, 'status');
+      const err = validateEnum(status, VALID_ENUMS.task_status, "status");
       if (err) return sendValidationError(res, err);
     }
 
-    const insertId = await prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`INSERT INTO fitness_client_tasks (client_id, task_description, due_date, priority, status, period, notes)
-       VALUES (${clientId}, ${task_description}, ${due_date}, ${priority || 'Medium'}, ${status || 'Open'}, ${period}, ${notes})`;
-      const r = await tx.$queryRaw`SELECT LAST_INSERT_ID() as id`;
-      return Number(r[0].id);
+    const created = await prisma.fitness_client_tasks.create({
+      data: {
+        client_id: clientId,
+        task_description,
+        due_date: toPrismaDate(due_date),
+        priority: priority || "Medium",
+        status: toPrismaTaskStatus(status || "Open"),
+        period: period ?? null,
+        notes: notes ?? null,
+      },
     });
-
-    const rows = await prisma.$queryRaw`SELECT * FROM fitness_client_tasks WHERE id = ${insertId}`;
     emitFitnessChanged();
-    res.status(201).json({ success: true, data: rows[0] });
+    res.status(201).json({ success: true, data: serializeFitnessRow(created) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -2201,39 +2663,51 @@ async function createClientTask(req, res) {
 async function updateClientTask(req, res) {
   try {
     const { id } = req.params;
-    const { task_description, due_date, priority, status, period, completed_on, notes } = req.body;
+    const { task_description, due_date, priority, status, period, completed_on, notes } =
+      req.body;
 
-    // Validate ID
     const idNum = parseInt(id, 10);
-    if (isNaN(idNum)) return sendValidationError(res, 'Invalid task ID');
+    if (isNaN(idNum)) return sendValidationError(res, "Invalid task ID");
 
     if (due_date) {
-      const err = validateDate(due_date, 'due_date');
+      const err = validateDate(due_date, "due_date");
       if (err) return sendValidationError(res, err);
     }
     if (priority) {
-      const err = validateEnum(priority, VALID_ENUMS.task_priority, 'priority');
+      const err = validateEnum(priority, VALID_ENUMS.task_priority, "priority");
       if (err) return sendValidationError(res, err);
     }
     if (status) {
-      const err = validateEnum(status, VALID_ENUMS.task_status, 'status');
+      const err = validateEnum(status, VALID_ENUMS.task_status, "status");
       if (err) return sendValidationError(res, err);
     }
     if (completed_on) {
-      const err = validateDate(completed_on, 'completed_on');
+      const err = validateDate(completed_on, "completed_on");
       if (err) return sendValidationError(res, err);
     }
 
-    await prisma.$executeRaw`UPDATE fitness_client_tasks
-       SET task_description = ${task_description}, due_date = ${due_date}, priority = ${priority}, status = ${status}, period = ${period}, completed_on = ${completed_on}, notes = ${notes}
-       WHERE id = ${id}`;
-
-    const rows = await prisma.$queryRaw`SELECT * FROM fitness_client_tasks WHERE id = ${id}`;
-    if (!rows.length) {
-      return res.status(404).json({ success: false, message: "Task not found" });
+    try {
+      const updated = await prisma.fitness_client_tasks.update({
+        where: { id: idNum },
+        data: {
+          task_description,
+          due_date: toPrismaDate(due_date),
+          priority: priority ?? null,
+          status: status != null ? toPrismaTaskStatus(status) : null,
+          period: period ?? null,
+          completed_on: toPrismaDate(completed_on),
+          notes: notes ?? null,
+          updated_at: new Date(),
+        },
+      });
+      emitFitnessChanged();
+      res.json({ success: true, data: serializeFitnessRow(updated) });
+    } catch (err) {
+      if (err.code === "P2025") {
+        return res.status(404).json({ success: false, message: "Task not found" });
+      }
+      throw err;
     }
-    emitFitnessChanged();
-    res.json({ success: true, data: rows[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -2244,28 +2718,36 @@ async function patchClientTaskStatus(req, res) {
     const { id } = req.params;
     const { status, completed_on } = req.body;
 
-    // Validate ID
     const idNum = parseInt(id, 10);
-    if (isNaN(idNum)) return sendValidationError(res, 'Invalid task ID');
+    if (isNaN(idNum)) return sendValidationError(res, "Invalid task ID");
 
     if (status) {
-      const err = validateEnum(status, VALID_ENUMS.task_status, 'status');
+      const err = validateEnum(status, VALID_ENUMS.task_status, "status");
       if (err) return sendValidationError(res, err);
     }
     if (completed_on) {
-      const err = validateDate(completed_on, 'completed_on');
+      const err = validateDate(completed_on, "completed_on");
       if (err) return sendValidationError(res, err);
     }
 
-    await prisma.$executeRaw`UPDATE fitness_client_tasks SET status = ${status}, completed_on = ${completed_on} WHERE id = ${id}`;
-
-    const rows = await prisma.$queryRaw`SELECT * FROM fitness_client_tasks WHERE id = ${id}`;
-    if (!rows.length) {
-      return res.status(404).json({ success: false, message: "Task not found" });
+    try {
+      const updated = await prisma.fitness_client_tasks.update({
+        where: { id: idNum },
+        data: {
+          status: status != null ? toPrismaTaskStatus(status) : undefined,
+          completed_on: toPrismaDate(completed_on),
+          updated_at: new Date(),
+        },
+      });
+      await syncClientNextDueFromCompleted(updated.client_id, updated.completed_on);
+      emitFitnessChanged();
+      res.json({ success: true, data: serializeFitnessRow(updated) });
+    } catch (err) {
+      if (err.code === "P2025") {
+        return res.status(404).json({ success: false, message: "Task not found" });
+      }
+      throw err;
     }
-    await syncClientNextDueFromCompleted(rows[0].client_id, rows[0].completed_on);
-    emitFitnessChanged();
-    res.json({ success: true, data: rows[0] });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -2274,8 +2756,10 @@ async function patchClientTaskStatus(req, res) {
 async function deleteClientTask(req, res) {
   try {
     const { id } = req.params;
-    const result = await prisma.$executeRaw`DELETE FROM fitness_client_tasks WHERE id = ${id}`;
-    if (result === 0) {
+    const result = await prisma.fitness_client_tasks.deleteMany({
+      where: { id: Number(id) },
+    });
+    if (result.count === 0) {
       return res.status(404).json({ success: false, message: "Task not found" });
     }
     emitFitnessChanged();
@@ -2285,18 +2769,26 @@ async function deleteClientTask(req, res) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────
-// MEAL PLANS
-// ─────────────────────────────────────────────────────────────────
 async function getAllMealPlans(req, res) {
   try {
-    const rows = await prisma.$queryRaw`
-      SELECT mp.*, fc.full_name
-      FROM fitness_meal_plans mp
-      JOIN fitness_clients fc ON mp.client_id = fc.client_id
-      ORDER BY mp.created_at DESC
-    `;
-    res.json({ success: true, data: rows });
+    const rows = await prisma.fitness_meal_plans.findMany({
+      orderBy: { created_at: "desc" },
+    });
+    const ids = [...new Set(rows.map((r) => r.client_id))];
+    const clients = ids.length
+      ? await prisma.fitness_clients.findMany({
+          where: { client_id: { in: ids } },
+          select: { client_id: true, full_name: true },
+        })
+      : [];
+    const cmap = Object.fromEntries(clients.map((c) => [c.client_id, c.full_name]));
+    res.json({
+      success: true,
+      data: serializeFitnessRows(rows).map((mp) => ({
+        ...mp,
+        full_name: cmap[mp.client_id] || null,
+      })),
+    });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -2305,8 +2797,11 @@ async function getAllMealPlans(req, res) {
 async function getMealPlans(req, res) {
   try {
     const { clientId } = req.params;
-    const rows = await prisma.$queryRaw`SELECT * FROM fitness_meal_plans WHERE client_id = ${clientId} ORDER BY created_at DESC`;
-    res.json({ success: true, data: rows });
+    const rows = await prisma.fitness_meal_plans.findMany({
+      where: { client_id: clientId },
+      orderBy: { created_at: "desc" },
+    });
+    res.json({ success: true, data: serializeFitnessRows(rows) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -2315,21 +2810,37 @@ async function getMealPlans(req, res) {
 async function createMealPlan(req, res) {
   try {
     const { clientId } = req.params;
-    const { plan_name, start_date, end_date, calories, protein_g, carbs_g, fats_g, plan_pdf_url, notes } = req.body;
+    const {
+      plan_name,
+      start_date,
+      end_date,
+      calories,
+      protein_g,
+      carbs_g,
+      fats_g,
+      plan_pdf_url,
+      notes,
+    } = req.body;
 
-    if (!clientId) return sendValidationError(res, 'Client ID required');
-    if (!plan_name) return sendValidationError(res, 'Plan name required');
+    if (!clientId) return sendValidationError(res, "Client ID required");
+    if (!plan_name) return sendValidationError(res, "Plan name required");
 
-    const insertId = await prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`INSERT INTO fitness_meal_plans (client_id, plan_name, start_date, end_date, calories, protein_g, carbs_g, fats_g, plan_pdf_url, notes)
-       VALUES (${clientId}, ${plan_name}, ${start_date}, ${end_date}, ${calories}, ${protein_g}, ${carbs_g}, ${fats_g}, ${plan_pdf_url}, ${notes})`;
-      const r = await tx.$queryRaw`SELECT LAST_INSERT_ID() as id`;
-      return Number(r[0].id);
+    const created = await prisma.fitness_meal_plans.create({
+      data: {
+        client_id: clientId,
+        plan_name,
+        start_date: toPrismaDate(start_date),
+        end_date: toPrismaDate(end_date),
+        calories: calories != null ? Number(calories) : null,
+        protein_g: protein_g != null ? Number(protein_g) : null,
+        carbs_g: carbs_g != null ? Number(carbs_g) : null,
+        fats_g: fats_g != null ? Number(fats_g) : null,
+        plan_pdf_url: plan_pdf_url ?? null,
+        notes: notes ?? null,
+      },
     });
-
-    const rows = await prisma.$queryRaw`SELECT * FROM fitness_meal_plans WHERE id = ${insertId}`;
     emitFitnessChanged();
-    res.status(201).json({ success: true, data: rows[0] });
+    res.status(201).json({ success: true, data: serializeFitnessRow(created) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -2338,8 +2849,10 @@ async function createMealPlan(req, res) {
 async function deleteMealPlan(req, res) {
   try {
     const { id } = req.params;
-    const result = await prisma.$executeRaw`DELETE FROM fitness_meal_plans WHERE id = ${id}`;
-    if (result === 0) {
+    const result = await prisma.fitness_meal_plans.deleteMany({
+      where: { id: Number(id) },
+    });
+    if (result.count === 0) {
       return res.status(404).json({ success: false, message: "Meal plan not found" });
     }
     emitFitnessChanged();
@@ -2349,45 +2862,87 @@ async function deleteMealPlan(req, res) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────
-// DASHBOARD / ANALYTICS
-// ─────────────────────────────────────────────────────────────────
 async function getDashboardStats(req, res) {
   try {
-    const activeRows = await prisma.$queryRaw`SELECT COUNT(*) as active FROM fitness_clients WHERE status = 'Active'`;
-    const onHoldRows = await prisma.$queryRaw`SELECT COUNT(*) as onHold FROM fitness_clients WHERE status = 'Hold'`;
-    const needAttentionRows = await prisma.$queryRaw`SELECT COUNT(*) as needAttention FROM fitness_clients WHERE progress IN ('Poor', 'Very Poor')`;
-    const today = new Date().toISOString().split('T')[0];
-    const overdueFollowupsRows = await prisma.$queryRaw`SELECT COUNT(*) as overdueFollowups FROM fitness_clients WHERE next_due_date < ${today} AND status = 'Active'`;
-    const nextWeek = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    const expiringSoonRows = await prisma.$queryRaw`SELECT COUNT(*) as expiringSoon FROM fitness_clients WHERE plan_expiry_date BETWEEN ${today} AND ${nextWeek} AND status = 'Active'`;
-    const fiveStarRows = await prisma.$queryRaw`SELECT COUNT(*) as fiveStar FROM fitness_clients WHERE tier = 5`;
-    const consultCountRows = await prisma.$queryRaw`SELECT COUNT(*) as count FROM fitness_consultations WHERE MONTH(consult_date) = MONTH(CURDATE()) AND YEAR(consult_date) = YEAR(CURDATE())`;
-    const highRiskRows = await prisma.$queryRaw`
-      SELECT COUNT(*) as highRisk 
-      FROM fitness_clients 
-      WHERE progress IN ('Poor', 'Very Poor') 
-      OR next_due_date < ${today} 
-      OR plan_expiry_date <= ${nextWeek}
-    `;
-    const notifRows = await prisma.$queryRaw`
-      SELECT MIN(id) AS id, title, body, MIN(created_at) AS created_at, entity_type
-       FROM notifications
-       WHERE user_id = ${req.user.id}
-         AND entity_type IN ('fitness_expiry', 'fitness_due')
-         AND is_read = 0
-       GROUP BY entity_type, entity_id, title, body
-       ORDER BY MIN(created_at) DESC
-       LIMIT 5`;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const nextWeek = new Date(today);
+    nextWeek.setDate(nextWeek.getDate() + 7);
+    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+    const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
 
-    const active = Number(activeRows[0]?.active || 0);
-    const onHold = Number(onHoldRows[0]?.onHold || 0);
-    const needAttention = Number(needAttentionRows[0]?.needAttention || 0);
-    const overdueFollowups = Number(overdueFollowupsRows[0]?.overdueFollowups || 0);
-    const expiringSoon = Number(expiringSoonRows[0]?.expiringSoon || 0);
-    const fiveStar = Number(fiveStarRows[0]?.fiveStar || 0);
-    const consultCount = Number(consultCountRows[0]?.count || 0);
-    const highRisk = Number(highRiskRows[0]?.highRisk || 0);
+    const [
+      active,
+      onHold,
+      needAttention,
+      overdueFollowups,
+      expiringSoon,
+      fiveStar,
+      consultCount,
+      highRisk,
+      notifs,
+    ] = await Promise.all([
+      prisma.fitness_clients.count({ where: { status: "Active" } }),
+      prisma.fitness_clients.count({ where: { status: "Hold" } }),
+      prisma.fitness_clients.count({
+        where: { progress: { in: ["Poor", "Very_Poor"] } },
+      }),
+      prisma.fitness_clients.count({
+        where: { status: "Active", next_due_date: { lt: today } },
+      }),
+      prisma.fitness_clients.count({
+        where: {
+          status: "Active",
+          plan_expiry_date: { gte: today, lte: nextWeek },
+        },
+      }),
+      prisma.fitness_clients.count({ where: { tier: 5 } }),
+      prisma.fitness_consultations.count({
+        where: { consult_date: { gte: monthStart, lte: monthEnd } },
+      }),
+      prisma.fitness_clients.count({
+        where: {
+          OR: [
+            { progress: { in: ["Poor", "Very_Poor"] } },
+            { next_due_date: { lt: today } },
+            { plan_expiry_date: { lte: nextWeek } },
+          ],
+        },
+      }),
+      prisma.notifications.findMany({
+        where: {
+          user_id: Number(req.user.id),
+          entity_type: { in: ["fitness_expiry", "fitness_due"] },
+          is_read: false,
+        },
+        orderBy: { created_at: "desc" },
+        take: 50,
+        select: {
+          id: true,
+          title: true,
+          body: true,
+          created_at: true,
+          entity_type: true,
+          entity_id: true,
+        },
+      }),
+    ]);
+
+    const seen = new Set();
+    const notifRows = [];
+    for (const n of notifs) {
+      const key = `${n.entity_type}|${n.entity_id}|${n.title}|${n.body}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      notifRows.push({
+        id: n.id,
+        title: n.title,
+        body: n.body,
+        created_at: n.created_at,
+        entity_type: n.entity_type,
+      });
+      if (notifRows.length >= 5) break;
+    }
 
     res.json({
       success: true,
@@ -2400,8 +2955,8 @@ async function getDashboardStats(req, res) {
         five_star_clients: fiveStar || 0,
         monthly_consultations: consultCount || 0,
         high_risk_clients: highRisk || 0,
-        proactive_alerts: notifRows
-      }
+        proactive_alerts: notifRows,
+      },
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -2410,22 +2965,25 @@ async function getDashboardStats(req, res) {
 
 async function getAnalyticsSources(req, res) {
   try {
-    const rows = await prisma.$queryRaw`
-      SELECT
-        source,
-        COUNT(*) as client_count,
-        ROUND(AVG(tier), 1) as avg_tier
-      FROM fitness_clients
-      WHERE source IS NOT NULL
-      GROUP BY source
-      ORDER BY client_count DESC
-    `;
-    const totalRows = await prisma.$queryRaw`SELECT COUNT(*) as total FROM fitness_clients WHERE source IS NOT NULL`;
-    const total = Number(totalRows[0].total);
-    const data = rows.map(r => ({
-      ...r,
-      pct_of_total: total ? Math.round((Number(r.client_count) / total) * 100) : 0,
-    }));
+    const grouped = await prisma.fitness_clients.groupBy({
+      by: ["source"],
+      where: { source: { not: null } },
+      _count: { _all: true },
+      _avg: { tier: true },
+    });
+    const total = grouped.reduce((s, r) => s + r._count._all, 0);
+    const data = grouped
+      .map((r) => {
+        const source = serializeFitnessRow({ source: r.source }).source;
+        return {
+          source,
+          client_count: r._count._all,
+          avg_tier:
+            r._avg.tier != null ? Math.round(Number(r._avg.tier) * 10) / 10 : null,
+          pct_of_total: total ? Math.round((r._count._all / total) * 100) : 0,
+        };
+      })
+      .sort((a, b) => b.client_count - a.client_count);
     res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -2434,20 +2992,18 @@ async function getAnalyticsSources(req, res) {
 
 async function getAnalyticsTiers(req, res) {
   try {
-    const rows = await prisma.$queryRaw`
-      SELECT
-        tier,
-        COUNT(*) as client_count
-      FROM fitness_clients
-      GROUP BY tier
-      ORDER BY tier DESC
-    `;
-    const totalRows = await prisma.$queryRaw`SELECT COUNT(*) as total FROM fitness_clients`;
-    const total = Number(totalRows[0].total);
-    const data = rows.map(r => ({
-      ...r,
-      pct_of_total: total ? Math.round((Number(r.client_count) / total) * 100) : 0,
-    }));
+    const grouped = await prisma.fitness_clients.groupBy({
+      by: ["tier"],
+      _count: { _all: true },
+    });
+    const total = await prisma.fitness_clients.count();
+    const data = grouped
+      .map((r) => ({
+        tier: r.tier,
+        client_count: r._count._all,
+        pct_of_total: total ? Math.round((r._count._all / total) * 100) : 0,
+      }))
+      .sort((a, b) => (b.tier || 0) - (a.tier || 0));
     res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -2456,21 +3012,36 @@ async function getAnalyticsTiers(req, res) {
 
 async function getAnalyticsReferrers(req, res) {
   try {
-    const rows = await prisma.$queryRaw`
-      SELECT
-        fc.client_id,
-        fc.full_name,
-        fc.tier,
-        fc.source,
-        COUNT(fr.id) as referral_count
-      FROM fitness_clients fc
-      LEFT JOIN fitness_referrals fr ON fc.client_id = fr.referrer_client_id
-      GROUP BY fc.client_id
-      HAVING referral_count > 0
-      ORDER BY referral_count DESC
-      LIMIT 10
-    `;
-    res.json({ success: true, data: rows });
+    const refs = await prisma.fitness_referrals.groupBy({
+      by: ["referrer_client_id"],
+      _count: { _all: true },
+      orderBy: { _count: { referrer_client_id: "desc" } },
+      take: 10,
+    });
+    const ids = refs.map((r) => r.referrer_client_id);
+    const clients = ids.length
+      ? await prisma.fitness_clients.findMany({
+          where: { client_id: { in: ids } },
+          select: {
+            client_id: true,
+            full_name: true,
+            tier: true,
+            source: true,
+          },
+        })
+      : [];
+    const cmap = Object.fromEntries(clients.map((c) => [c.client_id, c]));
+    const data = refs.map((r) => {
+      const c = cmap[r.referrer_client_id] || {};
+      return {
+        client_id: r.referrer_client_id,
+        full_name: c.full_name || null,
+        tier: c.tier ?? null,
+        source: serializeFitnessRow({ source: c.source }).source ?? null,
+        referral_count: r._count._all,
+      };
+    });
+    res.json({ success: true, data });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -2479,55 +3050,68 @@ async function getAnalyticsReferrers(req, res) {
 async function getAnalyticsFinancial(req, res) {
   try {
     const currentYear = new Date().getFullYear();
-    const rows = await prisma.$queryRaw`
-      SELECT
-        DATE_FORMAT(transaction_date, '%Y-%m') as month,
-        SUM(received_inr) as received,
-        SUM(pending_inr) as pending,
-        SUM(cost_inr) as cost,
-        SUM(received_inr - cost_inr) as profit
-      FROM fitness_transactions
-      WHERE YEAR(transaction_date) = ${currentYear}
-      GROUP BY DATE_FORMAT(transaction_date, '%Y-%m')
-      ORDER BY month
-    `;
-
-    // Get last 3 months
-    const last3 = rows.slice(-3);
-    res.json({ success: true, data: last3 });
+    const txs = await prisma.fitness_transactions.findMany({
+      where: {
+        transaction_date: {
+          gte: new Date(currentYear, 0, 1),
+          lte: new Date(currentYear, 11, 31),
+        },
+      },
+      select: {
+        transaction_date: true,
+        received_inr: true,
+        pending_inr: true,
+        cost_inr: true,
+      },
+    });
+    const byMonth = {};
+    for (const t of txs) {
+      const month = toYmd(t.transaction_date)?.slice(0, 7);
+      if (!month) continue;
+      if (!byMonth[month]) {
+        byMonth[month] = { month, received: 0, pending: 0, cost: 0, profit: 0 };
+      }
+      const rec = Number(t.received_inr || 0);
+      const cost = Number(t.cost_inr || 0);
+      byMonth[month].received += rec;
+      byMonth[month].pending += Number(t.pending_inr || 0);
+      byMonth[month].cost += cost;
+      byMonth[month].profit += rec - cost;
+    }
+    const rows = Object.values(byMonth).sort((a, b) => (a.month < b.month ? -1 : 1));
+    res.json({ success: true, data: rows.slice(-3) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
 }
 
-/**
- * Import Clients from Excel
- */
 const importClientsExcel = async (req, res) => {
   if (!req.file) {
-    console.log('[Import] No file uploaded');
-    return res.status(400).json({ success: false, message: 'No file uploaded' });
+    console.log("[Import] No file uploaded");
+    return res.status(400).json({ success: false, message: "No file uploaded" });
   }
 
   const tmpPath = req.file.path;
   try {
-    console.log('[Import] Reading file:', tmpPath);
+    console.log("[Import] Reading file:", tmpPath);
     const workbook = XLSX.readFile(tmpPath, { cellDates: true });
-    
-    // Find MASTER sheet more flexibly
-    const masterSheetName = workbook.SheetNames.find(n => n.includes('MASTER'));
+
+    const masterSheetName = workbook.SheetNames.find((n) => n.includes("MASTER"));
     const masterSheet = masterSheetName ? workbook.Sheets[masterSheetName] : null;
 
     if (!masterSheet) {
-      console.log('[Import] MASTER sheet not found. Available:', workbook.SheetNames);
-      return res.status(400).json({ success: false, message: 'Invalid file format: MASTER sheet not found' });
+      console.log("[Import] MASTER sheet not found. Available:", workbook.SheetNames);
+      return res.status(400).json({
+        success: false,
+        message: "Invalid file format: MASTER sheet not found",
+      });
     }
 
     const masterData = XLSX.utils.sheet_to_json(masterSheet, { header: 1 });
     const clientIds = [];
     for (let i = 0; i < masterData.length; i++) {
       const row = masterData[i];
-      if (row && row[0] && String(row[0]).startsWith('FV-')) {
+      if (row && row[0] && String(row[0]).startsWith("FV-")) {
         clientIds.push(row[0]);
       }
     }
@@ -2554,7 +3138,7 @@ const importClientsExcel = async (req, res) => {
         client_id: clientId,
         full_name: getVal(9, 2),
         age: getVal(9, 5),
-        phone: String(getVal(10, 5) || ''),
+        phone: String(getVal(10, 5) || ""),
         email: getVal(11, 5),
         city: getVal(11, 2),
         address: getVal(12, 2),
@@ -2569,40 +3153,58 @@ const importClientsExcel = async (req, res) => {
         target_weight_kg: getVal(24, 5),
         bmi: getVal(25, 2),
         referred_by_name: getVal(13, 2),
-        status: getVal(5, 4) || 'Active',
-        progress: getVal(5, 3) || 'Good',
-        next_due_date: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+        status: getVal(5, 4) || "Active",
+        progress: getVal(5, 3) || "Good",
+        next_due_date: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
+          .toISOString()
+          .split("T")[0],
       };
 
       try {
-        const existing = await prisma.$queryRaw`SELECT id FROM fitness_clients WHERE client_id = ${clientId}`;
-        
-        if (existing.length > 0) {
-          await prisma.$executeRaw`
-            UPDATE fitness_clients SET 
-              full_name = ${client.full_name}, age = ${client.age}, phone = ${client.phone}, email = ${client.email}, city = ${client.city}, address = ${client.address}, occupation = ${client.occupation},
-              health_goal = ${client.health_goal}, plan_type = ${client.plan_type}, plan_start_date = ${client.plan_start_date}, plan_expiry_date = ${client.plan_expiry_date}, 
-              height_cm = ${client.height_cm}, start_weight_kg = ${client.start_weight_kg}, current_weight_kg = ${client.current_weight_kg}, target_weight_kg = ${client.target_weight_kg}, bmi = ${client.bmi},
-              referred_by_name = ${client.referred_by_name}, status = ${client.status}, progress = ${client.progress}, next_due_date = ${client.next_due_date}
-            WHERE client_id = ${clientId}
-          `;
+        const data = {
+          full_name: client.full_name,
+          age: client.age != null ? Number(client.age) : null,
+          phone: client.phone,
+          email: client.email,
+          city: client.city,
+          address: client.address,
+          occupation: client.occupation,
+          health_goal: client.health_goal,
+          plan_type: client.plan_type ? toPrismaPlan(client.plan_type) : null,
+          plan_start_date: toPrismaDate(client.plan_start_date),
+          plan_expiry_date: toPrismaDate(client.plan_expiry_date),
+          height_cm: client.height_cm != null ? Number(client.height_cm) : null,
+          start_weight_kg:
+            client.start_weight_kg != null ? Number(client.start_weight_kg) : null,
+          current_weight_kg:
+            client.current_weight_kg != null ? Number(client.current_weight_kg) : null,
+          target_weight_kg:
+            client.target_weight_kg != null ? Number(client.target_weight_kg) : null,
+          bmi: client.bmi != null ? Number(client.bmi) : null,
+          referred_by_name: client.referred_by_name,
+          status: client.status || "Active",
+          progress: toPrismaProgress(client.progress || "Good"),
+          next_due_date: toPrismaDate(client.next_due_date),
+          updated_at: new Date(),
+        };
+
+        const existing = await prisma.fitness_clients.findUnique({
+          where: { client_id: clientId },
+          select: { id: true },
+        });
+
+        let synced;
+        if (existing) {
+          synced = await prisma.fitness_clients.update({
+            where: { client_id: clientId },
+            data,
+          });
         } else {
-          await prisma.$executeRaw`
-            INSERT INTO fitness_clients (
-              client_id, full_name, age, phone, email, city, address, occupation,
-              health_goal, plan_type, plan_start_date, plan_expiry_date, 
-              height_cm, start_weight_kg, current_weight_kg, target_weight_kg, bmi,
-              referred_by_name, status, progress, next_due_date
-            ) VALUES (${clientId}, ${client.full_name}, ${client.age}, ${client.phone}, ${client.email}, ${client.city}, ${client.address}, ${client.occupation},
-              ${client.health_goal}, ${client.plan_type}, ${client.plan_start_date}, ${client.plan_expiry_date}, 
-              ${client.height_cm}, ${client.start_weight_kg}, ${client.current_weight_kg}, ${client.target_weight_kg}, ${client.bmi},
-              ${client.referred_by_name}, ${client.status}, ${client.progress}, ${client.next_due_date})
-          `;
+          synced = await prisma.fitness_clients.create({
+            data: { client_id: clientId, ...data },
+          });
         }
-        const syncedRows = await prisma.$queryRaw`SELECT * FROM fitness_clients WHERE client_id = ${clientId}`;
-        if (syncedRows[0]) {
-          await syncClientDueTask(syncedRows[0], req.user?.id);
-        }
+        await syncClientDueTask(synced, req.user?.id);
         importedClients.push(clientId);
       } catch (dbError) {
         console.error(`[Import] DB Error for ${clientId}:`, dbError.message);
@@ -2611,10 +3213,16 @@ const importClientsExcel = async (req, res) => {
     }
 
     emitFitnessAndDueTaskChanged("client_due_import");
-    res.json({ success: true, data: { importedCount: importedClients.length, errors } });
+    res.json({
+      success: true,
+      data: { importedCount: importedClients.length, errors },
+    });
   } catch (err) {
-    console.error('[Import] Fatal Error:', err);
-    res.status(500).json({ success: false, message: 'Failed to import clients: ' + err.message });
+    console.error("[Import] Fatal Error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to import clients: " + err.message,
+    });
   } finally {
     try {
       if (tmpPath && fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
@@ -2626,18 +3234,24 @@ const importClientsExcel = async (req, res) => {
 
 const exportClientsExcel = async (req, res) => {
   try {
-    const clients = await prisma.$queryRaw`SELECT * FROM fitness_clients ORDER BY created_at DESC`;
-    const worksheet = XLSX.utils.json_to_sheet(clients);
+    const clients = await prisma.fitness_clients.findMany({
+      orderBy: { created_at: "desc" },
+    });
+    const worksheet = XLSX.utils.json_to_sheet(serializeFitnessRows(clients));
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Clients');
-    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
-    res.setHeader('Content-Disposition', 'attachment; filename=fitness_clients.xlsx');
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Clients");
+    const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+    res.setHeader("Content-Disposition", "attachment; filename=fitness_clients.xlsx");
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
     res.send(buffer);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to export clients' });
+    res.status(500).json({ error: "Failed to export clients" });
   }
 };
+
 
 module.exports = {
   // Settings

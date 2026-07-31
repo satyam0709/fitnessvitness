@@ -305,97 +305,185 @@ async function listCollections(req) {
   const limit = Math.min(200, Math.max(1, bindInt(req.query?.limit, 50)));
   const offset = Math.max(0, bindInt(req.query?.offset, 0));
 
-  const clauses = ["1=1"];
-  const params = [];
+  const where = {};
+  const and = [];
 
   if (!canViewAll(role)) {
     const uid = bindInt(userId, 0);
     if (uid > 0) {
-      clauses.push("(c.assigned_to = ? OR c.created_by = ?)");
-      params.push(uid, uid);
+      and.push({ OR: [{ assigned_to: uid }, { created_by: uid }] });
     }
   }
 
   const status = queryScalar(req.query?.status);
   if (status && VALID_STATUS.has(status)) {
-    clauses.push("c.status = ?");
-    params.push(status);
+    where.status = status;
   }
 
   const type = queryScalar(req.query?.type);
   if (type && VALID_TYPES.has(type)) {
-    clauses.push("c.collection_type = ?");
-    params.push(type);
+    where.collection_type = type;
   }
 
   const clientId = queryScalar(req.query?.client_id);
   if (clientId) {
-    clauses.push("c.client_id = ?");
-    params.push(clientId);
+    where.client_id = clientId;
   }
 
   const due = String(queryScalar(req.query?.due, "all") || "all").toLowerCase();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
   if (due === "today") {
-    clauses.push("c.next_followup_date = ? AND c.status IN ('open','partial')");
-    params.push(today);
+    where.next_followup_date = today;
+    where.status = { in: ["open", "partial"] };
   } else if (due === "overdue") {
-    clauses.push("c.next_followup_date < ? AND c.status IN ('open','partial')");
-    params.push(today);
+    where.next_followup_date = { lt: today };
+    where.status = { in: ["open", "partial"] };
   } else if (due === "upcoming") {
-    clauses.push("c.next_followup_date > ? AND c.status IN ('open','partial')");
-    params.push(today);
+    where.next_followup_date = { gt: today };
+    where.status = { in: ["open", "partial"] };
   } else if (due === "open") {
-    clauses.push("c.status IN ('open','partial')");
+    where.status = { in: ["open", "partial"] };
   }
 
   const q = queryScalar(req.query?.q, "");
   if (q) {
-    clauses.push(
-      "(c.title LIKE ? OR fc.full_name LIKE ? OR fc.client_id LIKE ? OR eb.full_name LIKE ?)"
-    );
-    const like = `%${q}%`;
-    params.push(like, like, like, like);
+    and.push({
+      OR: [
+        { title: { contains: q } },
+        { client_id: { contains: q } },
+      ],
+    });
   }
 
-  const whereSql = clauses.join(" AND ");
-  const receiptSubquery = `(SELECT i.id FROM invoices i
-     INNER JOIN fitness_collection_payments p ON p.id = i.source_id
-     WHERE i.source_type = 'collection_payment' AND p.collection_id = c.id AND i.is_deleted = 0
-     ORDER BY i.id DESC LIMIT 1)`;
+  if (and.length) where.AND = and;
 
-  const querySql = `
-     SELECT c.*,
-            fc.full_name AS client_name,
-            eb.full_name AS external_buyer_name,
-            TRIM(CONCAT_WS(' ', u.first_name, u.last_name)) AS assignee_name,
-            ${receiptSubquery} AS latest_receipt_invoice_id
-     FROM fitness_collections c
-     LEFT JOIN fitness_clients fc ON fc.client_id = c.client_id
-     LEFT JOIN fitness_external_buyers eb ON eb.id = c.external_buyer_id
-     LEFT JOIN users u ON u.id = c.assigned_to
-     WHERE ${whereSql}
-     ORDER BY
-       CASE WHEN c.status IN ('open','partial') AND c.next_followup_date IS NOT NULL AND c.next_followup_date < CURDATE() THEN 0
-            WHEN c.status IN ('open','partial') AND c.next_followup_date = CURDATE() THEN 1
-            ELSE 2 END,
-       c.next_followup_date ASC,
-       c.updated_at DESC
-     LIMIT ? OFFSET ?
-  `;
+  let rows = await prisma.fitness_collections.findMany({ where });
 
-  const rows = await prisma.$queryRawUnsafe(querySql, ...params, limit, offset);
+  // Enrich names; optional text search on related names
+  const clientIds = [...new Set(rows.map((r) => r.client_id).filter(Boolean))];
+  const extIds = [...new Set(rows.map((r) => r.external_buyer_id).filter(Boolean))];
+  const assigneeIds = [...new Set(rows.map((r) => r.assigned_to).filter(Boolean))];
 
-  const countSql = `
-     SELECT COUNT(*) AS total FROM fitness_collections c
-     LEFT JOIN fitness_clients fc ON fc.client_id = c.client_id
-     LEFT JOIN fitness_external_buyers eb ON eb.id = c.external_buyer_id
-     WHERE ${whereSql}
-  `;
-  const countRows = await prisma.$queryRawUnsafe(countSql, ...params);
-  const total = Number(countRows[0]?.total || 0);
+  const [clients, buyers, users] = await Promise.all([
+    clientIds.length
+      ? prisma.fitness_clients.findMany({
+          where: { client_id: { in: clientIds } },
+          select: { client_id: true, full_name: true },
+        })
+      : [],
+    extIds.length
+      ? prisma.fitness_external_buyers.findMany({
+          where: { id: { in: extIds } },
+          select: { id: true, full_name: true },
+        })
+      : [],
+    assigneeIds.length
+      ? prisma.users.findMany({
+          where: { id: { in: assigneeIds } },
+          select: { id: true, first_name: true, last_name: true },
+        })
+      : [],
+  ]);
+  const clientMap = Object.fromEntries(clients.map((c) => [c.client_id, c.full_name]));
+  const buyerMap = Object.fromEntries(buyers.map((b) => [b.id, b.full_name]));
+  const userMap = Object.fromEntries(
+    users.map((u) => [u.id, `${u.first_name || ""} ${u.last_name || ""}`.trim()])
+  );
 
-  const formattedRows = rows.map(formatCollection);
+  if (q) {
+    const ql = q.toLowerCase();
+    rows = rows.filter((r) => {
+      const title = String(r.title || "").toLowerCase();
+      const cid = String(r.client_id || "").toLowerCase();
+      const cname = String(clientMap[r.client_id] || "").toLowerCase();
+      const ename = String(buyerMap[r.external_buyer_id] || "").toLowerCase();
+      return (
+        title.includes(ql) ||
+        cid.includes(ql) ||
+        cname.includes(ql) ||
+        ename.includes(ql)
+      );
+    });
+  }
+
+  const todayYmd = toSqlDate(today);
+  rows.sort((a, b) => {
+    const rank = (c) => {
+      const openish = c.status === "open" || c.status === "partial";
+      const d = toSqlDate(c.next_followup_date);
+      if (openish && d && d < todayYmd) return 0;
+      if (openish && d && d === todayYmd) return 1;
+      return 2;
+    };
+    const ra = rank(a);
+    const rb = rank(b);
+    if (ra !== rb) return ra - rb;
+    const da = toSqlDate(a.next_followup_date) || "9999-99-99";
+    const db = toSqlDate(b.next_followup_date) || "9999-99-99";
+    if (da !== db) return da < db ? -1 : 1;
+    const ua = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+    const ub = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+    return ub - ua;
+  });
+
+  const total = rows.length;
+  const page = rows.slice(offset, offset + limit);
+
+  const collectionIds = page.map((r) => r.id);
+  const payments =
+    collectionIds.length
+      ? await prisma.fitness_collection_payments.findMany({
+          where: { collection_id: { in: collectionIds } },
+          select: { id: true, collection_id: true },
+          orderBy: { id: "desc" },
+        })
+      : [];
+  const paymentIdsByCollection = {};
+  for (const p of payments) {
+    if (!paymentIdsByCollection[p.collection_id]) {
+      paymentIdsByCollection[p.collection_id] = [];
+    }
+    paymentIdsByCollection[p.collection_id].push(p.id);
+  }
+  const allPaymentIds = payments.map((p) => p.id);
+  const invoices = allPaymentIds.length
+    ? await prisma.invoices.findMany({
+        where: {
+          source_type: "collection_payment",
+          source_id: { in: allPaymentIds },
+          is_deleted: false,
+        },
+        orderBy: { id: "desc" },
+        select: { id: true, source_id: true },
+      })
+    : [];
+  const invoiceByPayment = {};
+  for (const inv of invoices) {
+    if (invoiceByPayment[inv.source_id] == null) {
+      invoiceByPayment[inv.source_id] = inv.id;
+    }
+  }
+
+  const formattedRows = page.map((c) => {
+    const payIds = paymentIdsByCollection[c.id] || [];
+    let latest_receipt_invoice_id = null;
+    for (const pid of payIds) {
+      if (invoiceByPayment[pid] != null) {
+        latest_receipt_invoice_id = invoiceByPayment[pid];
+        break;
+      }
+    }
+    return formatCollection({
+      ...c,
+      client_name: c.client_id ? clientMap[c.client_id] || null : null,
+      external_buyer_name: c.external_buyer_id
+        ? buyerMap[c.external_buyer_id] || null
+        : null,
+      assignee_name: c.assigned_to ? userMap[c.assigned_to] || null : null,
+      latest_receipt_invoice_id,
+    });
+  });
 
   return { rows: formattedRows, total, limit, offset };
 }
@@ -403,33 +491,37 @@ async function listCollections(req) {
 async function getSummary(req) {
   const userId = Number(req.user?.id);
   const role = req.user?.role;
-  const scope = canViewAll(role) ? "" : "AND (c.assigned_to = ? OR c.created_by = ?)";
-  const scopeParams = canViewAll(role) ? [] : [userId, userId];
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayYmd = toSqlDate(today);
 
-  let rows;
-  if (canViewAll(role)) {
-    rows = await prisma.$queryRaw`
-      SELECT
-        SUM(CASE WHEN c.status IN ('open','partial') THEN 1 ELSE 0 END) AS open_count,
-        SUM(CASE WHEN c.status IN ('open','partial') AND c.next_followup_date = ${today} THEN 1 ELSE 0 END) AS due_today,
-        SUM(CASE WHEN c.status IN ('open','partial') AND c.next_followup_date < ${today} THEN 1 ELSE 0 END) AS overdue,
-        SUM(CASE WHEN c.status IN ('open','partial') THEN c.pending_inr ELSE 0 END) AS total_pending_inr
-      FROM fitness_collections c
-      WHERE 1=1
-    `;
-  } else {
-    rows = await prisma.$queryRaw`
-      SELECT
-        SUM(CASE WHEN c.status IN ('open','partial') THEN 1 ELSE 0 END) AS open_count,
-        SUM(CASE WHEN c.status IN ('open','partial') AND c.next_followup_date = ${today} THEN 1 ELSE 0 END) AS due_today,
-        SUM(CASE WHEN c.status IN ('open','partial') AND c.next_followup_date < ${today} THEN 1 ELSE 0 END) AS overdue,
-        SUM(CASE WHEN c.status IN ('open','partial') THEN c.pending_inr ELSE 0 END) AS total_pending_inr
-      FROM fitness_collections c
-      WHERE (c.assigned_to = ${userId} OR c.created_by = ${userId})
-    `;
+  const where = {};
+  if (!canViewAll(role)) {
+    where.OR = [{ assigned_to: userId }, { created_by: userId }];
   }
-  const r = rows[0] || {};
+
+  const cols = await prisma.fitness_collections.findMany({
+    where,
+    select: {
+      status: true,
+      next_followup_date: true,
+      pending_inr: true,
+    },
+  });
+
+  let open_count = 0;
+  let due_today = 0;
+  let overdue = 0;
+  let total_pending_inr = 0;
+  for (const c of cols) {
+    const openish = c.status === "open" || c.status === "partial";
+    if (!openish) continue;
+    open_count += 1;
+    total_pending_inr += Number(c.pending_inr || 0);
+    const d = toSqlDate(c.next_followup_date);
+    if (d === todayYmd) due_today += 1;
+    if (d && d < todayYmd) overdue += 1;
+  }
 
   let booked = {
     booked_closed_won_mtd: 0,
@@ -455,10 +547,10 @@ async function getSummary(req) {
   }
 
   return {
-    open_count: Number(r.open_count) || 0,
-    due_today: Number(r.due_today) || 0,
-    overdue: Number(r.overdue) || 0,
-    total_pending_inr: Number(r.total_pending_inr) || 0,
+    open_count,
+    due_today,
+    overdue,
+    total_pending_inr,
     ...booked,
   };
 }
@@ -783,52 +875,73 @@ async function markPaid(req, id, body) {
 }
 
 async function fetchCollectionFollowups(date, userId, role) {
-  const scope = canViewAll(role) ? "" : "AND (c.assigned_to = ? OR c.created_by = ?)";
-  const scopeParams = canViewAll(role) ? [] : [userId, userId];
   const formattedDate = toSqlDate(date);
+  const dueDate = toPrismaDate(formattedDate) || new Date();
 
-  let rows;
-  if (canViewAll(role)) {
-    rows = await prisma.$queryRaw`
-       SELECT c.id, c.title, c.next_followup_date AS due_date, c.pending_inr, c.collection_type,
-              c.client_id, c.status, c.id AS source_id, 'collection_followup' AS source_type,
-              'high' AS priority,
-              COALESCE(fc.full_name, eb.full_name) AS client_name,
-              CASE WHEN c.next_followup_date < ${formattedDate} THEN 1 ELSE 0 END AS is_overdue
-       FROM fitness_collections c
-       LEFT JOIN fitness_clients fc ON fc.client_id = c.client_id
-       LEFT JOIN fitness_external_buyers eb ON eb.id = c.external_buyer_id
-       WHERE c.status IN ('open','partial')
-         AND c.pending_inr > 0
-         AND c.next_followup_date IS NOT NULL
-         AND c.next_followup_date <= ${formattedDate}
-       ORDER BY c.next_followup_date ASC
-       LIMIT 200
-    `;
-  } else {
-    rows = await prisma.$queryRaw`
-       SELECT c.id, c.title, c.next_followup_date AS due_date, c.pending_inr, c.collection_type,
-              c.client_id, c.status, c.id AS source_id, 'collection_followup' AS source_type,
-              'high' AS priority,
-              COALESCE(fc.full_name, eb.full_name) AS client_name,
-              CASE WHEN c.next_followup_date < ${formattedDate} THEN 1 ELSE 0 END AS is_overdue
-       FROM fitness_collections c
-       LEFT JOIN fitness_clients fc ON fc.client_id = c.client_id
-       LEFT JOIN fitness_external_buyers eb ON eb.id = c.external_buyer_id
-       WHERE c.status IN ('open','partial')
-         AND c.pending_inr > 0
-         AND c.next_followup_date IS NOT NULL
-         AND c.next_followup_date <= ${formattedDate}
-         AND (c.assigned_to = ${userId} OR c.created_by = ${userId})
-       ORDER BY c.next_followup_date ASC
-       LIMIT 200
-    `;
+  const where = {
+    status: { in: ["open", "partial"] },
+    pending_inr: { gt: 0 },
+    next_followup_date: { not: null, lte: dueDate },
+  };
+  if (!canViewAll(role)) {
+    where.OR = [{ assigned_to: userId }, { created_by: userId }];
   }
-  return rows.map((r) => ({
-    ...r,
-    pending_inr: r.pending_inr ? r.pending_inr.toString() : "0.00",
-    status: "pending"
-  }));
+
+  const rows = await prisma.fitness_collections.findMany({
+    where,
+    orderBy: { next_followup_date: "asc" },
+    take: 200,
+    select: {
+      id: true,
+      title: true,
+      next_followup_date: true,
+      pending_inr: true,
+      collection_type: true,
+      client_id: true,
+      external_buyer_id: true,
+      status: true,
+    },
+  });
+
+  const clientIds = [...new Set(rows.map((r) => r.client_id).filter(Boolean))];
+  const extIds = [...new Set(rows.map((r) => r.external_buyer_id).filter(Boolean))];
+  const [clients, buyers] = await Promise.all([
+    clientIds.length
+      ? prisma.fitness_clients.findMany({
+          where: { client_id: { in: clientIds } },
+          select: { client_id: true, full_name: true },
+        })
+      : [],
+    extIds.length
+      ? prisma.fitness_external_buyers.findMany({
+          where: { id: { in: extIds } },
+          select: { id: true, full_name: true },
+        })
+      : [],
+  ]);
+  const clientMap = Object.fromEntries(clients.map((c) => [c.client_id, c.full_name]));
+  const buyerMap = Object.fromEntries(buyers.map((b) => [b.id, b.full_name]));
+
+  return rows.map((r) => {
+    const due = toSqlDate(r.next_followup_date);
+    return {
+      id: r.id,
+      title: r.title,
+      due_date: r.next_followup_date,
+      pending_inr: r.pending_inr ? r.pending_inr.toString() : "0.00",
+      collection_type: r.collection_type,
+      client_id: r.client_id,
+      status: "pending",
+      source_id: r.id,
+      source_type: "collection_followup",
+      priority: "high",
+      client_name:
+        (r.client_id && clientMap[r.client_id]) ||
+        (r.external_buyer_id && buyerMap[r.external_buyer_id]) ||
+        null,
+      is_overdue: due && due < formattedDate ? 1 : 0,
+    };
+  });
 }
 
 async function markCollectionFollowupDone(id, userId, body) {

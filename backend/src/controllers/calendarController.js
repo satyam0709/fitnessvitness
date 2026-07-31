@@ -1,4 +1,4 @@
-const { pool, prisma } = require("../config/prismaPool");
+const prisma = require("../config/prisma");
 const { tableExists } = require("../utils/schemaHelpers");
 const { ensureCalendarCrmTables } = require("../utils/ensureCalendarCrmTables");
 const {
@@ -12,8 +12,6 @@ const { createUserNotification } = require("../services/notificationService");
 const {
   fetchGoogleEvents,
   createGoogleEvent,
-  updateGoogleEvent,
-  deleteGoogleEvent,
 } = require("../services/googleCalendarService");
 const {
   fetchAppleEvents,
@@ -26,28 +24,15 @@ const {
 
 const ALLOWED_CATEGORY = new Set(["event", "holiday", "service"]);
 
-let hasGoogleEventIdCol = null;
-
-async function ensureGoogleEventIdColumn() {
-  if (hasGoogleEventIdCol !== null) return hasGoogleEventIdCol;
-  try {
-    const [rows] = await pool.query(
-      `SELECT 1 AS ok
-       FROM information_schema.COLUMNS
-       WHERE TABLE_SCHEMA = DATABASE()
-         AND TABLE_NAME = 'crm_calendar_events'
-         AND COLUMN_NAME = 'google_event_id'
-       LIMIT 1`
-    );
-    hasGoogleEventIdCol = rows.length > 0;
-  } catch {
-    hasGoogleEventIdCol = false;
-  }
-  return hasGoogleEventIdCol;
+function toRangeBounds(from, to) {
+  return {
+    rs: new Date(`${from}T00:00:00`),
+    re: new Date(`${to}T23:59:59`),
+  };
 }
 
-function toMysqlRange(from, to) {
-  return { rs: `${from} 00:00:00`, re: `${to} 23:59:59` };
+function toDateOnly(ymd) {
+  return new Date(`${ymd}T00:00:00`);
 }
 
 function toMysqlDateTime(v) {
@@ -55,9 +40,9 @@ function toMysqlDateTime(v) {
   if (v instanceof Date) {
     if (Number.isNaN(v.getTime())) return null;
     const p = (n) => String(n).padStart(2, "0");
-    return `${v.getFullYear()}-${p(v.getMonth() + 1)}-${p(v.getDate())} ${p(v.getHours())}:${p(
-      v.getMinutes()
-    )}:${p(v.getSeconds())}`;
+    return `${v.getFullYear()}-${p(v.getMonth() + 1)}-${p(v.getDate())} ${p(
+      v.getHours()
+    )}:${p(v.getMinutes())}:${p(v.getSeconds())}`;
   }
   const s = String(v).trim().replace("T", " ");
   if (s.length === 16) return `${s}:00`;
@@ -65,8 +50,21 @@ function toMysqlDateTime(v) {
 }
 
 function parseYmd(v) {
+  if (v instanceof Date && !Number.isNaN(v.getTime())) {
+    const p = (n) => String(n).padStart(2, "0");
+    return `${v.getFullYear()}-${p(v.getMonth() + 1)}-${p(v.getDate())}`;
+  }
   const s = String(v || "").slice(0, 10);
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : "";
+}
+
+function parseDateTime(v) {
+  if (v == null || v === "") return null;
+  if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v;
+  const sql = toMysqlDateTime(v);
+  if (!sql) return null;
+  const d = new Date(sql.replace(" ", "T"));
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 async function getGoogleToken(_clerkUserId) {
@@ -108,93 +106,80 @@ function staticHolidaysInRange(fromStr, toStr) {
 }
 
 async function countUserScheduledItemsOnDate(uid, ymd) {
-  const rs = `${ymd} 00:00:00`;
-  const re = `${ymd} 23:59:59`;
-  const [[a]] = await pool.query(
-    `SELECT COUNT(*) AS c FROM crm_calendar_events
-     WHERE user_id = ? AND start_at <= ? AND COALESCE(end_at, start_at) >= ?`,
-    [uid, re, rs]
-  );
+  const { rs, re } = toRangeBounds(ymd, ymd);
+  const dayDate = toDateOnly(ymd);
+
+  const a = await prisma.crm_calendar_events.count({
+    where: {
+      user_id: uid,
+      start_at: { lte: re },
+      OR: [
+        { end_at: { gte: rs } },
+        { AND: [{ end_at: null }, { start_at: { gte: rs } }] },
+      ],
+    },
+  });
+
   let b = 0;
   if (await tableExists("meetings")) {
-    try {
-      const [[row]] = await pool.query(
-        `SELECT COUNT(*) AS c FROM meetings m
-         WHERE m.is_deleted = 0
-           AND (m.organizer_id = ? OR EXISTS (SELECT 1 FROM meeting_attendees ma WHERE ma.meeting_id = m.id AND ma.user_id = ?))
-           AND m.start_time >= ? AND m.start_time <= ?`,
-        [uid, uid, rs, re]
-      );
-      b = Number(row?.c || 0);
-    } catch (e) {
-      const msg = String(e?.message || "");
-      if (!/Unknown column ['`]?is_deleted/i.test(msg)) throw e;
-      const [[row]] = await pool.query(
-        `SELECT COUNT(*) AS c FROM meetings m
-         WHERE (m.organizer_id = ? OR EXISTS (SELECT 1 FROM meeting_attendees ma WHERE ma.meeting_id = m.id AND ma.user_id = ?))
-           AND m.start_time >= ? AND m.start_time <= ?`,
-        [uid, uid, rs, re]
-      );
-      b = Number(row?.c || 0);
-    }
+    b = await prisma.meetings.count({
+      where: {
+        is_deleted: false,
+        start_time: { gte: rs, lte: re },
+        OR: [
+          { organizer_id: uid },
+          { meeting_attendees: { some: { user_id: uid } } },
+        ],
+      },
+    });
   }
+
   let c = 0;
   if (await tableExists("reminders")) {
-    try {
-      const [[row]] = await pool.query(
-        `SELECT COUNT(*) AS c FROM reminders r
-         WHERE r.is_deleted = 0 AND (r.user_id = ? OR r.assigned_to_user_id = ?)
-           AND r.remind_at >= ? AND r.remind_at <= ? AND r.is_done = 0`,
-        [uid, uid, rs, re]
-      );
-      c = Number(row?.c || 0);
-    } catch (e) {
-      const msg = String(e?.message || "");
-      if (!/Unknown column ['`]?is_deleted/i.test(msg)) throw e;
-      const [[row]] = await pool.query(
-        `SELECT COUNT(*) AS c FROM reminders r
-         WHERE (r.user_id = ? OR r.assigned_to_user_id = ?)
-           AND r.remind_at >= ? AND r.remind_at <= ? AND r.is_done = 0`,
-        [uid, uid, rs, re]
-      );
-      c = Number(row?.c || 0);
-    }
+    c = await prisma.reminders.count({
+      where: {
+        is_deleted: false,
+        is_done: false,
+        remind_at: { gte: rs, lte: re },
+        OR: [{ user_id: uid }, { assigned_to_user_id: uid }],
+      },
+    });
   }
+
   let d = 0;
   if (await tableExists("tasks")) {
-    const [[row]] = await pool.query(
-      `SELECT COUNT(*) AS c FROM tasks t
-       WHERE (t.assigned_to = ? OR t.created_by = ?)
-         AND t.due_date IS NOT NULL AND DATE(t.due_date) = ?
-         AND t.status NOT IN ('done','completed')`,
-      [uid, uid, ymd]
-    );
-    d = Number(row?.c || 0);
+    d = await prisma.tasks.count({
+      where: {
+        OR: [{ assigned_to: uid }, { created_by: uid }],
+        due_date: dayDate,
+        status: { notIn: ["done", "completed"] },
+      },
+    });
   }
-  const [[e]] = await pool.query(
-    `SELECT COUNT(*) AS c FROM crm_todos t
-     WHERE t.is_deleted = 0
-       AND (t.created_by = ? OR EXISTS (SELECT 1 FROM crm_todo_assignees a WHERE a.todo_id = t.id AND a.user_id = ?))
-       AND t.todo_date = ? AND t.status = 'pending'`,
-    [uid, uid, ymd]
-  );
+
+  const e = await prisma.crm_todos.count({
+    where: {
+      is_deleted: false,
+      status: "pending",
+      todo_date: dayDate,
+      OR: [
+        { created_by: uid },
+        { crm_todo_assignees: { some: { user_id: uid } } },
+      ],
+    },
+  });
+
   let f = 0;
   if (await tableExists("leads")) {
-    const [[row]] = await pool.query(
-      `SELECT COUNT(*) AS c FROM leads l
-       WHERE (l.created_by = ? OR l.assigned_to = ?) AND l.follow_up_date = ?`,
-      [uid, uid, ymd]
-    );
-    f = Number(row?.c || 0);
+    f = await prisma.leads.count({
+      where: {
+        OR: [{ created_by: uid }, { assigned_to: uid }],
+        follow_up_date: dayDate,
+      },
+    });
   }
-  return (
-    Number(a?.c || 0) +
-    b +
-    c +
-    d +
-    Number(e?.c || 0) +
-    f
-  );
+
+  return Number(a || 0) + b + c + d + Number(e || 0) + f;
 }
 
 async function maybeNotifyCalendarDayDigest(uid, fromStr, toStr) {
@@ -203,10 +188,14 @@ async function maybeNotifyCalendarDayDigest(uid, fromStr, toStr) {
   const today = new Date().toISOString().slice(0, 10);
   if (today < fromStr || today > toStr) return;
   const digestId = Number(today.replace(/-/g, ""));
-  const [[existing]] = await pool.query(
-    `SELECT id FROM notifications WHERE user_id = ? AND entity_type = 'calendar_day' AND entity_id = ? LIMIT 1`,
-    [uidn, digestId]
-  );
+  const existing = await prisma.notifications.findFirst({
+    where: {
+      user_id: uidn,
+      entity_type: "calendar_day",
+      entity_id: BigInt(digestId),
+    },
+    select: { id: true },
+  });
   if (existing) return;
   const n = await countUserScheduledItemsOnDate(uidn, today);
   if (n < 1) return;
@@ -231,18 +220,30 @@ async function getCalendarFeed(req, res) {
       return res.status(400).json({ success: false, message: "from and to are required (YYYY-MM-DD)" });
     }
 
-    const { rs, re } = toMysqlRange(from, to);
+    const { rs, re } = toRangeBounds(from, to);
+    const fromDate = toDateOnly(from);
+    const toDate = toDateOnly(to);
     const items = [];
-    const hasGoogleCol = await ensureGoogleEventIdColumn();
 
-    const [customRows] = await pool.query(
-      `SELECT id, title, description, start_at, end_at, all_day, category${hasGoogleCol ? ", google_event_id" : ""}
-       FROM crm_calendar_events
-       WHERE user_id = ?
-         AND start_at <= ?
-         AND COALESCE(end_at, start_at) >= ?`,
-      [uid, re, rs]
-    );
+    const customRows = await prisma.crm_calendar_events.findMany({
+      where: {
+        user_id: uid,
+        start_at: { lte: re },
+        OR: [
+          { end_at: { gte: rs } },
+          { AND: [{ end_at: null }, { start_at: { gte: rs } }] },
+        ],
+      },
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        start_at: true,
+        end_at: true,
+        all_day: true,
+        category: true,
+      },
+    });
     customRows.forEach((r) => {
       const type = ALLOWED_CATEGORY.has(String(r.category || "").toLowerCase())
         ? String(r.category).toLowerCase()
@@ -258,127 +259,175 @@ async function getCalendarFeed(req, res) {
         allDay: !!r.all_day,
         meta: {
           eventId: r.id,
-          googleEventId: hasGoogleCol ? r.google_event_id || null : null,
+          googleEventId: null,
         },
       });
     });
 
     if (await tableExists("meetings")) {
-      const meetSqlWithLeads = `SELECT m.id, m.title, m.start_time, m.end_time, m.status, m.lead_id, l.name AS lead_name
-           FROM meetings m
-           LEFT JOIN leads l ON l.id = m.lead_id
-           WHERE (m.organizer_id = ? OR EXISTS (
-             SELECT 1 FROM meeting_attendees ma WHERE ma.meeting_id = m.id AND ma.user_id = ?
-           ))
-           AND m.start_time >= ? AND m.start_time <= ?`;
-      const meetSqlNoLeads = `SELECT m.id, m.title, m.start_time, m.end_time, m.status, m.lead_id, NULL AS lead_name
-           FROM meetings m
-           WHERE (m.organizer_id = ? OR EXISTS (
-             SELECT 1 FROM meeting_attendees ma WHERE ma.meeting_id = m.id AND ma.user_id = ?
-           ))
-           AND m.start_time >= ? AND m.start_time <= ?`;
-      const params = [uid, uid, rs, re];
-      let meetRows;
       try {
-        if (await tableExists("leads")) {
-          const [rows] = await pool.query(meetSqlWithLeads, params);
-          meetRows = rows;
-        } else {
-          const [rows] = await pool.query(meetSqlNoLeads, params);
-          meetRows = rows;
-        }
+        const meetRows = await prisma.meetings.findMany({
+          where: {
+            start_time: { gte: rs, lte: re },
+            OR: [
+              { organizer_id: uid },
+              { meeting_attendees: { some: { user_id: uid } } },
+            ],
+          },
+          select: {
+            id: true,
+            title: true,
+            start_time: true,
+            end_time: true,
+            status: true,
+            lead_id: true,
+            leads: { select: { name: true } },
+          },
+        });
+        meetRows.forEach((m) => {
+          items.push({
+            id: `meeting-${m.id}`,
+            source: "meeting",
+            type: "meeting",
+            title: m.title || "Meeting",
+            description: m.leads?.name ? `Lead: ${m.leads.name}` : null,
+            start: m.start_time,
+            end: m.end_time || m.start_time,
+            allDay: false,
+            meta: { meetingId: m.id, status: m.status, leadId: m.lead_id },
+          });
+        });
       } catch (e) {
         const msg = String(e?.message || "");
-        const code = e?.code;
         if (
-          code === "ER_NO_SUCH_TABLE" ||
+          e?.code === "P2021" ||
           /Table ['`]?[^' ]*\.?['`]?leads['`]? doesn't exist/i.test(msg) ||
           /doesn't exist.*\bleads\b/i.test(msg)
         ) {
-          const [rows] = await pool.query(meetSqlNoLeads, params);
-          meetRows = rows;
+          const meetRows = await prisma.meetings.findMany({
+            where: {
+              start_time: { gte: rs, lte: re },
+              OR: [
+                { organizer_id: uid },
+                { meeting_attendees: { some: { user_id: uid } } },
+              ],
+            },
+            select: {
+              id: true,
+              title: true,
+              start_time: true,
+              end_time: true,
+              status: true,
+              lead_id: true,
+            },
+          });
+          meetRows.forEach((m) => {
+            items.push({
+              id: `meeting-${m.id}`,
+              source: "meeting",
+              type: "meeting",
+              title: m.title || "Meeting",
+              description: null,
+              start: m.start_time,
+              end: m.end_time || m.start_time,
+              allDay: false,
+              meta: { meetingId: m.id, status: m.status, leadId: m.lead_id },
+            });
+          });
         } else {
           throw e;
         }
       }
-      meetRows.forEach((m) => {
-        items.push({
-          id: `meeting-${m.id}`,
-          source: "meeting",
-          type: "meeting",
-          title: m.title || "Meeting",
-          description: m.lead_name ? `Lead: ${m.lead_name}` : null,
-          start: m.start_time,
-          end: m.end_time || m.start_time,
-          allDay: false,
-          meta: { meetingId: m.id, status: m.status, leadId: m.lead_id },
-        });
-      });
     }
 
     if (await tableExists("reminders")) {
-      const remSqlWithLeads = `SELECT r.id, r.title, r.note, r.remind_at, r.lead_id, l.name AS lead_name
-           FROM reminders r
-           LEFT JOIN leads l ON l.id = r.lead_id
-           WHERE (r.user_id = ? OR r.assigned_to_user_id = ?)
-             AND r.remind_at >= ? AND r.remind_at <= ?
-             AND r.is_done = 0`;
-      const remSqlNoLeads = `SELECT r.id, r.title, r.note, r.remind_at, r.lead_id, NULL AS lead_name
-           FROM reminders r
-           WHERE (r.user_id = ? OR r.assigned_to_user_id = ?)
-             AND r.remind_at >= ? AND r.remind_at <= ?
-             AND r.is_done = 0`;
-      const remParams = [uid, uid, rs, re];
-      let remRows;
       try {
-        if (await tableExists("leads")) {
-          const [rows] = await pool.query(remSqlWithLeads, remParams);
-          remRows = rows;
-        } else {
-          const [rows] = await pool.query(remSqlNoLeads, remParams);
-          remRows = rows;
-        }
+        const remRows = await prisma.reminders.findMany({
+          where: {
+            is_done: false,
+            remind_at: { gte: rs, lte: re },
+            OR: [{ user_id: uid }, { assigned_to_user_id: uid }],
+          },
+          select: {
+            id: true,
+            title: true,
+            note: true,
+            remind_at: true,
+            lead_id: true,
+            leads: { select: { name: true } },
+          },
+        });
+        remRows.forEach((r) => {
+          items.push({
+            id: `reminder-${r.id}`,
+            source: "reminder",
+            type: "reminder",
+            title: r.title || "Reminder",
+            description: r.note || (r.leads?.name ? `Lead: ${r.leads.name}` : null),
+            start: r.remind_at,
+            end: r.remind_at,
+            allDay: false,
+            meta: { reminderId: r.id, leadId: r.lead_id },
+          });
+        });
       } catch (e) {
         const msg = String(e?.message || "");
-        const code = e?.code;
         if (
-          code === "ER_NO_SUCH_TABLE" ||
+          e?.code === "P2021" ||
           /Table ['`]?[^' ]*\.?['`]?leads['`]? doesn't exist/i.test(msg) ||
           /doesn't exist.*\bleads\b/i.test(msg)
         ) {
-          const [rows] = await pool.query(remSqlNoLeads, remParams);
-          remRows = rows;
+          const remRows = await prisma.reminders.findMany({
+            where: {
+              is_done: false,
+              remind_at: { gte: rs, lte: re },
+              OR: [{ user_id: uid }, { assigned_to_user_id: uid }],
+            },
+            select: {
+              id: true,
+              title: true,
+              note: true,
+              remind_at: true,
+              lead_id: true,
+            },
+          });
+          remRows.forEach((r) => {
+            items.push({
+              id: `reminder-${r.id}`,
+              source: "reminder",
+              type: "reminder",
+              title: r.title || "Reminder",
+              description: r.note || null,
+              start: r.remind_at,
+              end: r.remind_at,
+              allDay: false,
+              meta: { reminderId: r.id, leadId: r.lead_id },
+            });
+          });
         } else {
           throw e;
         }
       }
-      remRows.forEach((r) => {
-        items.push({
-          id: `reminder-${r.id}`,
-          source: "reminder",
-          type: "reminder",
-          title: r.title || "Reminder",
-          description: r.note || (r.lead_name ? `Lead: ${r.lead_name}` : null),
-          start: r.remind_at,
-          end: r.remind_at,
-          allDay: false,
-          meta: { reminderId: r.id, leadId: r.lead_id },
-        });
-      });
     }
 
     if (await tableExists("tasks")) {
-      const [taskRows] = await pool.query(
-        `SELECT t.id, t.title, t.due_date, t.status, t.priority
-         FROM tasks t
-         WHERE (t.assigned_to = ? OR t.created_by = ?)
-           AND t.due_date IS NOT NULL
-           AND DATE(t.due_date) >= ? AND DATE(t.due_date) <= ?
-           AND t.status NOT IN ('done','completed')`,
-        [uid, uid, from, to]
-      );
+      const taskRows = await prisma.tasks.findMany({
+        where: {
+          OR: [{ assigned_to: uid }, { created_by: uid }],
+          due_date: { not: null, gte: fromDate, lte: toDate },
+          status: { notIn: ["done", "completed"] },
+        },
+        select: {
+          id: true,
+          title: true,
+          due_date: true,
+          status: true,
+          priority: true,
+        },
+      });
       taskRows.forEach((t) => {
-        const d = String(t.due_date).slice(0, 10);
+        const d = parseYmd(t.due_date);
+        if (!d) return;
         items.push({
           id: `task-${t.id}`,
           source: "task",
@@ -393,17 +442,24 @@ async function getCalendarFeed(req, res) {
       });
     }
 
-    const [todoRows] = await pool.query(
-      `SELECT t.id, t.body, t.todo_date, t.status, t.priority
-       FROM crm_todos t
-       WHERE t.is_deleted = 0
-         AND (t.created_by = ? OR EXISTS (
-           SELECT 1 FROM crm_todo_assignees a WHERE a.todo_id = t.id AND a.user_id = ?
-         ))
-         AND t.todo_date BETWEEN ? AND ?
-         AND t.status = 'pending'`,
-      [uid, uid, from, to]
-    );
+    const todoRows = await prisma.crm_todos.findMany({
+      where: {
+        is_deleted: false,
+        status: "pending",
+        todo_date: { gte: fromDate, lte: toDate },
+        OR: [
+          { created_by: uid },
+          { crm_todo_assignees: { some: { user_id: uid } } },
+        ],
+      },
+      select: {
+        id: true,
+        body: true,
+        todo_date: true,
+        status: true,
+        priority: true,
+      },
+    });
     todoRows.forEach((t) => {
       const d = parseYmd(t.todo_date);
       if (!d) return;
@@ -421,16 +477,21 @@ async function getCalendarFeed(req, res) {
     });
 
     try {
-      const [oppRows] = await pool.query(
-        `SELECT o.id, o.title, o.followup_at, o.followup_type, o.stage
-         FROM opportunities o
-         WHERE o.is_deleted = 0
-           AND o.followup_at IS NOT NULL
-           AND o.followup_at >= ? AND o.followup_at <= ?
-           AND o.stage NOT IN ('closed_won', 'closed_lost')
-           AND (o.owner_user_id = ? OR o.created_by = ?)`,
-        [rs, re, uid, uid]
-      );
+      const oppRows = await prisma.opportunities.findMany({
+        where: {
+          is_deleted: false,
+          followup_at: { not: null, gte: rs, lte: re },
+          stage: { notIn: ["closed_won", "closed_lost"] },
+          OR: [{ owner_user_id: uid }, { created_by: uid }],
+        },
+        select: {
+          id: true,
+          title: true,
+          followup_at: true,
+          followup_type: true,
+          stage: true,
+        },
+      });
       oppRows.forEach((o) => {
         const start = o.followup_at;
         items.push({
@@ -450,17 +511,25 @@ async function getCalendarFeed(req, res) {
     }
 
     // --- Fitness CRM: Client Milestones & Consultations ---
-    const [fitnessRows] = await pool.query(
-      `SELECT client_id, full_name, plan_start_date, plan_expiry_date, next_due_date, status
-       FROM fitness_clients
-       WHERE (plan_start_date BETWEEN ? AND ?)
-          OR (plan_expiry_date BETWEEN ? AND ?)
-          OR (next_due_date BETWEEN ? AND ?)`,
-      [from, to, from, to, from, to]
-    );
+    const fitnessRows = await prisma.fitness_clients.findMany({
+      where: {
+        OR: [
+          { plan_start_date: { gte: fromDate, lte: toDate } },
+          { plan_expiry_date: { gte: fromDate, lte: toDate } },
+          { next_due_date: { gte: fromDate, lte: toDate } },
+        ],
+      },
+      select: {
+        client_id: true,
+        full_name: true,
+        plan_start_date: true,
+        plan_expiry_date: true,
+        next_due_date: true,
+        status: true,
+      },
+    });
 
     fitnessRows.forEach((f) => {
-      // Plan Start
       if (f.plan_start_date && parseYmd(f.plan_start_date) >= from && parseYmd(f.plan_start_date) <= to) {
         items.push({
           id: `fitness-start-${f.client_id}`,
@@ -471,24 +540,22 @@ async function getCalendarFeed(req, res) {
           start: `${parseYmd(f.plan_start_date)}T09:00:00`,
           end: `${parseYmd(f.plan_start_date)}T09:30:00`,
           allDay: false,
-          meta: { clientId: f.client_id, category: 'plan_start' },
+          meta: { clientId: f.client_id, category: "plan_start" },
         });
       }
-      // Plan Expiry
       if (f.plan_expiry_date && parseYmd(f.plan_expiry_date) >= from && parseYmd(f.plan_expiry_date) <= to) {
         items.push({
           id: `fitness-expiry-${f.client_id}`,
           source: "fitness",
-          type: "fitness", 
+          type: "fitness",
           title: `Expiry: ${f.full_name}`,
           description: `Plan expires for ${f.full_name}`,
           start: `${parseYmd(f.plan_expiry_date)}T00:00:00`,
           end: `${parseYmd(f.plan_expiry_date)}T23:59:59`,
           allDay: true,
-          meta: { clientId: f.client_id, category: 'plan_expiry' },
+          meta: { clientId: f.client_id, category: "plan_expiry" },
         });
       }
-      // Next Due
       if (f.next_due_date && parseYmd(f.next_due_date) >= from && parseYmd(f.next_due_date) <= to) {
         items.push({
           id: `fitness-due-${f.client_id}`,
@@ -499,71 +566,101 @@ async function getCalendarFeed(req, res) {
           start: `${parseYmd(f.next_due_date)}T10:00:00`,
           end: `${parseYmd(f.next_due_date)}T11:00:00`,
           allDay: false,
-          meta: { clientId: f.client_id, category: 'consultation_due' },
+          meta: { clientId: f.client_id, category: "consultation_due" },
         });
       }
     });
 
-    // Actual consultations (column names match fitness_consultations schema)
-    const [consultRows] = await pool.query(
-      `SELECT c.id, c.client_id, cl.full_name, c.consult_date, c.consult_type, c.key_observations
-       FROM fitness_consultations c
-       JOIN fitness_clients cl ON cl.client_id = c.client_id
-       WHERE c.consult_date BETWEEN ? AND ?`,
-      [from, to]
-    );
-    consultRows.forEach((c) => {
-      const d = parseYmd(c.consult_date);
-      if (!d) return;
-      items.push({
-        id: `fitness-consult-${c.id}`,
-        source: "fitness",
-        type: "fitness",
-        title: `Consult: ${c.full_name}`,
-        description: `${c.consult_type || "Consultation"}: ${c.key_observations || ""}`,
-        start: `${d}T11:00:00`,
-        end: `${d}T12:00:00`,
-        allDay: false,
-        meta: { clientId: c.client_id, consultationId: c.id },
-      });
+    const consultRows = await prisma.fitness_consultations.findMany({
+      where: { consult_date: { gte: fromDate, lte: toDate } },
+      select: {
+        id: true,
+        client_id: true,
+        consult_date: true,
+        consult_type: true,
+        key_observations: true,
+      },
     });
+    if (consultRows.length) {
+      const clientIds = [...new Set(consultRows.map((c) => c.client_id).filter(Boolean))];
+      const clients = await prisma.fitness_clients.findMany({
+        where: { client_id: { in: clientIds } },
+        select: { client_id: true, full_name: true },
+      });
+      const nameById = Object.fromEntries(clients.map((c) => [c.client_id, c.full_name]));
+      consultRows.forEach((c) => {
+        const d = parseYmd(c.consult_date);
+        if (!d) return;
+        const fullName = nameById[c.client_id] || "Client";
+        items.push({
+          id: `fitness-consult-${c.id}`,
+          source: "fitness",
+          type: "fitness",
+          title: `Consult: ${fullName}`,
+          description: `${c.consult_type || "Consultation"}: ${c.key_observations || ""}`,
+          start: `${d}T11:00:00`,
+          end: `${d}T12:00:00`,
+          allDay: false,
+          meta: { clientId: c.client_id, consultationId: c.id },
+        });
+      });
+    }
 
-    // Fitness client tasks (schema: task_description, status enum without "Completed")
-    const [fTaskRows] = await pool.query(
-      `SELECT t.id, t.client_id, cl.full_name, t.task_description, t.due_date, t.status
-       FROM fitness_client_tasks t
-       JOIN fitness_clients cl ON cl.client_id = t.client_id
-       WHERE t.due_date BETWEEN ? AND ? AND t.status NOT IN ('Done','Carried Forward')`,
-      [from, to]
-    );
-    fTaskRows.forEach((t) => {
-      const d = parseYmd(t.due_date);
-      if (!d) return;
-      items.push({
-        id: `fitness-task-${t.id}`,
-        source: "fitness",
-        type: "fitness",
-        title: `Client Task: ${t.full_name}`,
-        description: t.task_description,
-        start: `${d}T14:00:00`,
-        end: `${d}T15:00:00`,
-        allDay: false,
-        meta: { clientId: t.client_id, taskId: t.id },
-      });
+    const fTaskRows = await prisma.fitness_client_tasks.findMany({
+      where: {
+        due_date: { gte: fromDate, lte: toDate },
+        status: { notIn: ["Done", "Carried_Forward"] },
+      },
+      select: {
+        id: true,
+        client_id: true,
+        task_description: true,
+        due_date: true,
+        status: true,
+      },
     });
+    if (fTaskRows.length) {
+      const clientIds = [...new Set(fTaskRows.map((t) => t.client_id).filter(Boolean))];
+      const clients = await prisma.fitness_clients.findMany({
+        where: { client_id: { in: clientIds } },
+        select: { client_id: true, full_name: true },
+      });
+      const nameById = Object.fromEntries(clients.map((c) => [c.client_id, c.full_name]));
+      fTaskRows.forEach((t) => {
+        const d = parseYmd(t.due_date);
+        if (!d) return;
+        const fullName = nameById[t.client_id] || "Client";
+        items.push({
+          id: `fitness-task-${t.id}`,
+          source: "fitness",
+          type: "fitness",
+          title: `Client Task: ${fullName}`,
+          description: t.task_description,
+          start: `${d}T14:00:00`,
+          end: `${d}T15:00:00`,
+          allDay: false,
+          meta: { clientId: t.client_id, taskId: t.id },
+        });
+      });
+    }
 
     if (await tableExists("leads")) {
-      const [leadRows] = await pool.query(
-        `SELECT l.id, l.name, l.follow_up_date, l.status
-         FROM leads l
-         WHERE (l.created_by = ? OR l.assigned_to = ?)
-           AND l.follow_up_date IS NOT NULL
-           AND l.follow_up_date >= ? AND l.follow_up_date <= ?
-         LIMIT 500`,
-        [uid, uid, from, to]
-      );
+      const leadRows = await prisma.leads.findMany({
+        where: {
+          OR: [{ created_by: uid }, { assigned_to: uid }],
+          follow_up_date: { not: null, gte: fromDate, lte: toDate },
+        },
+        select: {
+          id: true,
+          name: true,
+          follow_up_date: true,
+          status: true,
+        },
+        take: 500,
+      });
       leadRows.forEach((l) => {
-        const d = String(l.follow_up_date).slice(0, 10);
+        const d = parseYmd(l.follow_up_date);
+        if (!d) return;
         items.push({
           id: `lead-${l.id}`,
           source: "lead",
@@ -587,7 +684,6 @@ async function getCalendarFeed(req, res) {
         items.push(...gEvents);
       }
     } catch (e) {
-      // Keep CRM feed functional even if Google integration is unavailable.
       console.warn("calendar google fetch:", e.message);
     }
 
@@ -619,46 +715,44 @@ async function createCalendarEvent(req, res) {
     if (!title || !String(title).trim()) {
       return res.status(400).json({ success: false, message: "title is required" });
     }
-    const startSql = toMysqlDateTime(start_at);
-    if (!startSql) return res.status(400).json({ success: false, message: "start_at is required" });
-    const endSql = end_at ? toMysqlDateTime(end_at) : null;
-    const allDay = all_day === true || all_day === 1 || String(all_day).toLowerCase() === "true" ? 1 : 0;
+    const startDt = parseDateTime(start_at);
+    if (!startDt) return res.status(400).json({ success: false, message: "start_at is required" });
+    const endDt = end_at ? parseDateTime(end_at) : null;
+    const allDay =
+      all_day === true || all_day === 1 || String(all_day).toLowerCase() === "true";
     const cat = ALLOWED_CATEGORY.has(String(category || "").toLowerCase())
       ? String(category).toLowerCase()
       : "event";
 
-    let googleEventId = null;
     try {
       const token = await getGoogleToken(clerkUserId);
       if (token) {
-        googleEventId = await createGoogleEvent(token, {
+        await createGoogleEvent(token, {
           title: String(title).trim(),
           description: description || null,
-          start: new Date(startSql.replace(" ", "T")).toISOString(),
-          end: endSql ? new Date(endSql.replace(" ", "T")).toISOString() : null,
+          start: startDt.toISOString(),
+          end: endDt ? endDt.toISOString() : null,
         });
       }
     } catch (e) {
       console.warn("calendar google create:", e.message);
     }
 
-    const hasGoogleCol = await ensureGoogleEventIdColumn();
-    const [result] = hasGoogleCol
-      ? await pool.query(
-          `INSERT INTO crm_calendar_events
-           (user_id, title, description, start_at, end_at, all_day, category, google_event_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          [uid, String(title).trim(), description || null, startSql, endSql, allDay, cat, googleEventId]
-        )
-      : await pool.query(
-          `INSERT INTO crm_calendar_events
-           (user_id, title, description, start_at, end_at, all_day, category)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [uid, String(title).trim(), description || null, startSql, endSql, allDay, cat]
-        );
+    const created = await prisma.crm_calendar_events.create({
+      data: {
+        user_id: uid,
+        title: String(title).trim(),
+        description: description || null,
+        start_at: startDt,
+        end_at: endDt,
+        all_day: allDay,
+        category: cat,
+      },
+      select: { id: true },
+    });
 
-    emitCalendarChanged({ reason: "calendar", action: "create", id: result.insertId });
-    return res.status(201).json({ success: true, id: result.insertId });
+    emitCalendarChanged({ reason: "calendar", action: "create", id: created.id });
+    return res.status(201).json({ success: true, id: created.id });
   } catch (err) {
     console.error("createCalendarEvent", err);
     return res.status(500).json({ success: false, message: err.message });
@@ -668,81 +762,48 @@ async function createCalendarEvent(req, res) {
 async function updateCalendarEvent(req, res) {
   try {
     const uid = Number(req.user?.id);
-    const clerkUserId = req.user?.clerkUserId;
     const id = Number(req.params.id);
     if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
     if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
 
-    const hasGoogleCol = await ensureGoogleEventIdColumn();
-    const [[existing]] = await pool.query(
-      `SELECT id${hasGoogleCol ? ", google_event_id" : ""}
-       FROM crm_calendar_events
-       WHERE id = ? AND user_id = ?
-       LIMIT 1`,
-      [id, uid]
-    );
+    const existing = await prisma.crm_calendar_events.findFirst({
+      where: { id, user_id: uid },
+      select: { id: true },
+    });
     if (!existing) return res.status(404).json({ success: false, message: "Not found" });
 
     const { title, description, start_at, end_at, all_day, category } = req.body || {};
-    const sets = [];
-    const vals = [];
+    const data = {};
     if (title !== undefined) {
       if (!String(title).trim()) return res.status(400).json({ success: false, message: "title is required" });
-      sets.push("title = ?");
-      vals.push(String(title).trim());
+      data.title = String(title).trim();
     }
     if (description !== undefined) {
-      sets.push("description = ?");
-      vals.push(description || null);
+      data.description = description || null;
     }
     if (start_at !== undefined) {
-      const s = toMysqlDateTime(start_at);
+      const s = parseDateTime(start_at);
       if (!s) return res.status(400).json({ success: false, message: "Invalid start_at" });
-      sets.push("start_at = ?");
-      vals.push(s);
+      data.start_at = s;
     }
     if (end_at !== undefined) {
-      sets.push("end_at = ?");
-      vals.push(end_at ? toMysqlDateTime(end_at) : null);
+      data.end_at = end_at ? parseDateTime(end_at) : null;
     }
     if (all_day !== undefined) {
-      sets.push("all_day = ?");
-      vals.push(all_day === true || all_day === 1 || String(all_day).toLowerCase() === "true" ? 1 : 0);
+      data.all_day =
+        all_day === true || all_day === 1 || String(all_day).toLowerCase() === "true";
     }
     if (category !== undefined) {
-      const cat = ALLOWED_CATEGORY.has(String(category || "").toLowerCase())
+      data.category = ALLOWED_CATEGORY.has(String(category || "").toLowerCase())
         ? String(category).toLowerCase()
         : "event";
-      sets.push("category = ?");
-      vals.push(cat);
     }
-    if (!sets.length) return res.json({ success: true });
+    if (!Object.keys(data).length) return res.json({ success: true });
 
-    vals.push(id, uid);
-    await pool.query(
-      `UPDATE crm_calendar_events SET ${sets.join(", ")} WHERE id = ? AND user_id = ?`,
-      vals
-    );
-
-    if (hasGoogleCol && existing.google_event_id) {
-      try {
-        const token = await getGoogleToken(clerkUserId);
-        if (token) {
-          const [[updated]] = await pool.query(
-            "SELECT title, description, start_at, end_at FROM crm_calendar_events WHERE id = ? LIMIT 1",
-            [id]
-          );
-          await updateGoogleEvent(token, existing.google_event_id, {
-            title: updated.title,
-            description: updated.description || null,
-            start: new Date(String(updated.start_at).replace(" ", "T")).toISOString(),
-            end: updated.end_at ? new Date(String(updated.end_at).replace(" ", "T")).toISOString() : null,
-          });
-        }
-      } catch (e) {
-        console.warn("calendar google update:", e.message);
-      }
-    }
+    await prisma.crm_calendar_events.update({
+      where: { id },
+      data,
+    });
 
     emitCalendarChanged({ reason: "calendar", action: "update", id });
     return res.json({ success: true });
@@ -755,33 +816,21 @@ async function updateCalendarEvent(req, res) {
 async function deleteCalendarEvent(req, res) {
   try {
     const uid = Number(req.user?.id);
-    const clerkUserId = req.user?.clerkUserId;
     const id = Number(req.params.id);
     if (!uid) return res.status(401).json({ success: false, message: "Unauthorized" });
     if (!id) return res.status(400).json({ success: false, message: "Invalid id" });
 
-    const hasGoogleCol = await ensureGoogleEventIdColumn();
-    const [[existing]] = await pool.query(
-      `SELECT id${hasGoogleCol ? ", google_event_id" : ""}
-       FROM crm_calendar_events
-       WHERE id = ? AND user_id = ?
-       LIMIT 1`,
-      [id, uid]
-    );
+    const existing = await prisma.crm_calendar_events.findFirst({
+      where: { id, user_id: uid },
+      select: { id: true },
+    });
     if (!existing) return res.status(404).json({ success: false, message: "Not found" });
 
-    if (hasGoogleCol && existing.google_event_id) {
-      try {
-        const token = await getGoogleToken(clerkUserId);
-        if (token) await deleteGoogleEvent(token, existing.google_event_id);
-      } catch (e) {
-        console.warn("calendar google delete:", e.message);
-      }
-    }
-
-    const [r] = await pool.query("DELETE FROM crm_calendar_events WHERE id = ? AND user_id = ?", [id, uid]);
+    const { count } = await prisma.crm_calendar_events.deleteMany({
+      where: { id, user_id: uid },
+    });
     emitCalendarChanged({ reason: "calendar", action: "delete", id });
-    return res.json({ success: true, deleted: Number(r.affectedRows) || 0 });
+    return res.json({ success: true, deleted: Number(count) || 0 });
   } catch (err) {
     console.error("deleteCalendarEvent", err);
     return res.status(500).json({ success: false, message: err.message });
@@ -944,26 +993,6 @@ async function postAppleCalendarSync(req, res) {
   }
 }
 
-let calendarMeetingRecurrenceChecked = false;
-async function ensureMeetingsRecurrenceColumnCal() {
-  if (calendarMeetingRecurrenceChecked) return;
-  calendarMeetingRecurrenceChecked = true;
-  try {
-    const [cols] = await pool.query(
-      `SELECT 1 AS ok FROM information_schema.COLUMNS
-       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'meetings' AND COLUMN_NAME = 'recurrence' LIMIT 1`
-    );
-    if (!cols.length) {
-      await pool.query(
-        "ALTER TABLE meetings ADD COLUMN recurrence VARCHAR(50) NOT NULL DEFAULT 'once'"
-      );
-    }
-  } catch (e) {
-    calendarMeetingRecurrenceChecked = false;
-    console.warn("calendar meetings recurrence check:", e.message);
-  }
-}
-
 const REMINDER_TYPES_CAL = new Set(["general", "follow_up", "payment", "meeting", "customer_reminder"]);
 function normalizeReminderTypeCal(t) {
   const v = (t && String(t).trim()) || "general";
@@ -978,7 +1007,7 @@ async function quickAddFromCalendar(req, res) {
     const b = req.body || {};
     const kind = String(b.kind || "").toLowerCase().trim();
 
-    await ensureCalendarCrmTables(pool);
+    await ensureCalendarCrmTables();
 
     if (kind === "calendar_event" || kind === "event") {
       req.body = {
@@ -999,89 +1028,90 @@ async function quickAddFromCalendar(req, res) {
       if (!dueDate && b.start_at) dueDate = String(b.start_at).slice(0, 10);
       const leadId = b.lead_id ? Number(b.lead_id) : null;
       const lid = Number.isFinite(leadId) && leadId > 0 ? leadId : null;
-      let insertId;
-      try {
-        const [result] = await pool.execute(
-          `INSERT INTO tasks (tenant_id, title, description, lead_id, assigned_to, created_by, due_date, priority, status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'medium', 'todo')`,
-          [tenantId || null, title, b.description || null, lid, uid, uid, dueDate]
-        );
-        insertId = result.insertId;
-      } catch (e1) {
-        const msg = String(e1?.message || "");
-        if (e1?.code !== "ER_BAD_FIELD_ERROR" && !/Unknown column/i.test(msg)) throw e1;
-        const [result] = await pool.execute(
-          `INSERT INTO tasks (title, description, status, priority, assigned_to, lead_id, due_date, created_by)
-           VALUES (?, ?, 'todo', 'medium', ?, ?, ?, ?)`,
-          [title, b.description || null, uid, lid, dueDate, uid]
-        );
-        insertId = result.insertId;
-      }
-      emitCalendarChanged({ reason: "tasks", action: "quick_add", id: insertId });
+      const created = await prisma.tasks.create({
+        data: {
+          tenant_id: tenantId || null,
+          title,
+          description: b.description || null,
+          lead_id: lid,
+          assigned_to: uid,
+          created_by: uid,
+          due_date: dueDate ? toDateOnly(dueDate) : null,
+          priority: "medium",
+          status: "todo",
+        },
+        select: { id: true },
+      });
+      emitCalendarChanged({ reason: "tasks", action: "quick_add", id: created.id });
       emitAdminChanged({ scope: "stats", reason: "tasks", action: "create" });
-      return res.status(201).json({ success: true, kind: "task", id: insertId });
+      return res.status(201).json({ success: true, kind: "task", id: created.id });
     }
 
     if (kind === "reminder") {
       const title = String(b.title || "").trim();
       if (!title) return res.status(400).json({ success: false, message: "title is required" });
-      const remindAt = toMysqlDateTime(b.start_at || b.remind_at);
+      const remindAt = parseDateTime(b.start_at || b.remind_at);
       if (!remindAt) return res.status(400).json({ success: false, message: "start_at or remind_at is required" });
       const leadId = b.lead_id ? Number(b.lead_id) : null;
       const lid = Number.isFinite(leadId) && leadId > 0 ? leadId : null;
       const typeVal = normalizeReminderTypeCal(b.reminder_type);
-      const [result] = await pool.query(
-        `INSERT INTO reminders (user_id, title, note, remind_at, lead_id, assigned_to_user_id, reminder_type)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [uid, title, b.note || b.description || null, remindAt, lid, null, typeVal]
-      );
-      const insertId = result.insertId;
-      emitCalendarChanged({ reason: "reminders", action: "quick_add", id: insertId });
+      const created = await prisma.reminders.create({
+        data: {
+          user_id: uid,
+          title,
+          note: b.note || b.description || null,
+          remind_at: remindAt,
+          lead_id: lid,
+          assigned_to_user_id: null,
+          reminder_type: typeVal,
+        },
+        select: { id: true },
+      });
+      emitCalendarChanged({ reason: "reminders", action: "quick_add", id: created.id });
       emitAdminChanged({ scope: "stats", reason: "reminders", action: "create" });
-      return res.status(201).json({ success: true, kind: "reminder", id: insertId });
+      return res.status(201).json({ success: true, kind: "reminder", id: created.id });
     }
 
     if (kind === "meeting") {
-      await ensureMeetingsRecurrenceColumnCal();
       const title = String(b.title || "").trim();
       if (!title) return res.status(400).json({ success: false, message: "title is required" });
-      const startSql = toMysqlDateTime(b.start_at);
-      if (!startSql) return res.status(400).json({ success: false, message: "start_at is required" });
-      let endSql = toMysqlDateTime(b.end_at);
-      if (!endSql) {
-        const d = new Date(startSql.replace(" ", "T"));
-        if (!Number.isNaN(d.getTime())) {
-          d.setHours(d.getHours() + 1);
-          endSql = toMysqlDateTime(d);
-        }
+      const startDt = parseDateTime(b.start_at);
+      if (!startDt) return res.status(400).json({ success: false, message: "start_at is required" });
+      let endDt = parseDateTime(b.end_at);
+      if (!endDt) {
+        endDt = new Date(startDt.getTime());
+        endDt.setHours(endDt.getHours() + 1);
       }
       const leadId = b.lead_id ? Number(b.lead_id) : null;
       const lid = Number.isFinite(leadId) && leadId > 0 ? leadId : null;
-      const [result] = await pool.query(
-        `INSERT INTO meetings (title, description, start_time, end_time, location, meet_link,
-          meeting_type, status, recurrence, organizer_id, assigned_to_user_id, lead_id)
-         VALUES (?, ?, ?, ?, ?, ?, 'virtual', 'scheduled', 'once', ?, ?, ?)`,
-        [
-          title,
-          b.description || null,
-          startSql,
-          endSql,
-          b.location || null,
-          b.meet_link || null,
-          uid,
-          uid,
-          lid,
-        ]
-      );
-      const meetingId = result.insertId;
-      await pool.query("INSERT IGNORE INTO meeting_attendees (meeting_id, user_id) VALUES (?, ?)", [
-        meetingId,
-        uid,
-      ]);
-      emitMeetingsChanged({ action: "create", id: meetingId });
-      emitCalendarChanged({ reason: "meetings", action: "quick_add", id: meetingId });
+      const meeting = await prisma.$transaction(async (tx) => {
+        const created = await tx.meetings.create({
+          data: {
+            title,
+            description: b.description || null,
+            start_time: startDt,
+            end_time: endDt,
+            location: b.location || null,
+            meet_link: b.meet_link || null,
+            meeting_type: "virtual",
+            status: "scheduled",
+            recurrence: "once",
+            organizer_id: uid,
+            assigned_to_user_id: uid,
+            lead_id: lid,
+          },
+          select: { id: true },
+        });
+        await tx.meeting_attendees.createMany({
+          data: [{ meeting_id: created.id, user_id: uid }],
+          skipDuplicates: true,
+        });
+        return created;
+      });
+      emitMeetingsChanged({ action: "create", id: meeting.id });
+      emitCalendarChanged({ reason: "meetings", action: "quick_add", id: meeting.id });
       emitAdminChanged({ scope: "stats", reason: "meetings" });
-      return res.status(201).json({ success: true, kind: "meeting", id: meetingId });
+      return res.status(201).json({ success: true, kind: "meeting", id: meeting.id });
     }
 
     if (kind === "todo") {
@@ -1101,42 +1131,25 @@ async function quickAddFromCalendar(req, res) {
         ? String(b.priority).toLowerCase()
         : "medium";
       const todoId = await prisma.$transaction(async (tx) => {
-        let id;
-        try {
-          await tx.$executeRawUnsafe(
-            `INSERT INTO crm_todos
-              (tenant_id, body, frequency, todo_date, priority, carry_forward, status, attachment_json, created_by)
-             VALUES (?, ?, 'once', ?, ?, 0, 'pending', NULL, ?)`,
-            tenantId,
+        const created = await tx.crm_todos.create({
+          data: {
+            tenant_id: tenantId,
             body,
-            todoDate,
-            pri,
-            uid
-          );
-          const idRows = await tx.$queryRawUnsafe("SELECT LAST_INSERT_ID() AS id");
-          id = Number(idRows?.[0]?.id || 0);
-        } catch (e2) {
-          const msg = String(e2?.message || "");
-          if (e2?.code !== "ER_BAD_FIELD_ERROR" && !/Unknown column/i.test(msg)) throw e2;
-          await tx.$executeRawUnsafe(
-            `INSERT INTO crm_todos
-              (body, frequency, todo_date, priority, carry_forward, status, attachment_json, created_by)
-             VALUES (?, 'once', ?, ?, 0, 'pending', NULL, ?)`,
-            body,
-            todoDate,
-            pri,
-            uid
-          );
-          const idRows = await tx.$queryRawUnsafe("SELECT LAST_INSERT_ID() AS id");
-          id = Number(idRows?.[0]?.id || 0);
-        }
-        await tx.$executeRawUnsafe(`DELETE FROM crm_todo_assignees WHERE todo_id = ?`, id);
-        await tx.$executeRawUnsafe(
-          `INSERT INTO crm_todo_assignees (todo_id, user_id) VALUES (?, ?)`,
-          id,
-          uid
-        );
-        return id;
+            frequency: "once",
+            todo_date: toDateOnly(todoDate),
+            priority: pri,
+            carry_forward: false,
+            status: "pending",
+            attachment_json: null,
+            created_by: uid,
+          },
+          select: { id: true },
+        });
+        await tx.crm_todo_assignees.deleteMany({ where: { todo_id: created.id } });
+        await tx.crm_todo_assignees.create({
+          data: { todo_id: created.id, user_id: uid },
+        });
+        return created.id;
       });
       emitTodosChanged({ action: "create", id: todoId, tenantId: tenantId || undefined });
       emitCalendarChanged({ reason: "todos", action: "quick_add", id: todoId });
@@ -1161,11 +1174,14 @@ async function quickAddFromCalendar(req, res) {
         if (s) fu = String(s).slice(0, 10);
       }
       if (!fu) return res.status(400).json({ success: false, message: "follow_up_date or start_at is required" });
-      const [r] = await pool.execute(
-        `UPDATE leads SET follow_up_date = ? WHERE id = ? AND (created_by = ? OR assigned_to = ?)`,
-        [fu, leadId, uid, uid]
-      );
-      if (!r.affectedRows) {
+      const { count } = await prisma.leads.updateMany({
+        where: {
+          id: leadId,
+          OR: [{ created_by: uid }, { assigned_to: uid }],
+        },
+        data: { follow_up_date: toDateOnly(fu) },
+      });
+      if (!count) {
         return res.status(404).json({ success: false, message: "Lead not found or no access" });
       }
       emitCalendarChanged({ reason: "leads", action: "follow_up", id: leadId });
@@ -1181,7 +1197,7 @@ async function quickAddFromCalendar(req, res) {
   } catch (err) {
     const code = err?.code;
     const msg = String(err?.message || "");
-    if (code === "ER_NO_SUCH_TABLE" || /doesn't exist/i.test(msg)) {
+    if (code === "P2021" || code === "ER_NO_SUCH_TABLE" || /doesn't exist/i.test(msg)) {
       console.error("quickAddFromCalendar (missing table):", msg);
       return res.status(503).json({
         success: false,

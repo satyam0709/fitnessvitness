@@ -1,31 +1,12 @@
 const ical = require("node-ical");
 const { createDAVClient } = require("tsdav");
-const { pool } = require("../config/prismaPool");
+const prisma = require("../config/prisma");
 
 const DEFAULT_CALDAV_SERVER = "https://caldav.icloud.com";
 const FETCH_TIMEOUT_MS = 20000;
 
-let tableReady = false;
-
-async function ensureAppleCalendarTable() {
-  if (tableReady) return;
-  await pool.execute(`
-    CREATE TABLE IF NOT EXISTS user_apple_calendar (
-      user_id INT UNSIGNED NOT NULL,
-      ical_url TEXT DEFAULT NULL,
-      caldav_username VARCHAR(255) DEFAULT NULL,
-      caldav_password VARCHAR(255) DEFAULT NULL,
-      caldav_server VARCHAR(255) NOT NULL DEFAULT 'https://caldav.icloud.com',
-      connected_at DATETIME DEFAULT NULL,
-      last_sync_at DATETIME DEFAULT NULL,
-      last_error VARCHAR(500) DEFAULT NULL,
-      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      PRIMARY KEY (user_id),
-      CONSTRAINT fk_user_apple_calendar_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-  `);
-  tableReady = true;
-}
+/** No-op: table is owned by Prisma schema / ensureSchema bootstrap. */
+async function ensureAppleCalendarTable() {}
 
 function parseYmd(v) {
   const s = String(v || "").slice(0, 10);
@@ -227,9 +208,9 @@ async function fetchEventsFromCalDAV(settings, from, to) {
 }
 
 async function getAppleCalendarSettings(userId) {
-  await ensureAppleCalendarTable();
-  const [rows] = await pool.execute(`SELECT * FROM user_apple_calendar WHERE user_id = ?`, [userId]);
-  return rows[0] || null;
+  return prisma.user_apple_calendar.findUnique({
+    where: { user_id: Number(userId) },
+  });
 }
 
 function isConnected(settings) {
@@ -242,8 +223,7 @@ function isConnected(settings) {
 }
 
 async function saveAppleCalendarSettings(userId, body) {
-  await ensureAppleCalendarTable();
-
+  const uid = Number(userId);
   const icalUrl = body.ical_url != null ? normalizeIcalUrl(body.ical_url) || null : undefined;
   const caldavUsername =
     body.caldav_username != null ? String(body.caldav_username).trim() || null : undefined;
@@ -254,72 +234,61 @@ async function saveAppleCalendarSettings(userId, body) {
       ? String(body.caldav_server).trim() || DEFAULT_CALDAV_SERVER
       : undefined;
 
-  const [existing] = await pool.execute(
-    "SELECT user_id FROM user_apple_calendar WHERE user_id = ?",
-    [userId]
-  );
+  const existing = await prisma.user_apple_calendar.findUnique({
+    where: { user_id: uid },
+    select: { user_id: true },
+  });
 
-  if (!existing.length) {
-    await pool.execute(
-      `INSERT INTO user_apple_calendar
-        (user_id, ical_url, caldav_username, caldav_password, caldav_server, connected_at, last_error)
-       VALUES (?, ?, ?, ?, ?, NOW(), NULL)`,
-      [
-        userId,
-        icalUrl ?? null,
-        caldavUsername ?? null,
-        caldavPassword ?? null,
-        caldavServer ?? DEFAULT_CALDAV_SERVER,
-      ]
-    );
+  const now = new Date();
+
+  if (!existing) {
+    await prisma.user_apple_calendar.create({
+      data: {
+        user_id: uid,
+        ical_url: icalUrl ?? null,
+        caldav_username: caldavUsername ?? null,
+        caldav_password: caldavPassword ?? null,
+        caldav_server: caldavServer ?? DEFAULT_CALDAV_SERVER,
+        connected_at: now,
+        last_error: null,
+      },
+    });
   } else {
-    const sets = [];
-    const params = [];
-    if (icalUrl !== undefined) {
-      sets.push("ical_url = ?");
-      params.push(icalUrl);
-    }
-    if (caldavUsername !== undefined) {
-      sets.push("caldav_username = ?");
-      params.push(caldavUsername);
-    }
-    if (caldavPassword !== undefined) {
-      sets.push("caldav_password = ?");
-      params.push(caldavPassword);
-    }
-    if (caldavServer !== undefined) {
-      sets.push("caldav_server = ?");
-      params.push(caldavServer);
-    }
-    sets.push("connected_at = NOW()", "last_error = NULL");
-    params.push(userId);
-    await pool.execute(
-      `UPDATE user_apple_calendar SET ${sets.join(", ")} WHERE user_id = ?`,
-      params
-    );
+    const data = {
+      connected_at: now,
+      last_error: null,
+      updated_at: now,
+    };
+    if (icalUrl !== undefined) data.ical_url = icalUrl;
+    if (caldavUsername !== undefined) data.caldav_username = caldavUsername;
+    if (caldavPassword !== undefined) data.caldav_password = caldavPassword;
+    if (caldavServer !== undefined) data.caldav_server = caldavServer;
+
+    await prisma.user_apple_calendar.update({
+      where: { user_id: uid },
+      data,
+    });
   }
 
-  return getAppleCalendarSettings(userId);
+  return getAppleCalendarSettings(uid);
 }
 
 async function disconnectAppleCalendar(userId) {
-  await ensureAppleCalendarTable();
-  await pool.execute("DELETE FROM user_apple_calendar WHERE user_id = ?", [userId]);
+  await prisma.user_apple_calendar.deleteMany({
+    where: { user_id: Number(userId) },
+  });
 }
 
 async function recordSyncResult(userId, errorMessage) {
-  await ensureAppleCalendarTable();
-  if (errorMessage) {
-    await pool.execute(
-      `UPDATE user_apple_calendar SET last_sync_at = NOW(), last_error = ? WHERE user_id = ?`,
-      [String(errorMessage).slice(0, 500), userId]
-    );
-  } else {
-    await pool.execute(
-      `UPDATE user_apple_calendar SET last_sync_at = NOW(), last_error = NULL WHERE user_id = ?`,
-      [userId]
-    );
-  }
+  const data = {
+    last_sync_at: new Date(),
+    last_error: errorMessage ? String(errorMessage).slice(0, 500) : null,
+    updated_at: new Date(),
+  };
+  await prisma.user_apple_calendar.updateMany({
+    where: { user_id: Number(userId) },
+    data,
+  });
 }
 
 async function fetchAppleEvents(userId, from, to) {

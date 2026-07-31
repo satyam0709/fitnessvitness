@@ -1,6 +1,6 @@
 const express = require("express");
 const { verifyToken } = require("../middleware/verifyToken");
-const { pool } = require("../config/prismaPool");
+const prisma = require("../config/prisma");
 const { nextOccurrence } = require("../utils/todoRecurrence");
 const {
   emitCalendarChanged,
@@ -20,27 +20,10 @@ const OVERDUE_LIMIT = 200;
 const UPCOMING_LIMIT = 50;
 const UPCOMING_DAYS = 14;
 
-let fitnessTableExists = null;
-
 const router = express.Router();
 router.use(verifyToken);
 
 const PRIORITY_RANK = { high: 3, medium: 2, low: 1 };
-
-const columnCache = new Map();
-
-async function hasColumn(table, column) {
-  const key = `${table}.${column}`;
-  if (columnCache.has(key)) return columnCache.get(key);
-  const [rows] = await pool.execute(
-    `SELECT 1 FROM information_schema.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ? LIMIT 1`,
-    [table, column]
-  );
-  const exists = rows.length > 0;
-  columnCache.set(key, exists);
-  return exists;
-}
 
 function pad2(n) {
   return String(n).padStart(2, "0");
@@ -55,6 +38,29 @@ function parseDateParam(raw) {
     return String(raw).slice(0, 10);
   }
   return formatYmd(new Date());
+}
+
+function parseYmdLocal(ymd) {
+  const [y, m, d] = String(ymd).slice(0, 10).split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function dateOnly(ymd) {
+  return parseYmdLocal(ymd);
+}
+
+function dayStartDt(date) {
+  return new Date(`${date}T00:00:00`);
+}
+
+function dayEndDt(date) {
+  return new Date(`${date}T23:59:59`);
+}
+
+function addDaysLocal(ymd, days) {
+  const d = parseYmdLocal(ymd);
+  d.setDate(d.getDate() + days);
+  return d;
 }
 
 function canViewOtherUserToday(req) {
@@ -74,16 +80,8 @@ function resolveUserId(req) {
   return Number.isFinite(uid) && uid > 0 ? uid : null;
 }
 
-function dayStart(date) {
-  return `${date} 00:00:00`;
-}
-
-function dayEndExclusive(date) {
-  return `${date} 23:59:59`;
-}
-
 function addDaysYmd(date, days) {
-  const d = new Date(`${date}T00:00:00`);
+  const d = parseYmdLocal(date);
   d.setDate(d.getDate() + days);
   return formatYmd(d);
 }
@@ -97,6 +95,25 @@ function toIsoDateTime(v) {
   }
   const d = new Date(s);
   return Number.isNaN(d.getTime()) ? s : d.toISOString();
+}
+
+function ymdOf(v) {
+  if (v == null) return "";
+  if (v instanceof Date) return formatYmd(v);
+  return String(v).slice(0, 10);
+}
+
+function decimalOrNull(v) {
+  if (v == null) return null;
+  if (typeof v === "object" && typeof v.toString === "function") return v.toString();
+  return v;
+}
+
+function normalizePriority(p) {
+  if (p == null) return null;
+  const s = String(p).trim().toLowerCase();
+  if (s === "high" || s === "medium" || s === "low") return s;
+  return null;
 }
 
 function truncateText(value, maxLen = 140) {
@@ -143,9 +160,9 @@ function isDateOnlyDue(sourceType, dueRaw) {
   return /^\d{4}-\d{2}-\d{2}$/.test(s.slice(0, 10)) && s.length <= 10;
 }
 
-function formatDisplayDate(ymdOrDate, dateOnly) {
+function formatDisplayDate(ymdOrDate, dateOnlyFlag) {
   const s = String(ymdOrDate).slice(0, 10);
-  const d = dateOnly ? new Date(`${s}T12:00:00`) : new Date(ymdOrDate);
+  const d = dateOnlyFlag ? new Date(`${s}T12:00:00`) : new Date(ymdOrDate);
   if (Number.isNaN(d.getTime())) return s;
   return d.toLocaleDateString("en-IN", {
     weekday: "short",
@@ -155,8 +172,8 @@ function formatDisplayDate(ymdOrDate, dateOnly) {
   });
 }
 
-function formatDisplayTime(dueRaw, dateOnly) {
-  if (dateOnly) return null;
+function formatDisplayTime(dueRaw, dateOnlyFlag) {
+  if (dateOnlyFlag) return null;
   const d = new Date(dueRaw);
   if (Number.isNaN(d.getTime())) return null;
   return d.toLocaleTimeString("en-IN", {
@@ -178,10 +195,10 @@ function buildDueDisplay(item, referenceDateYmd) {
     };
   }
 
-  const dateOnly = isDateOnlyDue(item.source_type, dueRaw);
+  const dateOnlyFlag = isDateOnlyDue(item.source_type, dueRaw);
   const dueYmd = String(dueRaw).slice(0, 10);
-  const dateText = formatDisplayDate(dueRaw, dateOnly);
-  const timeText = formatDisplayTime(dueRaw, dateOnly);
+  const dateText = formatDisplayDate(dueRaw, dateOnlyFlag);
+  const timeText = formatDisplayTime(dueRaw, dateOnlyFlag);
 
   let relative = null;
   if (dueYmd < referenceDateYmd) {
@@ -565,254 +582,348 @@ function buildSummary(items) {
   };
 }
 
-async function fetchTodos(date, userId, tenantId) {
-  const hasClientCol = await hasColumn("crm_todos", "client_id");
-  const hasCategoryCol = await hasColumn("crm_todos", "todo_category");
-  const clientJoin = hasClientCol
-    ? "LEFT JOIN fitness_clients fc ON fc.client_id = t.client_id"
-    : "";
-  const clientSelect = hasClientCol
-    ? ", t.client_id, fc.full_name AS client_name"
-    : ", NULL AS client_id, NULL AS client_name";
-  const categorySelect = hasCategoryCol ? ", t.todo_category" : ", NULL AS todo_category";
+async function mapClientNamesByClientId(clientIds) {
+  const ids = [...new Set(clientIds.filter(Boolean).map(String))];
+  if (!ids.length) return new Map();
+  const rows = await prisma.fitness_clients.findMany({
+    where: { client_id: { in: ids } },
+    select: { client_id: true, full_name: true },
+  });
+  return new Map(rows.map((r) => [r.client_id, r.full_name]));
+}
 
-  const [rows] = await pool.execute(
-    `SELECT t.id, t.body, t.body AS title, t.todo_date AS due_date, t.priority, t.status,
-            t.frequency, t.id AS source_id, 'todo' AS source_type,
-            CASE WHEN t.todo_date < ? THEN 1 ELSE 0 END AS is_overdue
-            ${categorySelect}
-            ${clientSelect}
-     FROM crm_todos t
-     ${clientJoin}
-     WHERE t.is_deleted = 0
-       AND t.status = 'pending'
-       AND (? IS NULL OR t.tenant_id = ?)
-       AND (
-         t.todo_date = ?
-         OR (t.todo_date < ? AND t.carry_forward = 1)
-       )
-       AND (
-         t.created_by = ?
-         OR EXISTS (SELECT 1 FROM crm_todo_assignees a WHERE a.todo_id = t.id AND a.user_id = ?)
-       )`,
-    [date, tenantId, tenantId, date, date, userId, userId]
-  );
-  return rows;
+async function mapClientsByInternalId(internalIds) {
+  const ids = [...new Set(internalIds.filter((n) => Number.isFinite(n) && n > 0))];
+  if (!ids.length) return new Map();
+  const rows = await prisma.fitness_clients.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, client_id: true, full_name: true },
+  });
+  return new Map(rows.map((r) => [r.id, r]));
+}
+
+function tenantClause(tenantId) {
+  if (tenantId == null) return {};
+  return { tenant_id: tenantId };
+}
+
+async function fetchTodos(date, userId, tenantId) {
+  const d = dateOnly(date);
+  const rows = await prisma.crm_todos.findMany({
+    where: {
+      is_deleted: false,
+      status: "pending",
+      ...tenantClause(tenantId),
+      AND: [
+        {
+          OR: [
+            { todo_date: d },
+            { AND: [{ todo_date: { lt: d } }, { carry_forward: true }] },
+          ],
+        },
+        {
+          OR: [
+            { created_by: userId },
+            { crm_todo_assignees: { some: { user_id: userId } } },
+          ],
+        },
+      ],
+    },
+    select: {
+      id: true,
+      body: true,
+      todo_date: true,
+      priority: true,
+      status: true,
+      frequency: true,
+      todo_category: true,
+      client_id: true,
+    },
+  });
+
+  const nameMap = await mapClientNamesByClientId(rows.map((r) => r.client_id));
+  return rows.map((t) => ({
+    id: t.id,
+    body: t.body,
+    title: t.body,
+    due_date: t.todo_date,
+    priority: t.priority,
+    status: t.status,
+    frequency: t.frequency,
+    source_id: t.id,
+    source_type: "todo",
+    is_overdue: ymdOf(t.todo_date) < date ? 1 : 0,
+    todo_category: t.todo_category ?? null,
+    client_id: t.client_id ?? null,
+    client_name: t.client_id ? nameMap.get(t.client_id) ?? null : null,
+  }));
 }
 
 async function fetchMeetings(date, userId) {
-  const hasConsultType = await hasColumn("meetings", "consultation_type");
-  const hasClientCol = await hasColumn("meetings", "client_id");
-  const hasIsDeleted = await hasColumn("meetings", "is_deleted");
-  const consultSelect = hasConsultType ? ", m.consultation_type" : ", NULL AS consultation_type";
-  const clientJoin = hasClientCol
-    ? "LEFT JOIN fitness_clients fc ON fc.client_id = m.client_id"
-    : "";
-  const clientSelect = hasClientCol
-    ? ", m.client_id, fc.full_name AS client_name"
-    : ", NULL AS client_id, NULL AS client_name";
+  const start = dayStartDt(date);
+  const end = dayEndDt(date);
+  const rows = await prisma.meetings.findMany({
+    where: {
+      is_deleted: false,
+      start_time: { gte: start, lte: end },
+      status: "scheduled",
+      OR: [
+        { assigned_to_user_id: userId },
+        { organizer_id: userId },
+        { meeting_attendees: { some: { user_id: userId } } },
+      ],
+    },
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      start_time: true,
+      end_time: true,
+      meeting_type: true,
+      status: true,
+      location: true,
+      meet_link: true,
+      consultation_type: true,
+      client_id: true,
+    },
+  });
 
-  const where = [
-    "m.start_time >= ?",
-    "m.start_time <= ?",
-    "m.status = 'scheduled'",
-    "(m.assigned_to_user_id = ? OR m.organizer_id = ? OR EXISTS (SELECT 1 FROM meeting_attendees ma WHERE ma.meeting_id = m.id AND ma.user_id = ?))",
-  ];
-  if (hasIsDeleted) where.unshift("m.is_deleted = 0");
-
-  const [rows] = await pool.execute(
-    `SELECT m.id, m.title, m.description, m.start_time, m.end_time, m.meeting_type, m.status,
-            m.location, m.meet_link, m.start_time AS due_date, m.id AS source_id,
-            'meeting' AS source_type, 0 AS is_overdue, NULL AS priority
-            ${consultSelect}
-            ${clientSelect}
-     FROM meetings m
-     ${clientJoin}
-     WHERE ${where.join(" AND ")}`,
-    [dayStart(date), dayEndExclusive(date), userId, userId, userId]
-  );
-  return rows;
+  const nameMap = await mapClientNamesByClientId(rows.map((r) => r.client_id));
+  return rows.map((m) => ({
+    id: m.id,
+    title: m.title,
+    description: m.description,
+    start_time: m.start_time,
+    end_time: m.end_time,
+    meeting_type: m.meeting_type,
+    status: m.status,
+    location: m.location,
+    meet_link: m.meet_link,
+    due_date: m.start_time,
+    source_id: m.id,
+    source_type: "meeting",
+    is_overdue: 0,
+    priority: null,
+    consultation_type: m.consultation_type ?? null,
+    client_id: m.client_id ?? null,
+    client_name: m.client_id ? nameMap.get(m.client_id) ?? null : null,
+  }));
 }
 
 async function fetchReminders(date, userId) {
-  const hasClientCol = await hasColumn("reminders", "client_id");
-  const hasCategoryCol = await hasColumn("reminders", "reminder_category");
-  const clientJoin = hasClientCol
-    ? "LEFT JOIN fitness_clients fc ON fc.client_id = r.client_id"
-    : "";
-  const clientSelect = hasClientCol
-    ? ", r.client_id, fc.full_name AS client_name"
-    : ", NULL AS client_id, NULL AS client_name";
-  const categorySelect = hasCategoryCol
-    ? ", r.reminder_category"
-    : ", r.reminder_type AS reminder_category";
+  const start = dayStartDt(date);
+  const end = dayEndDt(date);
+  const rows = await prisma.reminders.findMany({
+    where: {
+      is_deleted: false,
+      is_done: false,
+      OR: [
+        { remind_at: { gte: start, lte: end } },
+        { remind_at: { lt: start } },
+      ],
+      AND: [
+        {
+          OR: [{ assigned_to_user_id: userId }, { user_id: userId }],
+        },
+      ],
+    },
+    include: {
+      leads: { select: { name: true } },
+    },
+    orderBy: { remind_at: "asc" },
+    take: OVERDUE_LIMIT,
+  });
 
-  const [rows] = await pool.execute(
-    `SELECT r.id, r.title, r.note, r.remind_at AS due_date, r.remind_at,
-            r.reminder_type, r.lead_id, l.name AS lead_name, r.is_done AS status,
-            r.id AS source_id, 'reminder' AS source_type, NULL AS priority
-            ${categorySelect}
-            ${clientSelect}
-     FROM reminders r
-     LEFT JOIN leads l ON l.id = r.lead_id
-     ${clientJoin}
-     WHERE r.is_deleted = 0
-       AND r.is_done = 0
-       AND (
-         (r.remind_at >= ? AND r.remind_at <= ?)
-         OR (r.remind_at < ?)
-       )
-       AND (r.assigned_to_user_id = ? OR r.user_id = ?)
-     ORDER BY r.remind_at ASC
-     LIMIT ${OVERDUE_LIMIT}`,
-    [dayStart(date), dayEndExclusive(date), dayStart(date), userId, userId]
-  );
   return rows.map((r) => ({
-    ...r,
-    is_overdue: String(r.due_date).slice(0, 10) < date ? 1 : 0,
+    id: r.id,
+    title: r.title,
+    note: r.note,
+    due_date: r.remind_at,
+    remind_at: r.remind_at,
+    reminder_type: r.reminder_type,
+    reminder_category: r.reminder_type,
+    lead_id: r.lead_id,
+    lead_name: r.leads?.name ?? null,
     status: "pending",
+    source_id: r.id,
+    source_type: "reminder",
+    priority: null,
+    client_id: null,
+    client_name: null,
+    is_overdue: ymdOf(r.remind_at) < date ? 1 : 0,
   }));
 }
 
 async function fetchLeadFollowups(date, userId, tenantId) {
-  const hasHealthGoal = await hasColumn("leads", "health_goal");
-  const hasEnquiry = await hasColumn("leads", "enquiry_stage");
-  const hasTenant = await hasColumn("leads", "tenant_id");
-  const hasIsDeleted = await hasColumn("leads", "is_deleted");
-  const extraSelect = [
-    hasHealthGoal ? "l.health_goal" : "NULL AS health_goal",
-    hasEnquiry ? "l.enquiry_stage" : "NULL AS enquiry_stage",
-  ].join(", ");
+  const d = dateOnly(date);
+  const rows = await prisma.leads.findMany({
+    where: {
+      is_deleted: false,
+      ...tenantClause(tenantId),
+      follow_up_date: { not: null, lte: d },
+      status: { notIn: ["confirm", "cancel"] },
+      OR: [{ assigned_to: userId }, { created_by: userId }],
+    },
+    select: {
+      id: true,
+      name: true,
+      phone: true,
+      email: true,
+      follow_up_date: true,
+      status: true,
+      source: true,
+    },
+    orderBy: { follow_up_date: "asc" },
+    take: OVERDUE_LIMIT,
+  });
 
-  const params = [];
-  const where = [];
-  if (hasIsDeleted) where.push("l.is_deleted = 0");
-  if (hasTenant) {
-    where.push("(? IS NULL OR l.tenant_id = ?)");
-    params.push(tenantId, tenantId);
-  }
-  where.push(
-    "l.follow_up_date IS NOT NULL",
-    "l.follow_up_date <= ?",
-    "l.status NOT IN ('confirm', 'cancel')",
-    "(l.assigned_to = ? OR l.created_by = ?)"
-  );
-  params.push(date, userId, userId);
-
-  const [rows] = await pool.execute(
-    `SELECT l.id, l.name AS title, l.phone, l.email, l.follow_up_date AS due_date,
-            l.status, l.source, ${extraSelect},
-            l.id AS source_id, 'lead_followup' AS source_type, NULL AS priority,
-            NULL AS client_id, NULL AS client_name,
-            CASE WHEN l.follow_up_date < ? THEN 1 ELSE 0 END AS is_overdue
-     FROM leads l
-     WHERE ${where.join(" AND ")}
-     ORDER BY l.follow_up_date ASC
-     LIMIT ${OVERDUE_LIMIT}`,
-    [date, ...params]
-  );
-  return rows;
-}
-
-async function fitnessClientsTableExists() {
-  if (fitnessTableExists !== null) return fitnessTableExists;
-  const [tables] = await pool.execute(
-    `SELECT 1 FROM information_schema.TABLES
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fitness_clients' LIMIT 1`
-  );
-  fitnessTableExists = tables.length > 0;
-  return fitnessTableExists;
+  return rows.map((l) => ({
+    id: l.id,
+    title: l.name,
+    phone: l.phone,
+    email: l.email,
+    due_date: l.follow_up_date,
+    status: l.status,
+    source: l.source,
+    health_goal: null,
+    enquiry_stage: null,
+    source_id: l.id,
+    source_type: "lead_followup",
+    priority: null,
+    client_id: null,
+    client_name: null,
+    is_overdue: ymdOf(l.follow_up_date) < date ? 1 : 0,
+  }));
 }
 
 async function fetchTasks(date, userId, tenantId) {
-  const hasClientCol = await hasColumn("tasks", "client_id");
-  const hasTenant = await hasColumn("tasks", "tenant_id");
-  const hasCategory = await hasColumn("tasks", "task_category");
-  const hasType = await hasColumn("tasks", "task_type");
-  const hasIsDeleted = await hasColumn("tasks", "is_deleted");
-  const categorySelect = hasCategory ? ", t.task_category" : ", NULL AS task_category";
-  const typeSelect = hasType ? ", t.task_type" : ", NULL AS task_type";
-  const clientJoin = hasClientCol ? "LEFT JOIN fitness_clients fc ON fc.id = t.client_id" : "";
-  const clientSelect = hasClientCol
-    ? ", fc.client_id, fc.full_name AS client_name"
-    : ", NULL AS client_id, NULL AS client_name";
+  const d = dateOnly(date);
+  const rows = await prisma.tasks.findMany({
+    where: {
+      is_deleted: false,
+      ...tenantClause(tenantId),
+      due_date: { not: null, lte: d },
+      status: { notIn: ["done", "completed"] },
+      OR: [{ assigned_to: userId }, { created_by: userId }],
+    },
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      due_date: true,
+      priority: true,
+      status: true,
+      lead_id: true,
+      task_category: true,
+      task_type: true,
+      client_id: true,
+    },
+    orderBy: { due_date: "asc" },
+    take: OVERDUE_LIMIT,
+  });
 
-  const where = ["t.due_date IS NOT NULL", "t.status NOT IN ('done','completed')"];
-  const params = [];
-  if (hasIsDeleted) where.push("t.is_deleted = 0");
-  if (hasTenant) {
-    where.push("(? IS NULL OR t.tenant_id = ?)");
-    params.push(tenantId, tenantId);
-  }
-  where.push("DATE(t.due_date) <= ?", "(t.assigned_to = ? OR t.created_by = ?)");
-  params.push(date, userId, userId);
-
-  const [rows] = await pool.execute(
-    `SELECT t.id, t.title, t.description, t.due_date, t.priority, t.status, t.lead_id,
-            t.id AS source_id, 'task' AS source_type,
-            CASE WHEN DATE(t.due_date) < ? THEN 1 ELSE 0 END AS is_overdue
-            ${categorySelect}
-            ${typeSelect}
-            ${clientSelect}
-     FROM tasks t
-     ${clientJoin}
-     WHERE ${where.join(" AND ")}
-     ORDER BY t.due_date ASC
-     LIMIT ${OVERDUE_LIMIT}`,
-    [date, ...params]
-  );
-  return rows;
+  const clientMap = await mapClientsByInternalId(rows.map((r) => r.client_id));
+  return rows.map((t) => {
+    const fc = t.client_id != null ? clientMap.get(t.client_id) : null;
+    return {
+      id: t.id,
+      title: t.title,
+      description: t.description,
+      due_date: t.due_date,
+      priority: t.priority,
+      status: t.status,
+      lead_id: t.lead_id,
+      source_id: t.id,
+      source_type: "task",
+      is_overdue: ymdOf(t.due_date) < date ? 1 : 0,
+      task_category: t.task_category ?? null,
+      task_type: t.task_type ?? null,
+      client_id: fc?.client_id ?? null,
+      client_name: fc?.full_name ?? null,
+    };
+  });
 }
 
 async function fetchCalendarEvents(date, userId) {
-  const [tables] = await pool.execute(
-    `SELECT 1 FROM information_schema.TABLES
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'crm_calendar_events' LIMIT 1`
-  );
-  if (!tables.length) return [];
+  const start = dayStartDt(date);
+  const end = dayEndDt(date);
+  const rows = await prisma.crm_calendar_events.findMany({
+    where: {
+      user_id: userId,
+      start_at: { lte: end },
+    },
+    select: {
+      id: true,
+      title: true,
+      start_at: true,
+      end_at: true,
+      all_day: true,
+      category: true,
+      description: true,
+    },
+  });
 
-  const hasDesc = await hasColumn("crm_calendar_events", "description");
-  const descSelect = hasDesc ? ", e.description" : ", NULL AS description";
-  const [rows] = await pool.execute(
-    `SELECT e.id, e.title, e.start_at, e.end_at, e.all_day, e.category
-            ${descSelect},
-            e.start_at AS due_date, e.id AS source_id, 'calendar_event' AS source_type,
-            0 AS is_overdue, NULL AS priority, NULL AS client_id, NULL AS client_name,
-            'scheduled' AS status
-     FROM crm_calendar_events e
-     WHERE e.user_id = ?
-       AND e.start_at <= ?
-       AND COALESCE(e.end_at, e.start_at) >= ?`,
-    [userId, dayEndExclusive(date), dayStart(date)]
-  );
-  return rows;
+  // Match SQL: COALESCE(end_at, start_at) >= start
+  return rows
+    .filter((e) => (e.end_at || e.start_at) >= start)
+    .map((e) => ({
+      id: e.id,
+      title: e.title,
+      start_at: e.start_at,
+      end_at: e.end_at,
+      all_day: e.all_day,
+      category: e.category,
+      description: e.description ?? null,
+      due_date: e.start_at,
+      source_id: e.id,
+      source_type: "calendar_event",
+      is_overdue: 0,
+      priority: null,
+      client_id: null,
+      client_name: null,
+      status: "scheduled",
+    }));
 }
 
 async function fetchUpcomingCalendarEvents(date, userId) {
-  const [tables] = await pool.execute(
-    `SELECT 1 FROM information_schema.TABLES
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'crm_calendar_events' LIMIT 1`
-  );
-  if (!tables.length) return [];
-
   const until = addDaysYmd(date, UPCOMING_DAYS);
-  const hasDesc = await hasColumn("crm_calendar_events", "description");
-  const descSelect = hasDesc ? ", e.description" : ", NULL AS description";
-  const [rows] = await pool.execute(
-    `SELECT e.id, e.title, e.start_at, e.end_at, e.all_day, e.category
-            ${descSelect},
-            e.start_at AS due_date, e.id AS source_id, 'calendar_event' AS source_type,
-            0 AS is_overdue, NULL AS priority, NULL AS client_id, NULL AS client_name,
-            'scheduled' AS status
-     FROM crm_calendar_events e
-     WHERE e.user_id = ?
-       AND e.start_at > ?
-       AND e.start_at <= ?
-     ORDER BY e.start_at ASC
-     LIMIT ${UPCOMING_LIMIT}`,
-    [userId, dayEndExclusive(date), dayEndExclusive(until)]
-  );
-  return rows;
+  const after = dayEndDt(date);
+  const untilEnd = dayEndDt(until);
+  const rows = await prisma.crm_calendar_events.findMany({
+    where: {
+      user_id: userId,
+      start_at: { gt: after, lte: untilEnd },
+    },
+    select: {
+      id: true,
+      title: true,
+      start_at: true,
+      end_at: true,
+      all_day: true,
+      category: true,
+      description: true,
+    },
+    orderBy: { start_at: "asc" },
+    take: UPCOMING_LIMIT,
+  });
+
+  return rows.map((e) => ({
+    id: e.id,
+    title: e.title,
+    start_at: e.start_at,
+    end_at: e.end_at,
+    all_day: e.all_day,
+    category: e.category,
+    description: e.description ?? null,
+    due_date: e.start_at,
+    source_id: e.id,
+    source_type: "calendar_event",
+    is_overdue: 0,
+    priority: null,
+    client_id: null,
+    client_name: null,
+    status: "scheduled",
+  }));
 }
 
 async function getGoogleTokenForUser() {
@@ -973,466 +1084,625 @@ async function fetchAppleEventsUpcoming(date, userId) {
   }
 }
 
-async function opportunitiesTableExists() {
-  const [rows] = await pool.execute(
-    `SELECT 1 FROM information_schema.TABLES
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'opportunities' LIMIT 1`
-  );
-  return rows.length > 0;
-}
-
 async function fetchOpportunityFollowups(date, userId) {
-  if (!(await opportunitiesTableExists())) return [];
+  const start = dayStartDt(date);
+  const end = dayEndDt(date);
+  const rows = await prisma.opportunities.findMany({
+    where: {
+      is_deleted: false,
+      followup_at: { not: null, lte: end },
+      stage: { notIn: ["closed_won", "closed_lost"] },
+      OR: [{ owner_user_id: userId }, { created_by: userId }],
+    },
+    select: {
+      id: true,
+      title: true,
+      followup_at: true,
+      followup_type: true,
+      stage: true,
+      product_category: true,
+      visit_purpose: true,
+      phone: true,
+    },
+    orderBy: { followup_at: "asc" },
+    take: OVERDUE_LIMIT,
+  });
 
-  const hasVisitPurpose = await hasColumn("opportunities", "visit_purpose");
-  const hasPhone = await hasColumn("opportunities", "phone");
-  const visitSelect = hasVisitPurpose ? ", o.visit_purpose" : ", NULL AS visit_purpose";
-  const phoneSelect = hasPhone ? ", o.phone" : ", NULL AS phone";
-
-  const [rows] = await pool.execute(
-    `SELECT o.id, o.title, o.followup_at AS due_date, o.followup_type, o.stage AS status,
-            o.product_category, o.id AS source_id, 'opportunity_followup' AS source_type,
-            NULL AS priority, NULL AS client_id, NULL AS client_name
-            ${visitSelect}
-            ${phoneSelect},
-            CASE WHEN o.followup_at < ? THEN 1 ELSE 0 END AS is_overdue
-     FROM opportunities o
-     WHERE o.is_deleted = 0
-       AND o.followup_at IS NOT NULL
-       AND o.followup_at <= ?
-       AND o.stage NOT IN ('closed_won', 'closed_lost')
-       AND (o.owner_user_id = ? OR o.created_by = ?)
-     ORDER BY o.followup_at ASC
-     LIMIT ${OVERDUE_LIMIT}`,
-    [dayStart(date), dayEndExclusive(date), userId, userId]
-  );
-  return rows.map((r) => ({
-    ...r,
+  return rows.map((o) => ({
+    id: o.id,
+    title: o.title,
+    due_date: o.followup_at,
+    followup_type: o.followup_type,
     status: "pending",
+    product_category: o.product_category,
+    source_id: o.id,
+    source_type: "opportunity_followup",
+    priority: null,
+    client_id: null,
+    client_name: null,
+    visit_purpose: o.visit_purpose ?? null,
+    phone: o.phone ?? null,
+    is_overdue: o.followup_at < start ? 1 : 0,
   }));
 }
 
-async function collectionsTableExists() {
-  const [rows] = await pool.execute(
-    `SELECT 1 FROM information_schema.TABLES
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fitness_collections' LIMIT 1`
-  );
-  return rows.length > 0;
-}
-
 async function fetchCollectionFollowups(date, userId, role) {
-  if (!(await collectionsTableExists())) return [];
   const collectionService = require("../services/collectionService");
   return collectionService.fetchCollectionFollowups(date, userId, role);
 }
 
 async function fetchClientFollowups(date) {
-  if (!(await fitnessClientsTableExists())) return [];
+  const d = dateOnly(date);
+  const rows = await prisma.fitness_clients.findMany({
+    where: {
+      status: "Active",
+      next_due_date: { not: null, lte: d },
+    },
+    select: {
+      client_id: true,
+      full_name: true,
+      next_due_date: true,
+      phone: true,
+      email: true,
+      health_goal: true,
+      plan_type: true,
+      progress: true,
+      status: true,
+    },
+  });
 
-  const [rows] = await pool.execute(
-    `SELECT fc.client_id AS id,
-            CONCAT('Follow-up due: ', fc.full_name) AS title,
-            fc.next_due_date AS due_date, fc.phone, fc.email,
-            fc.health_goal, fc.plan_type, fc.progress,
-            fc.client_id, fc.full_name AS client_name,
-            'client_followup' AS source_type,
-            CASE WHEN fc.next_due_date < ? THEN 1 ELSE 0 END AS is_overdue,
-            fc.client_id AS source_id, fc.status, NULL AS priority
-     FROM fitness_clients fc
-     WHERE fc.status = 'Active'
-       AND fc.next_due_date IS NOT NULL
-       AND fc.next_due_date <= ?`,
-    [date, date]
-  );
-  return rows;
-}
-
-async function fitnessClientTasksTableExists() {
-  const [rows] = await pool.execute(
-    `SELECT 1 FROM information_schema.TABLES
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'fitness_client_tasks' LIMIT 1`
-  );
-  return rows.length > 0;
+  return rows.map((fc) => ({
+    id: fc.client_id,
+    title: `Follow-up due: ${fc.full_name}`,
+    due_date: fc.next_due_date,
+    phone: fc.phone,
+    email: fc.email,
+    health_goal: fc.health_goal,
+    plan_type: fc.plan_type,
+    progress: fc.progress,
+    client_id: fc.client_id,
+    client_name: fc.full_name,
+    source_type: "client_followup",
+    is_overdue: ymdOf(fc.next_due_date) < date ? 1 : 0,
+    source_id: fc.client_id,
+    status: fc.status,
+    priority: null,
+  }));
 }
 
 async function fetchFitnessClientTasks(date) {
-  if (!(await fitnessClientTasksTableExists())) return [];
+  const d = dateOnly(date);
+  const rows = await prisma.fitness_client_tasks.findMany({
+    where: {
+      due_date: { not: null, lte: d },
+      status: { notIn: ["Done", "Carried_Forward"] },
+    },
+    select: {
+      id: true,
+      task_description: true,
+      due_date: true,
+      priority: true,
+      status: true,
+      period: true,
+      notes: true,
+      client_id: true,
+    },
+    orderBy: { due_date: "asc" },
+    take: OVERDUE_LIMIT,
+  });
 
-  const [rows] = await pool.execute(
-    `SELECT t.id,
-            COALESCE(NULLIF(TRIM(t.task_description), ''), 'Client task') AS title,
-            t.task_description, t.due_date, t.priority, t.status, t.period, t.notes,
-            t.client_id, fc.full_name AS client_name,
-            t.id AS source_id, 'fitness_client_task' AS source_type,
-            CASE WHEN t.due_date < ? THEN 1 ELSE 0 END AS is_overdue,
-            CASE LOWER(TRIM(t.priority))
-              WHEN 'high' THEN 'high'
-              WHEN 'medium' THEN 'medium'
-              WHEN 'low' THEN 'low'
-              ELSE NULL
-            END AS priority_norm
-     FROM fitness_client_tasks t
-     LEFT JOIN fitness_clients fc ON fc.client_id = t.client_id
-     WHERE t.due_date IS NOT NULL
-       AND t.due_date <= ?
-       AND t.status NOT IN ('Done', 'Carried Forward')
-     ORDER BY t.due_date ASC
-     LIMIT ${OVERDUE_LIMIT}`,
-    [date, date]
-  );
-  return rows.map((r) => ({ ...r, priority: r.priority_norm || null }));
+  const nameMap = await mapClientNamesByClientId(rows.map((r) => r.client_id));
+  return rows.map((t) => {
+    const desc = String(t.task_description || "").trim();
+    return {
+      id: t.id,
+      title: desc || "Client task",
+      task_description: t.task_description,
+      due_date: t.due_date,
+      priority: normalizePriority(t.priority),
+      status: t.status,
+      period: t.period,
+      notes: t.notes,
+      client_id: t.client_id,
+      client_name: nameMap.get(t.client_id) ?? null,
+      source_id: t.id,
+      source_type: "fitness_client_task",
+      is_overdue: ymdOf(t.due_date) < date ? 1 : 0,
+    };
+  });
 }
 
 async function fetchPaymentDues(date) {
-  if (!(await hasColumn("fitness_transactions", "payment_due_date"))) return [];
+  const d = dateOnly(date);
+  const rows = await prisma.fitness_transactions.findMany({
+    where: {
+      payment_due_date: { not: null, lte: d },
+      pending_inr: { gt: 0 },
+    },
+    select: {
+      id: true,
+      payment_due_date: true,
+      pending_inr: true,
+      received_inr: true,
+      product_plan: true,
+      type: true,
+      transaction_date: true,
+      pay_mode: true,
+      client_id: true,
+    },
+    orderBy: { payment_due_date: "asc" },
+    take: OVERDUE_LIMIT,
+  });
 
-  const [rows] = await pool.execute(
-    `SELECT ft.id,
-            CONCAT('Payment due: ', COALESCE(fc.full_name, ft.product_plan)) AS title,
-            ft.payment_due_date AS due_date,
-            ft.pending_inr, ft.received_inr, ft.product_plan, ft.type AS transaction_type,
-            ft.transaction_date, ft.pay_mode,
-            ft.client_id, fc.full_name AS client_name,
-            'fitness_payment_due' AS source_type,
-            CASE WHEN DATE(ft.payment_due_date) < ? THEN 1 ELSE 0 END AS is_overdue,
-            ft.id AS source_id, NULL AS status, 'high' AS priority
-     FROM fitness_transactions ft
-     LEFT JOIN fitness_clients fc ON fc.client_id = ft.client_id
-     WHERE ft.payment_due_date IS NOT NULL
-       AND COALESCE(ft.pending_inr, 0) > 0
-       AND DATE(ft.payment_due_date) <= ?
-     ORDER BY ft.payment_due_date ASC
-     LIMIT ${OVERDUE_LIMIT}`,
-    [date, date]
-  );
-  return rows;
+  const nameMap = await mapClientNamesByClientId(rows.map((r) => r.client_id));
+  return rows.map((ft) => {
+    const clientName = ft.client_id ? nameMap.get(ft.client_id) ?? null : null;
+    return {
+      id: ft.id,
+      title: `Payment due: ${clientName || ft.product_plan}`,
+      due_date: ft.payment_due_date,
+      pending_inr: decimalOrNull(ft.pending_inr),
+      received_inr: decimalOrNull(ft.received_inr),
+      product_plan: ft.product_plan,
+      transaction_type: ft.type,
+      transaction_date: ft.transaction_date,
+      pay_mode: ft.pay_mode,
+      client_id: ft.client_id,
+      client_name: clientName,
+      source_type: "fitness_payment_due",
+      is_overdue: ymdOf(ft.payment_due_date) < date ? 1 : 0,
+      source_id: ft.id,
+      status: null,
+      priority: "high",
+    };
+  });
 }
 
 async function fetchUpcomingTasks(date, userId, tenantId) {
   const until = addDaysYmd(date, UPCOMING_DAYS);
-  const hasClientCol = await hasColumn("tasks", "client_id");
-  const hasTenant = await hasColumn("tasks", "tenant_id");
-  const hasCategory = await hasColumn("tasks", "task_category");
-  const hasType = await hasColumn("tasks", "task_type");
-  const hasIsDeleted = await hasColumn("tasks", "is_deleted");
-  const categorySelect = hasCategory ? ", t.task_category" : ", NULL AS task_category";
-  const typeSelect = hasType ? ", t.task_type" : ", NULL AS task_type";
-  const clientJoin = hasClientCol ? "LEFT JOIN fitness_clients fc ON fc.id = t.client_id" : "";
-  const clientSelect = hasClientCol
-    ? ", fc.client_id, fc.full_name AS client_name"
-    : ", NULL AS client_id, NULL AS client_name";
-  const where = [
-    "t.due_date IS NOT NULL",
-    "DATE(t.due_date) > ?",
-    "DATE(t.due_date) <= ?",
-    "t.status NOT IN ('done','completed')",
-    "(t.assigned_to = ? OR t.created_by = ?)",
-  ];
-  const params = [date, until, userId, userId];
-  if (hasIsDeleted) where.unshift("t.is_deleted = 0");
-  if (hasTenant) {
-    where.push("(? IS NULL OR t.tenant_id = ?)");
-    params.push(tenantId, tenantId);
-  }
+  const after = dateOnly(date);
+  const untilD = dateOnly(until);
+  const rows = await prisma.tasks.findMany({
+    where: {
+      is_deleted: false,
+      ...tenantClause(tenantId),
+      due_date: { gt: after, lte: untilD },
+      status: { notIn: ["done", "completed"] },
+      OR: [{ assigned_to: userId }, { created_by: userId }],
+    },
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      due_date: true,
+      priority: true,
+      status: true,
+      lead_id: true,
+      task_category: true,
+      task_type: true,
+      client_id: true,
+    },
+    orderBy: { due_date: "asc" },
+    take: UPCOMING_LIMIT,
+  });
 
-  const [rows] = await pool.execute(
-    `SELECT t.id, t.title, t.description, t.due_date, t.priority, t.status, t.lead_id,
-            t.id AS source_id, 'task' AS source_type,
-            0 AS is_overdue
-            ${categorySelect}
-            ${typeSelect}
-            ${clientSelect}
-     FROM tasks t
-     ${clientJoin}
-     WHERE ${where.join(" AND ")}
-     ORDER BY t.due_date ASC
-     LIMIT ${UPCOMING_LIMIT}`,
-    params
-  );
-  return rows;
+  const clientMap = await mapClientsByInternalId(rows.map((r) => r.client_id));
+  return rows.map((t) => {
+    const fc = t.client_id != null ? clientMap.get(t.client_id) : null;
+    return {
+      id: t.id,
+      title: t.title,
+      description: t.description,
+      due_date: t.due_date,
+      priority: t.priority,
+      status: t.status,
+      lead_id: t.lead_id,
+      source_id: t.id,
+      source_type: "task",
+      is_overdue: 0,
+      task_category: t.task_category ?? null,
+      task_type: t.task_type ?? null,
+      client_id: fc?.client_id ?? null,
+      client_name: fc?.full_name ?? null,
+    };
+  });
 }
 
 async function fetchUpcomingMeetings(date, userId) {
   const until = addDaysYmd(date, UPCOMING_DAYS);
-  const hasClientCol = await hasColumn("meetings", "client_id");
-  const hasIsDeleted = await hasColumn("meetings", "is_deleted");
-  const clientJoin = hasClientCol
-    ? "LEFT JOIN fitness_clients fc ON fc.client_id = m.client_id"
-    : "";
-  const clientSelect = hasClientCol
-    ? ", m.client_id, fc.full_name AS client_name"
-    : ", NULL AS client_id, NULL AS client_name";
-  const where = [
-    "m.start_time > ?",
-    "m.start_time <= ?",
-    "m.status = 'scheduled'",
-    "(m.assigned_to_user_id = ? OR m.organizer_id = ? OR EXISTS (SELECT 1 FROM meeting_attendees ma WHERE ma.meeting_id = m.id AND ma.user_id = ?))",
-  ];
-  if (hasIsDeleted) where.unshift("m.is_deleted = 0");
-  const [rows] = await pool.execute(
-    `SELECT m.id, m.title, m.description, m.start_time, m.end_time,
-            m.start_time AS due_date, m.status, m.meeting_type,
-            m.id AS source_id, 'meeting' AS source_type,
-            0 AS is_overdue, NULL AS priority
-            ${clientSelect}
-     FROM meetings m
-     ${clientJoin}
-     WHERE ${where.join(" AND ")}
-     ORDER BY m.start_time ASC
-     LIMIT ${UPCOMING_LIMIT}`,
-    [dayEndExclusive(date), dayEndExclusive(until), userId, userId, userId]
-  );
-  return rows;
+  const after = dayEndDt(date);
+  const untilEnd = dayEndDt(until);
+  const rows = await prisma.meetings.findMany({
+    where: {
+      is_deleted: false,
+      start_time: { gt: after, lte: untilEnd },
+      status: "scheduled",
+      OR: [
+        { assigned_to_user_id: userId },
+        { organizer_id: userId },
+        { meeting_attendees: { some: { user_id: userId } } },
+      ],
+    },
+    select: {
+      id: true,
+      title: true,
+      description: true,
+      start_time: true,
+      end_time: true,
+      status: true,
+      meeting_type: true,
+      client_id: true,
+    },
+    orderBy: { start_time: "asc" },
+    take: UPCOMING_LIMIT,
+  });
+
+  const nameMap = await mapClientNamesByClientId(rows.map((r) => r.client_id));
+  return rows.map((m) => ({
+    id: m.id,
+    title: m.title,
+    description: m.description,
+    start_time: m.start_time,
+    end_time: m.end_time,
+    due_date: m.start_time,
+    status: m.status,
+    meeting_type: m.meeting_type,
+    source_id: m.id,
+    source_type: "meeting",
+    is_overdue: 0,
+    priority: null,
+    client_id: m.client_id ?? null,
+    client_name: m.client_id ? nameMap.get(m.client_id) ?? null : null,
+  }));
 }
 
 async function fetchUpcomingReminders(date, userId) {
   const until = addDaysYmd(date, UPCOMING_DAYS);
-  const hasClientCol = await hasColumn("reminders", "client_id");
-  const hasCategoryCol = await hasColumn("reminders", "reminder_category");
-  const clientJoin = hasClientCol
-    ? "LEFT JOIN fitness_clients fc ON fc.client_id = r.client_id"
-    : "";
-  const clientSelect = hasClientCol
-    ? ", r.client_id, fc.full_name AS client_name"
-    : ", NULL AS client_id, NULL AS client_name";
-  const categorySelect = hasCategoryCol
-    ? ", r.reminder_category"
-    : ", r.reminder_type AS reminder_category";
+  const after = dayEndDt(date);
+  const untilEnd = dayEndDt(until);
+  const rows = await prisma.reminders.findMany({
+    where: {
+      is_deleted: false,
+      is_done: false,
+      remind_at: { gt: after, lte: untilEnd },
+      OR: [{ assigned_to_user_id: userId }, { user_id: userId }],
+    },
+    include: {
+      leads: { select: { name: true } },
+    },
+    orderBy: { remind_at: "asc" },
+    take: UPCOMING_LIMIT,
+  });
 
-  const [rows] = await pool.execute(
-    `SELECT r.id, r.title, r.note, r.remind_at AS due_date, r.remind_at,
-            r.reminder_type, r.lead_id, l.name AS lead_name, r.is_done AS status,
-            r.id AS source_id, 'reminder' AS source_type, NULL AS priority,
-            0 AS is_overdue
-            ${categorySelect}
-            ${clientSelect}
-     FROM reminders r
-     LEFT JOIN leads l ON l.id = r.lead_id
-     ${clientJoin}
-     WHERE r.is_deleted = 0
-       AND r.is_done = 0
-       AND r.remind_at > ?
-       AND r.remind_at <= ?
-       AND (r.assigned_to_user_id = ? OR r.user_id = ?)
-     ORDER BY r.remind_at ASC
-     LIMIT ${UPCOMING_LIMIT}`,
-    [dayEndExclusive(date), dayEndExclusive(until), userId, userId]
-  );
-  return rows.map((r) => ({ ...r, status: "pending" }));
+  return rows.map((r) => ({
+    id: r.id,
+    title: r.title,
+    note: r.note,
+    due_date: r.remind_at,
+    remind_at: r.remind_at,
+    reminder_type: r.reminder_type,
+    reminder_category: r.reminder_type,
+    lead_id: r.lead_id,
+    lead_name: r.leads?.name ?? null,
+    status: "pending",
+    source_id: r.id,
+    source_type: "reminder",
+    priority: null,
+    is_overdue: 0,
+    client_id: null,
+    client_name: null,
+  }));
 }
 
 async function fetchUpcomingTodos(date, userId, tenantId) {
   const until = addDaysYmd(date, UPCOMING_DAYS);
-  const hasClientCol = await hasColumn("crm_todos", "client_id");
-  const hasCategoryCol = await hasColumn("crm_todos", "todo_category");
-  const clientJoin = hasClientCol
-    ? "LEFT JOIN fitness_clients fc ON fc.client_id = t.client_id"
-    : "";
-  const clientSelect = hasClientCol
-    ? ", t.client_id, fc.full_name AS client_name"
-    : ", NULL AS client_id, NULL AS client_name";
-  const categorySelect = hasCategoryCol ? ", t.todo_category" : ", NULL AS todo_category";
+  const after = dateOnly(date);
+  const untilD = dateOnly(until);
+  const rows = await prisma.crm_todos.findMany({
+    where: {
+      is_deleted: false,
+      status: "pending",
+      ...tenantClause(tenantId),
+      todo_date: { gt: after, lte: untilD },
+      OR: [
+        { created_by: userId },
+        { crm_todo_assignees: { some: { user_id: userId } } },
+      ],
+    },
+    select: {
+      id: true,
+      body: true,
+      todo_date: true,
+      priority: true,
+      status: true,
+      frequency: true,
+      todo_category: true,
+      client_id: true,
+    },
+    orderBy: { todo_date: "asc" },
+    take: UPCOMING_LIMIT,
+  });
 
-  const [rows] = await pool.execute(
-    `SELECT t.id, t.body, t.body AS title, t.todo_date AS due_date, t.priority, t.status,
-            t.frequency, t.id AS source_id, 'todo' AS source_type, 0 AS is_overdue
-            ${categorySelect}
-            ${clientSelect}
-     FROM crm_todos t
-     ${clientJoin}
-     WHERE t.is_deleted = 0
-       AND t.status = 'pending'
-       AND (? IS NULL OR t.tenant_id = ?)
-       AND t.todo_date > ?
-       AND t.todo_date <= ?
-       AND (
-         t.created_by = ?
-         OR EXISTS (SELECT 1 FROM crm_todo_assignees a WHERE a.todo_id = t.id AND a.user_id = ?)
-       )
-     ORDER BY t.todo_date ASC
-     LIMIT ${UPCOMING_LIMIT}`,
-    [tenantId, tenantId, date, until, userId, userId]
-  );
-  return rows;
+  const nameMap = await mapClientNamesByClientId(rows.map((r) => r.client_id));
+  return rows.map((t) => ({
+    id: t.id,
+    body: t.body,
+    title: t.body,
+    due_date: t.todo_date,
+    priority: t.priority,
+    status: t.status,
+    frequency: t.frequency,
+    source_id: t.id,
+    source_type: "todo",
+    is_overdue: 0,
+    todo_category: t.todo_category ?? null,
+    client_id: t.client_id ?? null,
+    client_name: t.client_id ? nameMap.get(t.client_id) ?? null : null,
+  }));
 }
 
 async function fetchUpcomingLeadFollowups(date, userId, tenantId) {
-  const hasHealthGoal = await hasColumn("leads", "health_goal");
-  const hasEnquiry = await hasColumn("leads", "enquiry_stage");
-  const hasTenant = await hasColumn("leads", "tenant_id");
-  const hasIsDeleted = await hasColumn("leads", "is_deleted");
-  const extraSelect = [
-    hasHealthGoal ? "l.health_goal" : "NULL AS health_goal",
-    hasEnquiry ? "l.enquiry_stage" : "NULL AS enquiry_stage",
-  ].join(", ");
-
   const until = addDaysYmd(date, UPCOMING_DAYS);
-  const params = [];
-  const where = [];
-  if (hasIsDeleted) where.push("l.is_deleted = 0");
-  if (hasTenant) {
-    where.push("(? IS NULL OR l.tenant_id = ?)");
-    params.push(tenantId, tenantId);
-  }
-  where.push(
-    "l.follow_up_date IS NOT NULL",
-    "l.follow_up_date > ?",
-    "l.follow_up_date <= ?",
-    "l.status NOT IN ('confirm', 'cancel')",
-    "(l.assigned_to = ? OR l.created_by = ?)"
-  );
-  params.push(date, until, userId, userId);
+  const after = dateOnly(date);
+  const untilD = dateOnly(until);
+  const rows = await prisma.leads.findMany({
+    where: {
+      is_deleted: false,
+      ...tenantClause(tenantId),
+      follow_up_date: { gt: after, lte: untilD },
+      status: { notIn: ["confirm", "cancel"] },
+      OR: [{ assigned_to: userId }, { created_by: userId }],
+    },
+    select: {
+      id: true,
+      name: true,
+      phone: true,
+      email: true,
+      follow_up_date: true,
+      status: true,
+      source: true,
+    },
+    orderBy: { follow_up_date: "asc" },
+    take: UPCOMING_LIMIT,
+  });
 
-  const [rows] = await pool.execute(
-    `SELECT l.id, l.name AS title, l.phone, l.email, l.follow_up_date AS due_date,
-            l.status, l.source, ${extraSelect},
-            l.id AS source_id, 'lead_followup' AS source_type, NULL AS priority,
-            NULL AS client_id, NULL AS client_name,
-            0 AS is_overdue
-     FROM leads l
-     WHERE ${where.join(" AND ")}
-     ORDER BY l.follow_up_date ASC
-     LIMIT ${UPCOMING_LIMIT}`,
-    params
-  );
-  return rows;
+  return rows.map((l) => ({
+    id: l.id,
+    title: l.name,
+    phone: l.phone,
+    email: l.email,
+    due_date: l.follow_up_date,
+    status: l.status,
+    source: l.source,
+    health_goal: null,
+    enquiry_stage: null,
+    source_id: l.id,
+    source_type: "lead_followup",
+    priority: null,
+    client_id: null,
+    client_name: null,
+    is_overdue: 0,
+  }));
 }
 
 async function fetchUpcomingOpportunityFollowups(date, userId) {
-  if (!(await opportunitiesTableExists())) return [];
   const until = addDaysYmd(date, UPCOMING_DAYS);
-  const hasVisitPurpose = await hasColumn("opportunities", "visit_purpose");
-  const hasPhone = await hasColumn("opportunities", "phone");
-  const visitSelect = hasVisitPurpose ? ", o.visit_purpose" : ", NULL AS visit_purpose";
-  const phoneSelect = hasPhone ? ", o.phone" : ", NULL AS phone";
+  const after = dayEndDt(date);
+  const untilEnd = dayEndDt(until);
+  const rows = await prisma.opportunities.findMany({
+    where: {
+      is_deleted: false,
+      followup_at: { gt: after, lte: untilEnd },
+      stage: { notIn: ["closed_won", "closed_lost"] },
+      OR: [{ owner_user_id: userId }, { created_by: userId }],
+    },
+    select: {
+      id: true,
+      title: true,
+      followup_at: true,
+      followup_type: true,
+      stage: true,
+      product_category: true,
+      visit_purpose: true,
+      phone: true,
+    },
+    orderBy: { followup_at: "asc" },
+    take: UPCOMING_LIMIT,
+  });
 
-  const [rows] = await pool.execute(
-    `SELECT o.id, o.title, o.followup_at AS due_date, o.followup_type, o.stage AS status,
-            o.product_category, o.id AS source_id, 'opportunity_followup' AS source_type,
-            NULL AS priority, NULL AS client_id, NULL AS client_name
-            ${visitSelect}
-            ${phoneSelect},
-            0 AS is_overdue
-     FROM opportunities o
-     WHERE o.is_deleted = 0
-       AND o.followup_at IS NOT NULL
-       AND o.followup_at > ?
-       AND o.followup_at <= ?
-       AND o.stage NOT IN ('closed_won', 'closed_lost')
-       AND (o.owner_user_id = ? OR o.created_by = ?)
-     ORDER BY o.followup_at ASC
-     LIMIT ${UPCOMING_LIMIT}`,
-    [dayEndExclusive(date), dayEndExclusive(until), userId, userId]
-  );
-  return rows.map((r) => ({ ...r, status: "pending" }));
+  return rows.map((o) => ({
+    id: o.id,
+    title: o.title,
+    due_date: o.followup_at,
+    followup_type: o.followup_type,
+    status: "pending",
+    product_category: o.product_category,
+    source_id: o.id,
+    source_type: "opportunity_followup",
+    priority: null,
+    client_id: null,
+    client_name: null,
+    visit_purpose: o.visit_purpose ?? null,
+    phone: o.phone ?? null,
+    is_overdue: 0,
+  }));
 }
 
 async function fetchUpcomingCollectionFollowups(date, userId, role) {
-  if (!(await collectionsTableExists())) return [];
   const until = addDaysYmd(date, UPCOMING_DAYS);
+  const after = dateOnly(date);
+  const untilD = dateOnly(until);
   const canAll = ["admin", "manager", "owner"].includes(String(role || "").toLowerCase());
-  const scope = canAll
-    ? ""
-    : "AND (c.assigned_to = ? OR c.created_by = ?)";
-  const scopeParams = canAll ? [] : [userId, userId];
 
-  const [rows] = await pool.execute(
-    `SELECT c.id, c.title, c.next_followup_date AS due_date, c.pending_inr, c.collection_type,
-            c.client_id, c.status, c.id AS source_id, 'collection_followup' AS source_type,
-            'high' AS priority, 0 AS is_overdue,
-            COALESCE(fc.full_name, eb.full_name) AS client_name
-     FROM fitness_collections c
-     LEFT JOIN fitness_clients fc ON fc.client_id = c.client_id
-     LEFT JOIN fitness_external_buyers eb ON eb.id = c.external_buyer_id
-     WHERE c.status IN ('open','partial')
-       AND c.pending_inr > 0
-       AND c.next_followup_date IS NOT NULL
-       AND c.next_followup_date > ?
-       AND c.next_followup_date <= ?
-       ${scope}
-     ORDER BY c.next_followup_date ASC
-     LIMIT ${UPCOMING_LIMIT}`,
-    [date, until, ...scopeParams]
-  );
-  return rows.map((r) => ({ ...r, status: "pending" }));
+  const rows = await prisma.fitness_collections.findMany({
+    where: {
+      status: { in: ["open", "partial"] },
+      pending_inr: { gt: 0 },
+      next_followup_date: { gt: after, lte: untilD },
+      ...(canAll
+        ? {}
+        : { OR: [{ assigned_to: userId }, { created_by: userId }] }),
+    },
+    include: {
+      fitness_external_buyers: { select: { full_name: true } },
+    },
+    orderBy: { next_followup_date: "asc" },
+    take: UPCOMING_LIMIT,
+  });
+
+  const nameMap = await mapClientNamesByClientId(rows.map((r) => r.client_id));
+  return rows.map((c) => ({
+    id: c.id,
+    title: c.title,
+    due_date: c.next_followup_date,
+    pending_inr: decimalOrNull(c.pending_inr),
+    collection_type: c.collection_type,
+    client_id: c.client_id,
+    status: "pending",
+    source_id: c.id,
+    source_type: "collection_followup",
+    priority: "high",
+    is_overdue: 0,
+    client_name:
+      (c.client_id ? nameMap.get(c.client_id) : null) ||
+      c.fitness_external_buyers?.full_name ||
+      null,
+  }));
 }
 
 async function fetchUpcomingClientFollowups(date) {
-  if (!(await fitnessClientsTableExists())) return [];
   const until = addDaysYmd(date, UPCOMING_DAYS);
-  const [rows] = await pool.execute(
-    `SELECT fc.client_id AS id,
-            CONCAT('Follow-up due: ', fc.full_name) AS title,
-            fc.next_due_date AS due_date, fc.phone, fc.email,
-            fc.health_goal, fc.plan_type, fc.progress,
-            fc.client_id, fc.full_name AS client_name,
-            'client_followup' AS source_type, 0 AS is_overdue,
-            fc.client_id AS source_id, fc.status, NULL AS priority
-     FROM fitness_clients fc
-     WHERE fc.status = 'Active'
-       AND fc.next_due_date IS NOT NULL
-       AND fc.next_due_date > ?
-       AND fc.next_due_date <= ?
-     ORDER BY fc.next_due_date ASC
-     LIMIT ${UPCOMING_LIMIT}`,
-    [date, until]
-  );
-  return rows;
+  const after = dateOnly(date);
+  const untilD = dateOnly(until);
+  const rows = await prisma.fitness_clients.findMany({
+    where: {
+      status: "Active",
+      next_due_date: { gt: after, lte: untilD },
+    },
+    select: {
+      client_id: true,
+      full_name: true,
+      next_due_date: true,
+      phone: true,
+      email: true,
+      health_goal: true,
+      plan_type: true,
+      progress: true,
+      status: true,
+    },
+    orderBy: { next_due_date: "asc" },
+    take: UPCOMING_LIMIT,
+  });
+
+  return rows.map((fc) => ({
+    id: fc.client_id,
+    title: `Follow-up due: ${fc.full_name}`,
+    due_date: fc.next_due_date,
+    phone: fc.phone,
+    email: fc.email,
+    health_goal: fc.health_goal,
+    plan_type: fc.plan_type,
+    progress: fc.progress,
+    client_id: fc.client_id,
+    client_name: fc.full_name,
+    source_type: "client_followup",
+    is_overdue: 0,
+    source_id: fc.client_id,
+    status: fc.status,
+    priority: null,
+  }));
 }
 
 async function fetchUpcomingFitnessClientTasks(date) {
-  if (!(await fitnessClientTasksTableExists())) return [];
   const until = addDaysYmd(date, UPCOMING_DAYS);
-  const [rows] = await pool.execute(
-    `SELECT t.id,
-            COALESCE(NULLIF(TRIM(t.task_description), ''), 'Client task') AS title,
-            t.task_description, t.due_date, t.priority, t.status, t.period, t.notes,
-            t.client_id, fc.full_name AS client_name,
-            t.id AS source_id, 'fitness_client_task' AS source_type,
-            0 AS is_overdue,
-            CASE LOWER(TRIM(t.priority))
-              WHEN 'high' THEN 'high'
-              WHEN 'medium' THEN 'medium'
-              WHEN 'low' THEN 'low'
-              ELSE NULL
-            END AS priority_norm
-     FROM fitness_client_tasks t
-     LEFT JOIN fitness_clients fc ON fc.client_id = t.client_id
-     WHERE t.due_date IS NOT NULL
-       AND t.due_date > ?
-       AND t.due_date <= ?
-       AND t.status NOT IN ('Done', 'Carried Forward')
-     ORDER BY t.due_date ASC
-     LIMIT ${UPCOMING_LIMIT}`,
-    [date, until]
-  );
-  return rows.map((r) => ({ ...r, priority: r.priority_norm || null }));
+  const after = dateOnly(date);
+  const untilD = dateOnly(until);
+  const rows = await prisma.fitness_client_tasks.findMany({
+    where: {
+      due_date: { gt: after, lte: untilD },
+      status: { notIn: ["Done", "Carried_Forward"] },
+    },
+    select: {
+      id: true,
+      task_description: true,
+      due_date: true,
+      priority: true,
+      status: true,
+      period: true,
+      notes: true,
+      client_id: true,
+    },
+    orderBy: { due_date: "asc" },
+    take: UPCOMING_LIMIT,
+  });
+
+  const nameMap = await mapClientNamesByClientId(rows.map((r) => r.client_id));
+  return rows.map((t) => {
+    const desc = String(t.task_description || "").trim();
+    return {
+      id: t.id,
+      title: desc || "Client task",
+      task_description: t.task_description,
+      due_date: t.due_date,
+      priority: normalizePriority(t.priority),
+      status: t.status,
+      period: t.period,
+      notes: t.notes,
+      client_id: t.client_id,
+      client_name: nameMap.get(t.client_id) ?? null,
+      source_id: t.id,
+      source_type: "fitness_client_task",
+      is_overdue: 0,
+    };
+  });
 }
 
 async function fetchUpcomingPaymentDues(date) {
-  if (!(await hasColumn("fitness_transactions", "payment_due_date"))) return [];
   const until = addDaysYmd(date, UPCOMING_DAYS);
-  const [rows] = await pool.execute(
-    `SELECT ft.id,
-            CONCAT('Payment due: ', COALESCE(fc.full_name, ft.product_plan)) AS title,
-            ft.payment_due_date AS due_date,
-            ft.pending_inr, ft.received_inr, ft.product_plan, ft.type AS transaction_type,
-            ft.transaction_date, ft.pay_mode,
-            ft.client_id, fc.full_name AS client_name,
-            'fitness_payment_due' AS source_type,
-            0 AS is_overdue,
-            ft.id AS source_id, NULL AS status, 'high' AS priority
-     FROM fitness_transactions ft
-     LEFT JOIN fitness_clients fc ON fc.client_id = ft.client_id
-     WHERE ft.payment_due_date IS NOT NULL
-       AND COALESCE(ft.pending_inr, 0) > 0
-       AND DATE(ft.payment_due_date) > ?
-       AND DATE(ft.payment_due_date) <= ?
-     ORDER BY ft.payment_due_date ASC
-     LIMIT ${UPCOMING_LIMIT}`,
-    [date, until]
-  );
-  return rows;
+  const after = dateOnly(date);
+  const untilD = dateOnly(until);
+  const rows = await prisma.fitness_transactions.findMany({
+    where: {
+      payment_due_date: { gt: after, lte: untilD },
+      pending_inr: { gt: 0 },
+    },
+    select: {
+      id: true,
+      payment_due_date: true,
+      pending_inr: true,
+      received_inr: true,
+      product_plan: true,
+      type: true,
+      transaction_date: true,
+      pay_mode: true,
+      client_id: true,
+    },
+    orderBy: { payment_due_date: "asc" },
+    take: UPCOMING_LIMIT,
+  });
+
+  const nameMap = await mapClientNamesByClientId(rows.map((r) => r.client_id));
+  return rows.map((ft) => {
+    const clientName = ft.client_id ? nameMap.get(ft.client_id) ?? null : null;
+    return {
+      id: ft.id,
+      title: `Payment due: ${clientName || ft.product_plan}`,
+      due_date: ft.payment_due_date,
+      pending_inr: decimalOrNull(ft.pending_inr),
+      received_inr: decimalOrNull(ft.received_inr),
+      product_plan: ft.product_plan,
+      transaction_type: ft.type,
+      transaction_date: ft.transaction_date,
+      pay_mode: ft.pay_mode,
+      client_id: ft.client_id,
+      client_name: clientName,
+      source_type: "fitness_payment_due",
+      is_overdue: 0,
+      source_id: ft.id,
+      status: null,
+      priority: "high",
+    };
+  });
 }
 
 async function safeFetch(label, fn) {
@@ -1545,250 +1815,253 @@ router.get("/", async (req, res) => {
 });
 
 async function markTodoDone(id, userId, tenantId) {
-  const [rows] = await pool.execute(
-    `SELECT id, status, frequency, todo_date FROM crm_todos
-     WHERE id = ? AND is_deleted = 0 AND (? IS NULL OR tenant_id = ?)
-       AND (
-         created_by = ?
-         OR EXISTS (SELECT 1 FROM crm_todo_assignees a WHERE a.todo_id = crm_todos.id AND a.user_id = ?)
-       )`,
-    [id, tenantId, tenantId, userId, userId]
-  );
-  const row = rows[0];
+  const todoId = Number(id);
+  const row = await prisma.crm_todos.findFirst({
+    where: {
+      id: todoId,
+      is_deleted: false,
+      ...tenantClause(tenantId),
+      OR: [
+        { created_by: userId },
+        { crm_todo_assignees: { some: { user_id: userId } } },
+      ],
+    },
+    select: { id: true, status: true, frequency: true, todo_date: true },
+  });
   if (!row) return { ok: false, status: 404 };
   if (row.status === "completed") return { ok: true, already: true };
 
   const freq = String(row.frequency || "once").toLowerCase();
+  const now = new Date();
   if (freq === "once") {
-    await pool.execute(
-      `UPDATE crm_todos SET status = 'completed', completed_at = NOW(), updated_at = NOW() WHERE id = ?`,
-      [id]
-    );
+    await prisma.crm_todos.update({
+      where: { id: todoId },
+      data: { status: "completed", completed_at: now, updated_at: now },
+    });
   } else {
-    const nextD = nextOccurrence(String(row.todo_date).slice(0, 10), freq);
-    await pool.execute(
-      `UPDATE crm_todos SET todo_date = ?, status = 'pending', completed_at = NULL, updated_at = NOW() WHERE id = ?`,
-      [nextD, id]
-    );
+    const nextD = nextOccurrence(ymdOf(row.todo_date), freq);
+    await prisma.crm_todos.update({
+      where: { id: todoId },
+      data: {
+        todo_date: dateOnly(nextD),
+        status: "pending",
+        completed_at: null,
+        updated_at: now,
+      },
+    });
   }
   return { ok: true };
 }
 
 async function markMeetingDone(id, userId) {
-  const [rows] = await pool.execute(
-    `SELECT id, status FROM meetings
-     WHERE id = ? AND is_deleted = 0
-       AND (organizer_id = ? OR assigned_to_user_id = ?)`,
-    [id, userId, userId]
-  );
-  const row = rows[0];
+  const meetingId = Number(id);
+  const row = await prisma.meetings.findFirst({
+    where: {
+      id: meetingId,
+      is_deleted: false,
+      OR: [{ organizer_id: userId }, { assigned_to_user_id: userId }],
+    },
+    select: { id: true, status: true },
+  });
   if (!row) return { ok: false, status: 404 };
   if (row.status === "completed") return { ok: true, already: true };
-  await pool.execute(
-    `UPDATE meetings SET status = 'completed' WHERE id = ?`,
-    [id]
-  );
+  await prisma.meetings.update({
+    where: { id: meetingId },
+    data: { status: "completed" },
+  });
   return { ok: true };
 }
 
 async function markReminderDone(id, userId) {
-  const [rows] = await pool.execute(
-    `SELECT id, is_done FROM reminders
-     WHERE id = ? AND is_deleted = 0 AND (user_id = ? OR assigned_to_user_id = ?)`,
-    [id, userId, userId]
-  );
-  const row = rows[0];
+  const reminderId = Number(id);
+  const row = await prisma.reminders.findFirst({
+    where: {
+      id: reminderId,
+      is_deleted: false,
+      OR: [{ user_id: userId }, { assigned_to_user_id: userId }],
+    },
+    select: { id: true, is_done: true },
+  });
   if (!row) return { ok: false, status: 404 };
   if (row.is_done) return { ok: true, already: true };
-  await pool.execute(`UPDATE reminders SET is_done = 1 WHERE id = ?`, [id]);
+  await prisma.reminders.update({
+    where: { id: reminderId },
+    data: { is_done: true },
+  });
   return { ok: true };
 }
 
 async function markLeadFollowupDone(id, userId, tenantId) {
-  const hasTenant = await hasColumn("leads", "tenant_id");
-  const hasIsDeleted = await hasColumn("leads", "is_deleted");
-  const where = ["id = ?"];
-  const params = [id];
-  if (hasIsDeleted) where.push("is_deleted = 0");
-  if (hasTenant) {
-    where.push("(? IS NULL OR tenant_id = ?)");
-    params.push(tenantId, tenantId);
-  }
-  where.push("(assigned_to = ? OR created_by = ?)");
-  params.push(userId, userId);
+  const leadId = Number(id);
+  const row = await prisma.leads.findFirst({
+    where: {
+      id: leadId,
+      is_deleted: false,
+      ...tenantClause(tenantId),
+      OR: [{ assigned_to: userId }, { created_by: userId }],
+    },
+    select: { id: true },
+  });
+  if (!row) return { ok: false, status: 404 };
 
-  const [rows] = await pool.execute(
-    `SELECT id FROM leads WHERE ${where.join(" AND ")}`,
-    params
-  );
-  if (!rows[0]) return { ok: false, status: 404 };
+  const nextFollowUp = new Date();
+  nextFollowUp.setHours(0, 0, 0, 0);
+  nextFollowUp.setDate(nextFollowUp.getDate() + 7);
 
-  try {
-    await pool.execute(
-      `INSERT INTO lead_followups (lead_id, note, created_by, created_at)
-       VALUES (?, 'Marked done from Today view', ?, NOW())`,
-      [id, userId]
-    );
-  } catch (e) {
-    if (e.code !== "ER_BAD_FIELD_ERROR") throw e;
-    await pool.execute(
-      `INSERT INTO lead_followups (lead_id, note, created_by) VALUES (?, 'Marked done from Today view', ?)`,
-      [id, userId]
-    );
-  }
-
-  await pool.execute(
-    `UPDATE leads SET follow_up_date = DATE_ADD(CURDATE(), INTERVAL 7 DAY), updated_at = NOW() WHERE id = ?`,
-    [id]
-  );
+  await prisma.$transaction([
+    prisma.lead_followups.create({
+      data: {
+        lead_id: leadId,
+        note: "Marked done from Today view",
+        created_by: userId,
+      },
+    }),
+    prisma.leads.update({
+      where: { id: leadId },
+      data: { follow_up_date: nextFollowUp, updated_at: new Date() },
+    }),
+  ]);
   return { ok: true };
 }
 
-async function markClientFollowupDone(id, userId) {
-  if (!(await fitnessClientsTableExists())) {
-    return { ok: false, status: 404 };
-  }
-  const [rows] = await pool.execute(
-    `SELECT client_id, follow_up_freq_days FROM fitness_clients WHERE client_id = ? AND status = 'Active'`,
-    [id]
-  );
-  if (!rows[0]) return { ok: false, status: 404 };
+async function markClientFollowupDone(id) {
+  const clientId = String(id);
+  const row = await prisma.fitness_clients.findFirst({
+    where: { client_id: clientId, status: "Active" },
+    select: { client_id: true, follow_up_freq_days: true },
+  });
+  if (!row) return { ok: false, status: 404 };
 
-  const days = Number(rows[0].follow_up_freq_days) || 14;
-  await pool.execute(
-    `UPDATE fitness_clients SET next_due_date = DATE_ADD(CURDATE(), INTERVAL ? DAY), updated_at = NOW()
-     WHERE client_id = ?`,
-    [days, id]
-  );
+  const days = Number(row.follow_up_freq_days) || 14;
+  const nextDue = new Date();
+  nextDue.setHours(0, 0, 0, 0);
+  nextDue.setDate(nextDue.getDate() + days);
+
+  await prisma.fitness_clients.update({
+    where: { client_id: clientId },
+    data: { next_due_date: nextDue, updated_at: new Date() },
+  });
   return { ok: true };
 }
 
 async function markCollectionFollowupDone(id, userId, body) {
-  if (!(await collectionsTableExists())) {
-    return { ok: false, status: 404 };
-  }
   const collectionService = require("../services/collectionService");
-  const ok = await collectionService.markCollectionFollowupDone(id, userId, body || {});
+  const ok = await collectionService.markCollectionFollowupDone(Number(id), userId, body || {});
   return ok ? { ok: true } : { ok: false, status: 404 };
 }
 
 async function markPaymentDueDone(id) {
-  if (!(await hasColumn("fitness_transactions", "payment_due_date"))) {
-    return { ok: false, status: 404 };
-  }
-  const [result] = await pool.execute(
-    `UPDATE fitness_transactions
-     SET payment_due_date = NULL
-     WHERE id = ? AND payment_due_date IS NOT NULL`,
-    [id]
-  );
-  return result.affectedRows > 0 ? { ok: true } : { ok: false, status: 404 };
+  const txId = Number(id);
+  const result = await prisma.fitness_transactions.updateMany({
+    where: { id: txId, payment_due_date: { not: null } },
+    data: { payment_due_date: null },
+  });
+  return result.count > 0 ? { ok: true } : { ok: false, status: 404 };
 }
 
 async function markOpportunityFollowupDone(id, userId) {
-  if (!(await opportunitiesTableExists())) {
-    return { ok: false, status: 404 };
-  }
-  const [rows] = await pool.execute(
-    `SELECT id FROM opportunities
-     WHERE id = ? AND is_deleted = 0
-       AND stage NOT IN ('closed_won', 'closed_lost')
-       AND (owner_user_id = ? OR created_by = ?)`,
-    [id, userId, userId]
-  );
-  if (!rows[0]) return { ok: false, status: 404 };
+  const oppId = Number(id);
+  const row = await prisma.opportunities.findFirst({
+    where: {
+      id: oppId,
+      is_deleted: false,
+      stage: { notIn: ["closed_won", "closed_lost"] },
+      OR: [{ owner_user_id: userId }, { created_by: userId }],
+    },
+    select: { id: true },
+  });
+  if (!row) return { ok: false, status: 404 };
 
-  await pool.execute(
-    `UPDATE opportunities SET followup_at = DATE_ADD(CURDATE(), INTERVAL 7 DAY), updated_at = NOW() WHERE id = ?`,
-    [id]
-  );
+  const nextFollowUp = new Date();
+  nextFollowUp.setHours(0, 0, 0, 0);
+  nextFollowUp.setDate(nextFollowUp.getDate() + 7);
+
+  await prisma.opportunities.update({
+    where: { id: oppId },
+    data: { followup_at: nextFollowUp, updated_at: new Date() },
+  });
   return { ok: true };
 }
 
 async function syncFitnessClientNextDueAfterTaskDone(taskId) {
-  const hasClientCol = await hasColumn("tasks", "client_id");
-  if (!hasClientCol || !(await fitnessClientsTableExists())) return false;
-
-  const [taskRows] = await pool.execute(
-    `SELECT t.client_id FROM tasks t WHERE t.id = ?`,
-    [taskId]
-  );
-  const fcInternalId = taskRows[0]?.client_id;
+  const task = await prisma.tasks.findUnique({
+    where: { id: taskId },
+    select: { client_id: true },
+  });
+  const fcInternalId = task?.client_id;
   if (!fcInternalId) return false;
 
-  const [clients] = await pool.execute(
-    `SELECT client_id, follow_up_freq_days FROM fitness_clients WHERE id = ? AND status = 'Active'`,
-    [fcInternalId]
-  );
-  if (!clients[0]) return false;
+  const client = await prisma.fitness_clients.findFirst({
+    where: { id: fcInternalId, status: "Active" },
+    select: { client_id: true, follow_up_freq_days: true },
+  });
+  if (!client) return false;
 
-  const days = Number(clients[0].follow_up_freq_days) || 14;
-  await pool.execute(
-    `UPDATE fitness_clients SET next_due_date = DATE_ADD(CURDATE(), INTERVAL ? DAY), updated_at = NOW()
-     WHERE client_id = ?`,
-    [days, clients[0].client_id]
-  );
+  const days = Number(client.follow_up_freq_days) || 14;
+  const nextDue = new Date();
+  nextDue.setHours(0, 0, 0, 0);
+  nextDue.setDate(nextDue.getDate() + days);
+
+  await prisma.fitness_clients.update({
+    where: { client_id: client.client_id },
+    data: { next_due_date: nextDue, updated_at: new Date() },
+  });
   return true;
 }
 
 async function markTaskDone(id, userId, tenantId) {
-  const hasTenant = await hasColumn("tasks", "tenant_id");
-  const hasIsDeleted = await hasColumn("tasks", "is_deleted");
-  const where = ["id = ?", "(assigned_to = ? OR created_by = ?)"];
-  const params = [id, userId, userId];
-  if (hasIsDeleted) where.push("is_deleted = 0");
-  if (hasTenant) {
-    where.push("(? IS NULL OR tenant_id = ?)");
-    params.push(tenantId, tenantId);
-  }
-
-  const [rows] = await pool.execute(
-    `SELECT id, status FROM tasks WHERE ${where.join(" AND ")}`,
-    params
-  );
-  const row = rows[0];
+  const taskId = Number(id);
+  const row = await prisma.tasks.findFirst({
+    where: {
+      id: taskId,
+      is_deleted: false,
+      ...tenantClause(tenantId),
+      OR: [{ assigned_to: userId }, { created_by: userId }],
+    },
+    select: { id: true, status: true },
+  });
   if (!row) return { ok: false, status: 404 };
   const st = String(row.status || "").toLowerCase();
   if (st === "done" || st === "completed") return { ok: true, already: true };
 
-  await pool.execute(
-    `UPDATE tasks SET status = 'done', updated_at = NOW() WHERE id = ?`,
-    [id]
-  );
-  const fitnessSynced = await syncFitnessClientNextDueAfterTaskDone(id);
+  await prisma.tasks.update({
+    where: { id: taskId },
+    data: { status: "done", updated_at: new Date() },
+  });
+  const fitnessSynced = await syncFitnessClientNextDueAfterTaskDone(taskId);
   return { ok: true, fitnessSynced };
 }
 
 async function markFitnessClientTaskDone(id) {
-  if (!(await fitnessClientTasksTableExists())) {
-    return { ok: false, status: 404 };
-  }
+  const taskId = Number(id);
   const today = formatYmd(new Date());
-  const [rows] = await pool.execute(
-    `SELECT id, client_id FROM fitness_client_tasks
-     WHERE id = ? AND status NOT IN ('Done', 'Carried Forward')`,
-    [id]
-  );
-  if (!rows[0]) return { ok: false, status: 404 };
+  const row = await prisma.fitness_client_tasks.findFirst({
+    where: {
+      id: taskId,
+      status: { notIn: ["Done", "Carried_Forward"] },
+    },
+    select: { id: true, client_id: true },
+  });
+  if (!row) return { ok: false, status: 404 };
 
-  await pool.execute(
-    `UPDATE fitness_client_tasks SET status = 'Done', completed_on = ? WHERE id = ?`,
-    [today, id]
-  );
+  await prisma.fitness_client_tasks.update({
+    where: { id: taskId },
+    data: { status: "Done", completed_on: dateOnly(today) },
+  });
 
-  const clientId = rows[0].client_id;
+  const clientId = row.client_id;
   if (clientId) {
-    const [clients] = await pool.execute(
-      `SELECT follow_up_freq_days FROM fitness_clients WHERE client_id = ?`,
-      [clientId]
-    );
-    if (clients[0]) {
-      const days = Number(clients[0].follow_up_freq_days) || 14;
-      await pool.execute(
-        `UPDATE fitness_clients SET next_due_date = DATE_ADD(?, INTERVAL ? DAY), updated_at = NOW()
-         WHERE client_id = ?`,
-        [today, days, clientId]
-      );
+    const client = await prisma.fitness_clients.findFirst({
+      where: { client_id: clientId },
+      select: { follow_up_freq_days: true },
+    });
+    if (client) {
+      const days = Number(client.follow_up_freq_days) || 14;
+      const nextDue = addDaysLocal(today, days);
+      await prisma.fitness_clients.update({
+        where: { client_id: clientId },
+        data: { next_due_date: nextDue, updated_at: new Date() },
+      });
     }
   }
   return { ok: true, fitnessSynced: Boolean(clientId) };

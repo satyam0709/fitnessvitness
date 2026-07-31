@@ -1,4 +1,4 @@
-const { pool } = require("../config/prismaPool");
+const prisma = require("../config/prisma");
 
 async function getConversation(req, res) {
   try {
@@ -8,13 +8,19 @@ async function getConversation(req, res) {
       return res.status(400).json({ error: "Missing required parameters" });
     }
 
-    const [messages] = await pool.execute(
-      `SELECT * FROM chat_messages
-       WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
-       ORDER BY created_at ASC
-       LIMIT 100`,
-      [req.user.id, otherUserId, otherUserId, req.user.id]
-    );
+    const me = Number(req.user.id);
+    const other = Number(otherUserId);
+
+    const messages = await prisma.chat_messages.findMany({
+      where: {
+        OR: [
+          { sender_id: me, receiver_id: other },
+          { sender_id: other, receiver_id: me },
+        ],
+      },
+      orderBy: { created_at: "asc" },
+      take: 100,
+    });
 
     res.json({ messages });
   } catch (err) {
@@ -31,12 +37,20 @@ async function sendMessage(req, res) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    const [result] = await pool.execute(
-      `INSERT INTO chat_messages (sender_id, receiver_id, content) VALUES (?, ?, ?)`,
-      [req.user.id, receiverId, content]
-    );
+    const created = await prisma.chat_messages.create({
+      data: {
+        sender_id: req.user.id,
+        receiver_id: Number(receiverId),
+        content,
+      },
+    });
 
-    res.status(201).json({ id: result.insertId, sender_id: req.user.id, receiver_id: receiverId, content });
+    res.status(201).json({
+      id: created.id,
+      sender_id: req.user.id,
+      receiver_id: Number(receiverId),
+      content,
+    });
   } catch (err) {
     console.error("sendMessage error:", err);
     res.status(500).json({ error: "Failed to send message" });
@@ -45,13 +59,14 @@ async function sendMessage(req, res) {
 
 async function getUnreadCount(req, res) {
   try {
-    const [rows] = await pool.execute(
-      `SELECT COUNT(*) as count FROM chat_messages
-       WHERE receiver_id = ? AND is_read = 0`,
-      [req.user.id]
-    );
+    const count = await prisma.chat_messages.count({
+      where: {
+        receiver_id: req.user.id,
+        is_read: false,
+      },
+    });
 
-    res.json({ unreadCount: rows[0].count });
+    res.json({ unreadCount: count });
   } catch (err) {
     console.error("getUnreadCount error:", err);
     res.status(500).json({ error: "Failed to get unread count" });

@@ -1,14 +1,19 @@
-const { pool } = require("../config/prismaPool");
+const prisma = require("../config/prisma");
 
 async function getPayroll(req, res) {
   try {
     const { userId, month, year } = req.query;
-    let query = "SELECT * FROM hr_payroll WHERE 1=1";
-    const params = [];
-    if (userId) { query += " AND user_id = ?"; params.push(userId); }
-    if (month && year) { query += " AND month = ? AND year = ?"; params.push(month, year); }
-    query += " ORDER BY year DESC, month DESC";
-    const [rows] = await pool.execute(query, params);
+    const where = {};
+    if (userId) where.user_id = Number(userId);
+    if (month && year) {
+      where.month = Number(month);
+      where.year = Number(year);
+    }
+
+    const rows = await prisma.hr_payroll.findMany({
+      where,
+      orderBy: [{ year: "desc" }, { month: "desc" }],
+    });
     res.json({ payroll: rows });
   } catch (err) {
     console.error("getPayroll error:", err);
@@ -20,24 +25,41 @@ async function upsertPayroll(req, res) {
   try {
     const { userId, month, year, salary, bonuses, deductions, netPay, notes } = req.body;
     if (!userId || !month || !year) return res.status(400).json({ error: "Missing required fields" });
-    const [existing] = await pool.execute(
-      "SELECT id FROM hr_payroll WHERE user_id = ? AND month = ? AND year = ?",
-      [userId, month, year]
-    );
-    if (existing.length) {
-      await pool.execute(
-        `UPDATE hr_payroll SET salary = ?, bonuses = ?, deductions = ?, net_pay = ?, notes = ?, updated_at = NOW()
-         WHERE id = ?`,
-        [salary || 0, bonuses || 0, deductions || 0, netPay || 0, notes || "", existing[0].id]
-      );
-      return res.json({ success: true, id: existing[0].id });
+
+    const existing = await prisma.hr_payroll.findFirst({
+      where: {
+        user_id: Number(userId),
+        month: Number(month),
+        year: Number(year),
+      },
+      select: { id: true },
+    });
+
+    const data = {
+      salary: salary || 0,
+      bonuses: bonuses || 0,
+      deductions: deductions || 0,
+      net_pay: netPay || 0,
+      notes: notes || "",
+    };
+
+    if (existing) {
+      await prisma.hr_payroll.update({
+        where: { id: existing.id },
+        data: { ...data, updated_at: new Date() },
+      });
+      return res.json({ success: true, id: existing.id });
     }
-    const [result] = await pool.execute(
-      `INSERT INTO hr_payroll (user_id, month, year, salary, bonuses, deductions, net_pay, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [userId, month, year, salary || 0, bonuses || 0, deductions || 0, netPay || 0, notes || ""]
-    );
-    res.status(201).json({ success: true, id: result.insertId });
+
+    const created = await prisma.hr_payroll.create({
+      data: {
+        user_id: Number(userId),
+        month: Number(month),
+        year: Number(year),
+        ...data,
+      },
+    });
+    res.status(201).json({ success: true, id: created.id });
   } catch (err) {
     console.error("upsertPayroll error:", err);
     res.status(500).json({ error: "Failed to save payroll" });
@@ -47,10 +69,14 @@ async function upsertPayroll(req, res) {
 async function markPayrollPaid(req, res) {
   try {
     const { payrollId } = req.params;
-    await pool.execute(
-      "UPDATE hr_payroll SET status = 'paid', paid_at = NOW(), updated_at = NOW() WHERE id = ?",
-      [payrollId]
-    );
+    await prisma.hr_payroll.update({
+      where: { id: Number(payrollId) },
+      data: {
+        status: "paid",
+        paid_at: new Date(),
+        updated_at: new Date(),
+      },
+    });
     res.json({ success: true });
   } catch (err) {
     console.error("markPayrollPaid error:", err);
@@ -61,12 +87,14 @@ async function markPayrollPaid(req, res) {
 async function getAppraisals(req, res) {
   try {
     const { userId, year } = req.query;
-    let query = "SELECT * FROM hr_appraisals WHERE 1=1";
-    const params = [];
-    if (userId) { query += " AND user_id = ?"; params.push(userId); }
-    if (year) { query += " AND year = ?"; params.push(year); }
-    query += " ORDER BY year DESC, created_at DESC";
-    const [rows] = await pool.execute(query, params);
+    const where = {};
+    if (userId) where.user_id = Number(userId);
+    if (year) where.year = Number(year);
+
+    const rows = await prisma.hr_appraisals.findMany({
+      where,
+      orderBy: [{ year: "desc" }, { created_at: "desc" }],
+    });
     res.json({ appraisals: rows });
   } catch (err) {
     console.error("getAppraisals error:", err);
@@ -78,12 +106,18 @@ async function createAppraisal(req, res) {
   try {
     const { userId, year, rating, strengths, improvements, comments } = req.body;
     if (!userId || !year) return res.status(400).json({ error: "Missing required fields" });
-    const [result] = await pool.execute(
-      `INSERT INTO hr_appraisals (user_id, year, rating, strengths, improvements, comments)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [userId, year, rating || 0, strengths || "", improvements || "", comments || ""]
-    );
-    res.status(201).json({ success: true, id: result.insertId });
+
+    const created = await prisma.hr_appraisals.create({
+      data: {
+        user_id: Number(userId),
+        year: Number(year),
+        rating: rating || 0,
+        strengths: strengths || "",
+        improvements: improvements || "",
+        comments: comments || "",
+      },
+    });
+    res.status(201).json({ success: true, id: created.id });
   } catch (err) {
     console.error("createAppraisal error:", err);
     res.status(500).json({ error: "Failed to create appraisal" });

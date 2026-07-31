@@ -1,14 +1,12 @@
-const { pool } = require("../config/prismaPool");
-
 /**
- * @param {import("express").Request} _req
+ * Legacy pool helpers removed — use prisma from config/prisma.
  */
-function getCrmPoolFromRequest(_req) {
-  return pool;
+function getCrmPoolFromRequest() {
+  throw new Error("getCrmPoolFromRequest removed — use prisma Client ORM");
 }
 
 function getMainPool() {
-  return pool;
+  throw new Error("getMainPool removed — use prisma Client ORM");
 }
 
 module.exports = {

@@ -73,7 +73,7 @@ function counterTenantKey(tid) {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** Prisma `$executeRaw` / query engine rejects `undefined` — always coerce to null. */
+/** Prisma Client rejects `undefined` bind values — always coerce to null. */
 function sqlNull(v) {
   return v === undefined ? null : v;
 }
@@ -390,30 +390,23 @@ async function getCalendarMarkers(req) {
     throw err;
   }
 
-  const conditions = [
-    Prisma.sql`follow_up_date IS NOT NULL`,
-    Prisma.sql`follow_up_date >= ${from}`,
-    Prisma.sql`follow_up_date <= ${to}`,
-    Prisma.sql`is_deleted = 0`,
-  ];
-  if (tenantId(req) !== null) {
-    conditions.push(Prisma.sql`tenant_id = ${tenantId(req)}`);
-  } else {
-    conditions.push(Prisma.sql`tenant_id IS NULL`);
-  }
-
+  const where = {
+    is_deleted: false,
+    follow_up_date: {
+      not: null,
+      gte: new Date(String(from).slice(0, 10)),
+      lte: new Date(String(to).slice(0, 10)),
+    },
+    tenant_id: tenantId(req),
+  };
   if (!canSeeAllTeamRecords(req)) {
-    conditions.push(Prisma.sql`(created_by = ${req.user.id} OR assigned_to = ${req.user.id})`);
+    where.OR = [{ created_by: req.user.id }, { assigned_to: req.user.id }];
   }
 
-  const whereSql = Prisma.join(conditions, ' AND ');
-
-  const rows = await prisma.$queryRaw`
-    SELECT DATE(follow_up_date) AS d, COUNT(*) AS cnt
-    FROM leads
-    WHERE ${whereSql}
-    GROUP BY DATE(follow_up_date)
-  `;
+  const rows = await prisma.leads.findMany({
+    where,
+    select: { follow_up_date: true },
+  });
 
   function rowToYMD(v) {
     if (v instanceof Date) {
@@ -429,8 +422,8 @@ async function getCalendarMarkers(req) {
 
   const byDate = {};
   for (const r of rows) {
-    const key = rowToYMD(r.d);
-    if (key) byDate[key] = Number(r.cnt) || 0;
+    const key = rowToYMD(r.follow_up_date);
+    if (key) byDate[key] = (byDate[key] || 0) + 1;
   }
 
   return { success: true, byDate };
@@ -1465,19 +1458,7 @@ async function registerCustomOptionIfNeeded(fieldName, value) {
       },
     });
   } catch (err) {
-    // Fallback if client out of sync with schema — never pass undefined into raw SQL.
-    try {
-      await prisma.$executeRaw`
-        INSERT INTO dropdown_options (field_name, option_value, option_label)
-        VALUES (${sqlNull(field)}, ${sqlNull(val)}, ${sqlNull(val)})
-        ON DUPLICATE KEY UPDATE option_label = VALUES(option_label)
-      `;
-    } catch (err2) {
-      console.warn(
-        `registerCustomOptionIfNeeded ${field}:`,
-        err2.message || err.message
-      );
-    }
+    console.warn(`registerCustomOptionIfNeeded ${field}:`, err.message);
   }
 }
 
@@ -1533,28 +1514,8 @@ async function getCustomOptions() {
       orderBy: [{ field_name: "asc" }, { option_label: "asc" }],
     });
   } catch (err) {
-    // Live DBs may lack the table until ensureSchema runs — create via raw and retry once
     console.warn("getCustomOptions registry read:", err.message);
-    try {
-      await prisma.$executeRawUnsafe(`
-        CREATE TABLE IF NOT EXISTS dropdown_options (
-          id INT UNSIGNED NOT NULL AUTO_INCREMENT,
-          field_name VARCHAR(50) NOT NULL,
-          option_value VARCHAR(100) NOT NULL,
-          option_label VARCHAR(100) NOT NULL,
-          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          PRIMARY KEY (id),
-          UNIQUE KEY uk_dropdown_opt (field_name, option_value),
-          KEY idx_dropdown_field (field_name)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-      `);
-      registryRows = await prisma.dropdown_options.findMany({
-        orderBy: [{ field_name: "asc" }, { option_label: "asc" }],
-      });
-    } catch (err2) {
-      console.warn("getCustomOptions ensure table:", err2.message);
-      registryRows = [];
-    }
+    registryRows = [];
   }
 
   const [

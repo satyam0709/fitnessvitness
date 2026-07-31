@@ -318,7 +318,7 @@ async function start() {
   await ensureSchema();
   try {
     const { ensureCrmSchemaCompat } = require("./utils/ensureCrmSchemaCompat");
-    const { pool } = require("./config/prismaPool");
+    const { pool } = require("./config/ddlPool");
     await ensureCrmSchemaCompat(pool);
   } catch (e) {
     console.warn("start: ensureCrmSchemaCompat:", e.message);

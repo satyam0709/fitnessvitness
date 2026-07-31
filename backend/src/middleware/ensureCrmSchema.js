@@ -1,4 +1,4 @@
-const { pool } = require("../config/prismaPool");
+const { pool } = require("../config/ddlPool");
 const { ensureCrmSchemaCompat } = require("../utils/ensureCrmSchemaCompat");
 
 let initPromise = null;

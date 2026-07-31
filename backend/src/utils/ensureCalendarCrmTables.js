@@ -12,7 +12,8 @@ async function tableCount(pool, tableName) {
   return Number(row?.c) || 0;
 }
 
-async function ensureCalendarCrmTables(pool) {
+async function ensureCalendarCrmTables(poolArg) {
+  const pool = poolArg || require("../config/ddlPool").pool;
   const hasUsers = (await tableCount(pool, "users")) > 0;
   if (!hasUsers) return;
 

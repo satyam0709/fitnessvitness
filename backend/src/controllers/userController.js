@@ -24,8 +24,11 @@ async function getMe(req, res) {
       });
     }
 
-    // Since last_login is not in Prisma schema, we can safely use $executeRaw
-    prisma.$executeRaw`UPDATE users SET last_login = NOW() WHERE id = ${row.id}`
+    prisma.users
+      .update({
+        where: { id: row.id },
+        data: { last_login: new Date() },
+      })
       .catch((err) => console.error("last_login update error:", err.message));
 
     return res.json({
@@ -91,14 +94,14 @@ async function listUsers(req, res) {
       orderBy: { created_at: "desc" }
     });
     
-    const data = users.map(u => ({
+    const data = users.map((u) => ({
       id: u.id,
       email: u.email,
       full_name: `${u.first_name || ""} ${u.last_name || ""}`.trim(),
       role: u.role,
       is_active: u.is_active,
-      last_login: null,
-      created_at: u.created_at
+      last_login: u.last_login ?? null,
+      created_at: u.created_at,
     }));
 
     res.json({ success: true, total: data.length, data });

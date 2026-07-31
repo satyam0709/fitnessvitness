@@ -1,38 +1,59 @@
-const { pool } = require("../config/prismaPool");
+const prisma = require("../config/prisma");
 const { emitAdminChanged } = require("../realtime/meetingsRealtime");
+
+const STATUS_RANK = { todo: 0, in_progress: 1, done: 2 };
+const PRIORITY_RANK = { high: 0, medium: 1, low: 2 };
+
+function sortTasks(a, b) {
+  const sa = STATUS_RANK[a.status] ?? 99;
+  const sb = STATUS_RANK[b.status] ?? 99;
+  if (sa !== sb) return sa - sb;
+  const pa = PRIORITY_RANK[a.priority] ?? 99;
+  const pb = PRIORITY_RANK[b.priority] ?? 99;
+  if (pa !== pb) return pa - pb;
+  const da = a.due_date ? new Date(a.due_date).getTime() : Number.POSITIVE_INFINITY;
+  const db = b.due_date ? new Date(b.due_date).getTime() : Number.POSITIVE_INFINITY;
+  return da - db;
+}
+
+function mapTaskRow(t) {
+  const assigned = t.users_tasks_assigned_toTousers;
+  const lead = t.leads;
+  const { users_tasks_assigned_toTousers, users_tasks_created_byTousers, leads, ...rest } = t;
+  return {
+    ...rest,
+    assigned_name: assigned
+      ? [assigned.first_name, assigned.last_name].filter(Boolean).join(" ").trim()
+      : null,
+    assigned_email: assigned?.email ?? null,
+    lead_name: lead?.name ?? null,
+  };
+}
 
 async function getTasks(req, res) {
   try {
     const { status, assigned_to, page = 1, limit = 100 } = req.query;
     const offset = (Number(page) - 1) * Number(limit);
+    const take = Number(limit);
 
-    let where  = "1=1";
-    const params = [];
+    const where = {};
+    if (status) where.status = status;
+    if (assigned_to) where.assigned_to = Number(assigned_to);
 
-    if (status)      { where += " AND t.status = ?";      params.push(status); }
-    if (assigned_to) { where += " AND t.assigned_to = ?"; params.push(assigned_to); }
+    const [total, rows] = await Promise.all([
+      prisma.tasks.count({ where }),
+      prisma.tasks.findMany({
+        where,
+        include: {
+          users_tasks_assigned_toTousers: {
+            select: { first_name: true, last_name: true, email: true },
+          },
+          leads: { select: { name: true } },
+        },
+      }),
+    ]);
 
-    const [[{ total }]] = await pool.execute(
-      `SELECT COUNT(*) as total FROM tasks t WHERE ${where}`,
-      params
-    );
-
-    const [tasks] = await pool.execute(
-      `SELECT t.*,
-              CONCAT(u.first_name, ' ', u.last_name) as assigned_name,
-              u.email as assigned_email,
-              l.name as lead_name
-       FROM tasks t
-       LEFT JOIN users u ON u.id = t.assigned_to
-       LEFT JOIN leads l ON l.id = t.lead_id
-       WHERE ${where}
-       ORDER BY
-         FIELD(t.status, 'todo', 'in_progress', 'done'),
-         FIELD(t.priority, 'high', 'medium', 'low'),
-         t.due_date ASC
-       LIMIT ? OFFSET ?`,
-      [...params, Number(limit), offset]
-    );
+    const tasks = rows.map(mapTaskRow).sort(sortTasks).slice(offset, offset + take);
 
     res.json({ success: true, total, tasks });
   } catch (err) {
@@ -42,19 +63,17 @@ async function getTasks(req, res) {
 
 async function getTask(req, res) {
   try {
-    const [[task]] = await pool.execute(
-      `SELECT t.*,
-              CONCAT(u.first_name, ' ', u.last_name) as assigned_name,
-              u.email as assigned_email,
-              l.name as lead_name
-       FROM tasks t
-       LEFT JOIN users u ON u.id = t.assigned_to
-       LEFT JOIN leads l ON l.id = t.lead_id
-       WHERE t.id = ?`,
-      [req.params.id]
-    );
-    if (!task) return res.status(404).json({ success: false, message: "Task not found" });
-    res.json({ success: true, task });
+    const row = await prisma.tasks.findUnique({
+      where: { id: Number(req.params.id) },
+      include: {
+        users_tasks_assigned_toTousers: {
+          select: { first_name: true, last_name: true, email: true },
+        },
+        leads: { select: { name: true } },
+      },
+    });
+    if (!row) return res.status(404).json({ success: false, message: "Task not found" });
+    res.json({ success: true, task: mapTaskRow(row) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -65,21 +84,20 @@ async function createTask(req, res) {
     const { title, description, status, priority, assigned_to, lead_id, due_date } = req.body;
     if (!title?.trim()) return res.status(400).json({ success: false, message: "Title is required" });
 
-    const [result] = await pool.execute(
-      `INSERT INTO tasks (title, description, status, priority, assigned_to, lead_id, due_date)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [
-        title.trim(),
-        description  || null,
-        status       || "todo",
-        priority     || "medium",
-        assigned_to  ? Number(assigned_to) : null,
-        lead_id      ? Number(lead_id)     : null,
-        due_date     || null,
-      ]
-    );
+    const created = await prisma.tasks.create({
+      data: {
+        title: title.trim(),
+        description: description || null,
+        status: status || "todo",
+        priority: priority || "medium",
+        assigned_to: assigned_to ? Number(assigned_to) : null,
+        lead_id: lead_id ? Number(lead_id) : null,
+        due_date: due_date ? new Date(due_date) : null,
+        created_by: req.user?.id || 0,
+      },
+    });
     emitAdminChanged({ scope: "stats", reason: "tasks", action: "create" });
-    res.status(201).json({ success: true, id: result.insertId });
+    res.status(201).json({ success: true, id: created.id });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -88,21 +106,19 @@ async function createTask(req, res) {
 async function updateTask(req, res) {
   try {
     const { title, description, status, priority, assigned_to, lead_id, due_date } = req.body;
-    await pool.execute(
-      `UPDATE tasks SET
-         title=?, description=?, status=?, priority=?, assigned_to=?, lead_id=?, due_date=?
-       WHERE id=?`,
-      [
-        title        || null,
-        description  || null,
-        status       || "todo",
-        priority     || "medium",
-        assigned_to  ? Number(assigned_to) : null,
-        lead_id      ? Number(lead_id)     : null,
-        due_date     || null,
-        req.params.id,
-      ]
-    );
+    await prisma.tasks.update({
+      where: { id: Number(req.params.id) },
+      data: {
+        title: title || null,
+        description: description || null,
+        status: status || "todo",
+        priority: priority || "medium",
+        assigned_to: assigned_to ? Number(assigned_to) : null,
+        lead_id: lead_id ? Number(lead_id) : null,
+        due_date: due_date ? new Date(due_date) : null,
+        updated_at: new Date(),
+      },
+    });
     emitAdminChanged({ scope: "stats", reason: "tasks", action: "update" });
     res.json({ success: true });
   } catch (err) {
@@ -117,7 +133,10 @@ async function updateTaskStatus(req, res) {
     if (!valid.includes(status)) {
       return res.status(400).json({ success: false, message: "Invalid status" });
     }
-    await pool.execute("UPDATE tasks SET status = ? WHERE id = ?", [status, req.params.id]);
+    await prisma.tasks.update({
+      where: { id: Number(req.params.id) },
+      data: { status, updated_at: new Date() },
+    });
     emitAdminChanged({ scope: "stats", reason: "tasks", action: "status" });
     res.json({ success: true });
   } catch (err) {
@@ -127,7 +146,7 @@ async function updateTaskStatus(req, res) {
 
 async function deleteTask(req, res) {
   try {
-    await pool.execute("DELETE FROM tasks WHERE id = ?", [req.params.id]);
+    await prisma.tasks.delete({ where: { id: Number(req.params.id) } });
     emitAdminChanged({ scope: "stats", reason: "tasks", action: "delete" });
     res.json({ success: true });
   } catch (err) {

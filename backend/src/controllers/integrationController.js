@@ -1,5 +1,5 @@
 const crypto = require("crypto");
-const { pool } = require("../config/prismaPool");
+const prisma = require("../config/prisma");
 const {
   INTEGRATIONS,
   getIntegrationByKeyOrSlug,
@@ -19,7 +19,6 @@ function buildFullName(payload) {
     .filter(Boolean)
     .join(" ")
     .trim();
-
   return combined || null;
 }
 
@@ -49,11 +48,7 @@ function normalizeLeadPayload(rawPayload = {}) {
     merged.whatsapp_number
   );
 
-  const email = firstNonEmpty(
-    merged.email,
-    merged.email_address,
-    merged.emailAddress
-  );
+  const email = firstNonEmpty(merged.email, merged.email_address, merged.emailAddress);
 
   const companyName = firstNonEmpty(
     merged.company_name,
@@ -100,7 +95,6 @@ function readWebhookSecret(req) {
   if (authHeader && authHeader.startsWith("Bearer ")) {
     return authHeader.slice(7).trim();
   }
-
   return (
     req.headers["x-integration-secret"] ||
     req.query.secret ||
@@ -111,23 +105,17 @@ function readWebhookSecret(req) {
 
 function safeCompare(value, expected) {
   if (!value || !expected) return false;
-
   const left = Buffer.from(String(value));
   const right = Buffer.from(String(expected));
-
   return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
 function sanitizeHeaders(headers = {}) {
   const clean = {};
-
   for (const [key, value] of Object.entries(headers)) {
-    if (["authorization", "x-integration-secret"].includes(key.toLowerCase())) {
-      continue;
-    }
+    if (["authorization", "x-integration-secret"].includes(key.toLowerCase())) continue;
     clean[key] = value;
   }
-
   return clean;
 }
 
@@ -139,39 +127,39 @@ function getRequestBaseUrl(req) {
 
 async function resolveUserId(value) {
   if (!value) return null;
-
   if (Number.isInteger(Number(value))) {
-    const [rows] = await pool.execute(
-      "SELECT id FROM users WHERE id = ? AND is_active = 1 LIMIT 1",
-      [Number(value)]
-    );
-    if (rows.length) return rows[0].id;
+    const row = await prisma.users.findFirst({
+      where: { id: Number(value), is_active: true },
+      select: { id: true },
+    });
+    if (row) return row.id;
   }
-
-  const [rows] = await pool.execute(
-    "SELECT id FROM users WHERE clerk_user_id = ? AND is_active = 1 LIMIT 1",
-    [String(value)]
-  );
-  return rows[0]?.id || null;
+  const byClerk = await prisma.users.findFirst({
+    where: { clerk_user_id: String(value), is_active: true },
+    select: { id: true },
+  });
+  return byClerk?.id || null;
 }
 
 async function resolveFallbackOwnerId() {
   const envOwner =
-    process.env.DEFAULT_LEAD_OWNER_ID ||
-    process.env.DEFAULT_LEAD_OWNER_CLERK_USER_ID;
-
+    process.env.DEFAULT_LEAD_OWNER_ID || process.env.DEFAULT_LEAD_OWNER_CLERK_USER_ID;
   const explicitOwnerId = await resolveUserId(envOwner);
   if (explicitOwnerId) return explicitOwnerId;
 
-  const [admins] = await pool.execute(
-    "SELECT id FROM users WHERE is_active = 1 AND role = 'admin' ORDER BY id ASC LIMIT 1"
-  );
-  if (admins.length) return admins[0].id;
+  const admin = await prisma.users.findFirst({
+    where: { is_active: true, role: "admin" },
+    orderBy: { id: "asc" },
+    select: { id: true },
+  });
+  if (admin) return admin.id;
 
-  const [users] = await pool.execute(
-    "SELECT id FROM users WHERE is_active = 1 ORDER BY id ASC LIMIT 1"
-  );
-  return users[0]?.id || null;
+  const any = await prisma.users.findFirst({
+    where: { is_active: true },
+    orderBy: { id: "asc" },
+    select: { id: true },
+  });
+  return any?.id || null;
 }
 
 async function createLeadFromIntegration({
@@ -192,70 +180,56 @@ async function createLeadFromIntegration({
     (await resolveUserId(lead.assigned_to)) || fallbackOwnerId || (await resolveFallbackOwnerId());
 
   if (!assignedUserId) {
-    const err = new Error(
-      "No active CRM user is available to own this incoming lead"
-    );
+    const err = new Error("No active CRM user is available to own this incoming lead");
     err.status = 400;
     throw err;
   }
 
-  const [result] = await pool.execute(
-    `INSERT INTO leads
-      (name, company_name, phone, email, source, status, label, assigned_to, created_by, follow_up_date, notes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      lead.name,
-      lead.company_name || null,
-      lead.phone,
-      lead.email || null,
-      integration.key,
-      lead.status || "new",
-      lead.label || integration.name,
-      assignedUserId,
-      createdById || assignedUserId,
-      lead.follow_up_date || null,
-      lead.notes || null,
-    ]
-  );
+  const created = await prisma.leads.create({
+    data: {
+      name: lead.name,
+      company_name: lead.company_name || null,
+      phone: lead.phone,
+      email: lead.email || null,
+      source: integration.key,
+      status: lead.status || "new",
+      label: lead.label || integration.name,
+      assigned_to: assignedUserId,
+      created_by: createdById || assignedUserId,
+      follow_up_date: lead.follow_up_date
+        ? new Date(String(lead.follow_up_date).slice(0, 10))
+        : null,
+      notes: lead.notes || null,
+    },
+  });
 
-  const [[created]] = await pool.execute(
-    "SELECT * FROM leads WHERE id = ? LIMIT 1",
-    [result.insertId]
-  );
-
-  return created;
+  return prisma.leads.findUnique({ where: { id: created.id } });
 }
 
 async function logWebhookReceipt(integrationKey, req) {
-  const [result] = await pool.execute(
-    `INSERT INTO integration_webhooks (source_key, status, payload_json, headers_json)
-     VALUES (?, 'received', ?, ?)`,
-    [
-      integrationKey,
-      JSON.stringify(req.body || {}),
-      JSON.stringify(sanitizeHeaders(req.headers)),
-    ]
-  );
-
-  return result.insertId;
+  const created = await prisma.integration_webhooks.create({
+    data: {
+      source_key: integrationKey,
+      status: "received",
+      payload_json: req.body || {},
+      headers_json: sanitizeHeaders(req.headers),
+    },
+  });
+  return created.id;
 }
 
 async function markWebhookProcessed(logId, leadId) {
-  await pool.execute(
-    `UPDATE integration_webhooks
-     SET status = 'processed', lead_id = ?, error_message = NULL
-     WHERE id = ?`,
-    [leadId || null, logId]
-  );
+  await prisma.integration_webhooks.update({
+    where: { id: logId },
+    data: { status: "processed", lead_id: leadId || null, error_message: null },
+  });
 }
 
 async function markWebhookFailed(logId, message) {
-  await pool.execute(
-    `UPDATE integration_webhooks
-     SET status = 'failed', error_message = ?
-     WHERE id = ?`,
-    [message, logId]
-  );
+  await prisma.integration_webhooks.update({
+    where: { id: logId },
+    data: { status: "failed", error_message: message },
+  });
 }
 
 async function getIntegrationCatalog(_req, res) {
@@ -273,13 +247,11 @@ async function getIntegrationCatalog(_req, res) {
 
 async function getIntegrationCatalogWithStatus(req, res) {
   try {
-    const [rows] = await pool.execute(
-      "SELECT `key`, is_active FROM integrations ORDER BY `key` ASC"
-    );
-
-    const statuses = Object.fromEntries(
-      rows.map((row) => [row.key, !!row.is_active])
-    );
+    const rows = await prisma.integrations.findMany({
+      select: { key: true, is_active: true },
+      orderBy: { key: "asc" },
+    });
+    const statuses = Object.fromEntries(rows.map((row) => [row.key, !!row.is_active]));
 
     res.json({
       success: true,

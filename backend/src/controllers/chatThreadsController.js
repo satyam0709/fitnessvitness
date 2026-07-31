@@ -1,14 +1,31 @@
-const { pool } = require("../config/prismaPool");
+const prisma = require("../config/prisma");
+
+function displayName(u) {
+  if (!u) return "";
+  return `${u.first_name || ""} ${u.last_name || ""}`.trim() || u.email || "";
+}
+
+function pairKey(a, b) {
+  const x = Number(a);
+  const y = Number(b);
+  return x < y ? `${x}:${y}` : `${y}:${x}`;
+}
 
 async function listChatUsers(req, res) {
   try {
-    const [users] = await pool.execute(
-      `SELECT id, full_name, email, avatar_url FROM users
-       WHERE is_active = 1 AND id != ?
-       ORDER BY full_name`,
-      [req.user.id]
-    );
-    res.json({ users });
+    const users = await prisma.users.findMany({
+      where: { is_active: true, NOT: { id: req.user.id } },
+      select: { id: true, first_name: true, last_name: true, email: true, profile_image: true },
+      orderBy: [{ first_name: "asc" }, { last_name: "asc" }],
+    });
+    res.json({
+      users: users.map((u) => ({
+        id: u.id,
+        full_name: displayName(u),
+        email: u.email,
+        avatar_url: u.profile_image || null,
+      })),
+    });
   } catch (err) {
     console.error("listChatUsers error:", err);
     res.status(500).json({ error: "Failed to list users" });
@@ -17,15 +34,50 @@ async function listChatUsers(req, res) {
 
 async function listThreads(req, res) {
   try {
-    const [threads] = await pool.execute(
-      `SELECT t.*, u.full_name, u.avatar_url,
-              (SELECT content FROM chat_thread_messages WHERE thread_id = t.id ORDER BY created_at DESC LIMIT 1) as last_message
-       FROM chat_threads t
-       LEFT JOIN users u ON (t.participant_id = u.id)
-       WHERE t.user_id = ?
-       ORDER BY t.updated_at DESC`,
-      [req.user.id]
-    );
+    const meId = Number(req.user.id);
+    const memberships = await prisma.chat_thread_members.findMany({
+      where: { user_id: meId },
+      include: {
+        chat_threads: {
+          include: {
+            chat_thread_members: {
+              include: {
+                users: {
+                  select: { id: true, first_name: true, last_name: true, email: true, profile_image: true },
+                },
+              },
+            },
+            chat_thread_messages: {
+              orderBy: { created_at: "desc" },
+              take: 1,
+            },
+          },
+        },
+      },
+    });
+
+    const threads = memberships
+      .map((m) => {
+        const t = m.chat_threads;
+        if (!t) return null;
+        const other = (t.chat_thread_members || []).find((x) => x.user_id !== meId)?.users;
+        const last = t.chat_thread_messages?.[0];
+        return {
+          id: t.id,
+          thread_type: t.thread_type,
+          title: t.title,
+          created_by: t.created_by,
+          created_at: t.created_at,
+          updated_at: t.updated_at,
+          participant_id: other?.id || null,
+          full_name: displayName(other) || t.title || "Chat",
+          avatar_url: other?.profile_image || null,
+          last_message: last?.body || null,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+
     res.json({ threads });
   } catch (err) {
     console.error("listThreads error:", err);
@@ -35,16 +87,41 @@ async function listThreads(req, res) {
 
 async function getThreadDetails(req, res) {
   try {
-    const { threadId } = req.params;
-    const [threads] = await pool.execute(
-      `SELECT t.*, u.full_name, u.avatar_url
-       FROM chat_threads t
-       LEFT JOIN users u ON (t.participant_id = u.id)
-       WHERE t.id = ?`,
-      [threadId]
-    );
-    if (!threads.length) return res.status(404).json({ error: "Thread not found" });
-    res.json({ thread: threads[0] });
+    const threadId = Number(req.params.threadId);
+    const meId = Number(req.user.id);
+    const member = await prisma.chat_thread_members.findFirst({
+      where: { thread_id: threadId, user_id: meId },
+    });
+    if (!member) return res.status(404).json({ error: "Thread not found" });
+
+    const t = await prisma.chat_threads.findUnique({
+      where: { id: threadId },
+      include: {
+        chat_thread_members: {
+          include: {
+            users: {
+              select: { id: true, first_name: true, last_name: true, email: true, profile_image: true },
+            },
+          },
+        },
+      },
+    });
+    if (!t) return res.status(404).json({ error: "Thread not found" });
+
+    const other = (t.chat_thread_members || []).find((x) => x.user_id !== meId)?.users;
+    res.json({
+      thread: {
+        id: t.id,
+        thread_type: t.thread_type,
+        title: t.title,
+        created_by: t.created_by,
+        created_at: t.created_at,
+        updated_at: t.updated_at,
+        participant_id: other?.id || null,
+        full_name: displayName(other) || t.title || "Chat",
+        avatar_url: other?.profile_image || null,
+      },
+    });
   } catch (err) {
     console.error("getThreadDetails error:", err);
     res.status(500).json({ error: "Failed to get thread" });
@@ -53,21 +130,44 @@ async function getThreadDetails(req, res) {
 
 async function createThread(req, res) {
   try {
-    const { participantId } = req.body;
+    const participantId = Number(req.body.participantId);
     if (!participantId) return res.status(400).json({ error: "Participant required" });
+    const meId = Number(req.user.id);
+    const key = pairKey(meId, participantId);
 
-    const [existing] = await pool.execute(
-      `SELECT id FROM chat_threads
-       WHERE user_id = ? AND participant_id = ?`,
-      [req.user.id, participantId]
-    );
-    if (existing.length) return res.json({ thread: existing[0] });
+    const existingPair = await prisma.chat_direct_pairs.findUnique({ where: { pair_key: key } });
+    if (existingPair) {
+      return res.json({
+        thread: {
+          id: existingPair.thread_id,
+          user_id: meId,
+          participant_id: participantId,
+        },
+      });
+    }
 
-    const [result] = await pool.execute(
-      `INSERT INTO chat_threads (user_id, participant_id) VALUES (?, ?)`,
-      [req.user.id, participantId]
-    );
-    res.status(201).json({ thread: { id: result.insertId, user_id: req.user.id, participant_id: participantId } });
+    const created = await prisma.$transaction(async (tx) => {
+      const thread = await tx.chat_threads.create({
+        data: {
+          thread_type: "direct",
+          created_by: meId,
+        },
+      });
+      await tx.chat_thread_members.createMany({
+        data: [
+          { thread_id: thread.id, user_id: meId, member_role: "member" },
+          { thread_id: thread.id, user_id: participantId, member_role: "member" },
+        ],
+      });
+      await tx.chat_direct_pairs.create({
+        data: { pair_key: key, thread_id: thread.id },
+      });
+      return thread;
+    });
+
+    res.status(201).json({
+      thread: { id: created.id, user_id: meId, participant_id: participantId },
+    });
   } catch (err) {
     console.error("createThread error:", err);
     res.status(500).json({ error: "Failed to create thread" });
@@ -76,17 +176,26 @@ async function createThread(req, res) {
 
 async function listMessages(req, res) {
   try {
-    const { threadId } = req.params;
-    const [messages] = await pool.execute(
-      `SELECT m.*, u.full_name, u.avatar_url
-       FROM chat_thread_messages m
-       LEFT JOIN users u ON (m.sender_id = u.id)
-       WHERE m.thread_id = ?
-       ORDER BY m.created_at ASC
-       LIMIT 100`,
-      [threadId]
-    );
-    res.json({ messages });
+    const threadId = Number(req.params.threadId);
+    const messages = await prisma.chat_thread_messages.findMany({
+      where: { thread_id: threadId },
+      include: {
+        users: {
+          select: { id: true, first_name: true, last_name: true, email: true, profile_image: true },
+        },
+      },
+      orderBy: { created_at: "asc" },
+      take: 100,
+    });
+    res.json({
+      messages: messages.map((m) => ({
+        ...m,
+        content: m.body,
+        full_name: displayName(m.users),
+        avatar_url: m.users?.profile_image || null,
+        users: undefined,
+      })),
+    });
   } catch (err) {
     console.error("listMessages error:", err);
     res.status(500).json({ error: "Failed to list messages" });
@@ -95,16 +204,22 @@ async function listMessages(req, res) {
 
 async function sendMessageToThread(req, res) {
   try {
-    const { threadId } = req.params;
+    const threadId = Number(req.params.threadId);
     const { content } = req.body;
     if (!content) return res.status(400).json({ error: "Content required" });
 
-    const [result] = await pool.execute(
-      `INSERT INTO chat_thread_messages (thread_id, sender_id, content) VALUES (?, ?, ?)`,
-      [threadId, req.user.id, content]
-    );
-    await pool.execute(`UPDATE chat_threads SET updated_at = NOW() WHERE id = ?`, [threadId]);
-    res.status(201).json({ id: result.insertId, content, sender_id: req.user.id });
+    const created = await prisma.chat_thread_messages.create({
+      data: {
+        thread_id: threadId,
+        sender_id: req.user.id,
+        body: content,
+      },
+    });
+    await prisma.chat_threads.update({
+      where: { id: threadId },
+      data: { updated_at: new Date() },
+    });
+    res.status(201).json({ id: created.id, content, sender_id: req.user.id });
   } catch (err) {
     console.error("sendMessageToThread error:", err);
     res.status(500).json({ error: "Failed to send message" });
@@ -113,11 +228,20 @@ async function sendMessageToThread(req, res) {
 
 async function markThreadRead(req, res) {
   try {
-    const { threadId } = req.params;
-    await pool.execute(
-      `UPDATE chat_thread_messages SET is_read = 1 WHERE thread_id = ? AND receiver_id = ?`,
-      [threadId, req.user.id]
-    );
+    const threadId = Number(req.params.threadId);
+    const meId = Number(req.user.id);
+    const last = await prisma.chat_thread_messages.findFirst({
+      where: { thread_id: threadId },
+      orderBy: { id: "desc" },
+      select: { id: true },
+    });
+    await prisma.chat_thread_members.updateMany({
+      where: { thread_id: threadId, user_id: meId },
+      data: {
+        last_read_message_id: last?.id || null,
+        last_read_at: new Date(),
+      },
+    });
     res.json({ success: true });
   } catch (err) {
     console.error("markThreadRead error:", err);
@@ -127,8 +251,13 @@ async function markThreadRead(req, res) {
 
 async function deleteThread(req, res) {
   try {
-    const { threadId } = req.params;
-    await pool.execute(`DELETE FROM chat_threads WHERE id = ? AND user_id = ?`, [threadId, req.user.id]);
+    const threadId = Number(req.params.threadId);
+    const meId = Number(req.user.id);
+    const member = await prisma.chat_thread_members.findFirst({
+      where: { thread_id: threadId, user_id: meId },
+    });
+    if (!member) return res.status(404).json({ error: "Thread not found" });
+    await prisma.chat_threads.delete({ where: { id: threadId } });
     res.json({ success: true });
   } catch (err) {
     console.error("deleteThread error:", err);

@@ -1,5 +1,4 @@
 const prisma = require("../config/prisma");
-const { Prisma } = require("../generated/prisma");
 const { canSeeAllTeamRecords } = require("../utils/crmTeamAccess");
 
 function tenantIdFromReq(req) {
@@ -153,47 +152,45 @@ async function getClosedWonLostForMonth(req, year, month) {
 async function getClosedWonByMonth(req, from, to) {
   const fromD = from ? startOfDay(from) : null;
   const toD = to ? endOfDay(to) : null;
-  const tid = tenantIdFromReq(req);
-  const uid = req && !canSeeAllTeamRecords(req) ? Number(req.user?.id) : null;
-
-  const conditions = [
-    Prisma.sql`is_deleted = 0`,
-    Prisma.sql`stage = 'closed_won'`,
-    Prisma.sql`closed_won_at IS NOT NULL`,
-  ];
-  if (tid == null) {
-    conditions.push(Prisma.sql`tenant_id IS NULL`);
-  } else {
-    conditions.push(Prisma.sql`tenant_id = ${tid}`);
-  }
-  if (fromD) conditions.push(Prisma.sql`closed_won_at >= ${fromD}`);
-  if (toD) conditions.push(Prisma.sql`closed_won_at <= ${toD}`);
-  if (uid) {
-    conditions.push(Prisma.sql`(created_by = ${uid} OR owner_user_id = ${uid})`);
+  const where = {
+    ...baseWhere(req),
+    stage: "closed_won",
+    closed_won_at: { not: null },
+  };
+  if (fromD || toD) {
+    where.closed_won_at = { not: null };
+    if (fromD) where.closed_won_at.gte = fromD;
+    if (toD) where.closed_won_at.lte = toD;
   }
 
-  const whereSql = Prisma.join(conditions, " AND ");
-  const rows = await prisma.$queryRaw`
-    SELECT DATE_FORMAT(closed_won_at, '%Y-%m') AS ym,
-           COUNT(*) AS cnt,
-           COALESCE(SUM(
-             CASE
-               WHEN UPPER(COALESCE(currency, 'INR')) = 'INR'
-               THEN COALESCE(final_amount, amount)
-               ELSE 0
-             END
-           ), 0) AS booked
-    FROM opportunities
-    WHERE ${whereSql}
-    GROUP BY DATE_FORMAT(closed_won_at, '%Y-%m')
-    ORDER BY ym ASC
-  `;
+  const rows = await prisma.opportunities.findMany({
+    where,
+    select: {
+      closed_won_at: true,
+      amount: true,
+      final_amount: true,
+      currency: true,
+    },
+  });
 
-  return rows.map((r) => ({
-    month_key: String(r.ym),
-    closed_won_count: Number(r.cnt) || 0,
-    booked_won_total: num(r.booked),
-  }));
+  const byMonth = new Map();
+  for (const o of rows) {
+    if (!o.closed_won_at) continue;
+    const d = new Date(o.closed_won_at);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const cur = byMonth.get(key) || { closed_won_count: 0, booked_won_total: 0 };
+    cur.closed_won_count += 1;
+    cur.booked_won_total += inrValue(o, true);
+    byMonth.set(key, cur);
+  }
+
+  return [...byMonth.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([month_key, v]) => ({
+      month_key,
+      closed_won_count: v.closed_won_count,
+      booked_won_total: v.booked_won_total,
+    }));
 }
 
 /**

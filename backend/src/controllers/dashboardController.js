@@ -1,4 +1,4 @@
-const { pool } = require("../config/prismaPool");
+const prisma = require("../config/prisma");
 const { canSeeAllTeamRecords } = require("../utils/crmTeamAccess");
 
 function formatYmd(d) {
@@ -22,6 +22,20 @@ function sqlDateToYmd(v) {
   if (!v) return "";
   if (v instanceof Date) return formatYmd(v);
   return String(v).slice(0, 10);
+}
+
+/** Inclusive start / exclusive end for a local calendar day (YYYY-MM-DD). */
+function dayRange(ymd) {
+  const start = parseYmd(ymd);
+  if (!start) {
+    const now = new Date();
+    const s = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    return { gte: s, lt: new Date(s.getFullYear(), s.getMonth(), s.getDate() + 1) };
+  }
+  return {
+    gte: start,
+    lt: new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1),
+  };
 }
 
 function emptyPanels() {
@@ -92,12 +106,11 @@ function emptyTodaySummary() {
   };
 }
 
-async function safeSingleRow(query, params, fallback = {}) {
+async function safeCount(model, where, fallback = 0) {
   try {
-    const [[row]] = await pool.execute(query, params);
-    return row || fallback;
+    return Number(await prisma[model].count({ where })) || 0;
   } catch (err) {
-    console.error("dashboard safeSingleRow fallback:", err.message);
+    console.error(`dashboard safeCount(${model}) fallback:`, err.message);
     return fallback;
   }
 }
@@ -107,96 +120,142 @@ function restrictToOwn(req) {
   return !canSeeAllTeamRecords(req);
 }
 
-function leadScopeSql(req, alias = "l") {
-  const parts = ["1=1"];
-  const params = [];
-  if (restrictToOwn(req)) {
-    parts.push(`(${alias}.assigned_to = ? OR ${alias}.created_by = ?)`);
-    params.push(req.user.id, req.user.id);
-  }
-  return { where: parts.join(" AND "), params };
+function leadScope(req) {
+  if (!restrictToOwn(req)) return {};
+  const uid = req.user.id;
+  return { OR: [{ assigned_to: uid }, { created_by: uid }] };
 }
 
-function opportunityScopeSql(req, alias = "o") {
-  const parts = [`${alias}.is_deleted = 0`];
-  const params = [];
+function opportunityScope(req) {
+  const where = { is_deleted: false };
   if (restrictToOwn(req)) {
-    parts.push(`(${alias}.created_by = ? OR ${alias}.owner_user_id = ?)`);
-    params.push(req.user.id, req.user.id);
+    const uid = req.user.id;
+    where.OR = [{ created_by: uid }, { owner_user_id: uid }];
   }
-  return { where: parts.join(" AND "), params };
+  return where;
 }
 
-function ticketScopeSql(req, alias = "t") {
-  const parts = [`${alias}.is_deleted = 0`];
-  const params = [];
+function ticketScope(req) {
+  const where = { is_deleted: false };
   if (restrictToOwn(req)) {
-    parts.push(`(${alias}.created_by = ? OR ${alias}.assigned_to = ?)`);
-    params.push(req.user.id, req.user.id);
+    const uid = req.user.id;
+    where.OR = [{ created_by: uid }, { assigned_to: uid }];
   }
-  return { where: parts.join(" AND "), params };
+  return where;
 }
 
-function taskScopeSql(req, alias = "t") {
-  const parts = ["1=1"];
-  const params = [];
-  if (restrictToOwn(req)) {
-    parts.push(`(${alias}.assigned_to = ? OR ${alias}.created_by = ?)`);
-    params.push(req.user.id, req.user.id);
-  }
-  return { where: parts.join(" AND "), params };
+function taskScope(req) {
+  if (!restrictToOwn(req)) return {};
+  const uid = req.user.id;
+  return { OR: [{ assigned_to: uid }, { created_by: uid }] };
 }
 
-function reminderScopeSql(req, alias = "r") {
-  const parts = ["1=1"];
-  const params = [];
-  if (restrictToOwn(req)) {
-    parts.push(`(${alias}.user_id = ? OR ${alias}.assigned_to_user_id = ?)`);
-    params.push(req.user.id, req.user.id);
-  }
-  return { where: parts.join(" AND "), params };
+function reminderScope(req) {
+  if (!restrictToOwn(req)) return {};
+  const uid = req.user.id;
+  return { OR: [{ user_id: uid }, { assigned_to_user_id: uid }] };
 }
 
-function contactScopeSql(req, alias = "c") {
-  const parts = ["1=1"];
-  const params = [];
-  if (restrictToOwn(req)) {
-    parts.push(`(${alias}.created_by = ? OR ${alias}.assigned_to = ?)`);
-    params.push(req.user.id, req.user.id);
-  }
-  return { where: parts.join(" AND "), params };
+function contactScope(req) {
+  if (!restrictToOwn(req)) return {};
+  const uid = req.user.id;
+  return { OR: [{ created_by: uid }, { assigned_to: uid }] };
 }
 
-function companyScopeSql(req, alias = "c") {
-  const parts = [`${alias}.is_deleted = 0`];
-  const params = [];
+function companyScope(req) {
+  const where = { is_deleted: false };
   if (restrictToOwn(req)) {
-    parts.push(`(${alias}.created_by = ? OR ${alias}.assigned_to = ?)`);
-    params.push(req.user.id, req.user.id);
+    const uid = req.user.id;
+    where.OR = [{ created_by: uid }, { assigned_to: uid }];
   }
-  return { where: parts.join(" AND "), params };
+  return where;
+}
+
+function todoVisibility(req) {
+  if (!restrictToOwn(req)) return {};
+  const uid = req.user.id;
+  return {
+    OR: [
+      { created_by: uid },
+      { crm_todo_assignees: { some: { user_id: uid } } },
+    ],
+  };
+}
+
+function andWhere(...parts) {
+  const filtered = parts.filter((p) => p && Object.keys(p).length > 0);
+  if (filtered.length === 0) return {};
+  if (filtered.length === 1) return filtered[0];
+  return { AND: filtered };
+}
+
+const INR_CURRENCY = {
+  OR: [{ currency: null }, { currency: "INR" }, { currency: "inr" }],
+};
+
+/**
+ * SUM of opportunity amounts in INR only (matches UPPER(COALESCE(currency,'INR')) = 'INR').
+ * When useFinalAmount, uses COALESCE(final_amount, amount).
+ */
+async function sumOpportunityInr(where, { useFinalAmount = false } = {}) {
+  try {
+    const fullWhere = andWhere(where, INR_CURRENCY);
+    if (!useFinalAmount) {
+      const r = await prisma.opportunities.aggregate({
+        where: fullWhere,
+        _sum: { amount: true },
+      });
+      return Number(r._sum.amount) || 0;
+    }
+    const rows = await prisma.opportunities.findMany({
+      where: fullWhere,
+      select: { amount: true, final_amount: true },
+    });
+    return rows.reduce((sum, row) => sum + Number(row.final_amount ?? row.amount ?? 0), 0);
+  } catch (err) {
+    console.error("dashboard sumOpportunityInr fallback:", err.message);
+    return 0;
+  }
 }
 
 async function countMessagesPeriodic(req, todayYmd) {
-  const [[row]] = await pool.execute(
-    `SELECT COUNT(*) AS c
-     FROM chat_thread_messages m
-     INNER JOIN chat_thread_members mem ON mem.thread_id = m.thread_id AND mem.user_id = ?
-     WHERE DATE(m.created_at) = ?`,
-    [req.user.id, todayYmd]
-  );
-  return Number(row.c) || 0;
+  try {
+    const range = dayRange(todayYmd);
+    return await prisma.chat_thread_messages.count({
+      where: {
+        created_at: range,
+        chat_threads: {
+          chat_thread_members: {
+            some: { user_id: req.user.id },
+          },
+        },
+      },
+    });
+  } catch (err) {
+    console.error("dashboard countMessagesPeriodic fallback:", err.message);
+    return 0;
+  }
 }
 
 async function countMessagesOpenUnread(req) {
-  const [[row]] = await pool.execute(
-    `SELECT COUNT(*) AS c
-     FROM chat_thread_messages m
-     INNER JOIN chat_thread_members mem ON mem.thread_id = m.thread_id AND mem.user_id = ?
-     WHERE m.id > COALESCE(mem.last_read_message_id, 0)`,
-    [req.user.id]
-  );
-  return Number(row.c) || 0;
+  try {
+    const members = await prisma.chat_thread_members.findMany({
+      where: { user_id: req.user.id },
+      select: { thread_id: true, last_read_message_id: true },
+    });
+    if (!members.length) return 0;
+    return await prisma.chat_thread_messages.count({
+      where: {
+        OR: members.map((m) => ({
+          thread_id: m.thread_id,
+          id: { gt: m.last_read_message_id || 0 },
+        })),
+      },
+    });
+  } catch (err) {
+    console.error("dashboard countMessagesOpenUnread fallback:", err.message);
+    return 0;
+  }
 }
 
 /**
@@ -205,434 +264,288 @@ async function countMessagesOpenUnread(req) {
 async function loadDashboardPanels(req) {
   const todayYmd = formatYmd(new Date());
   const dateDmy = formatDmy(new Date());
-  const ls = leadScopeSql(req, "l");
-  const os = opportunityScopeSql(req, "o");
-  const ts = ticketScopeSql(req, "t");
-  const ks = taskScopeSql(req, "t");
-  const rs = reminderScopeSql(req, "r");
-  const cs = contactScopeSql(req, "c");
-  const gs = companyScopeSql(req, "g");
+  const today = dayRange(todayYmd);
+
+  const ls = leadScope(req);
+  const os = opportunityScope(req);
+  const ts = ticketScope(req);
+  const ks = taskScope(req);
+  const rs = reminderScope(req);
+  const cs = contactScope(req);
+  const gs = companyScope(req);
+
+  const openOppWhere = andWhere(os, {
+    stage: { notIn: ["closed_won", "closed_lost"] },
+  });
+  const periodicOppWhere = andWhere(os, { created_at: today });
+  const closedWonTodayWhere = andWhere(os, {
+    stage: "closed_won",
+    closed_won_at: today,
+  });
+  const closedLostTodayWhere = andWhere(os, {
+    stage: "closed_lost",
+    closed_lost_at: today,
+  });
+  const lifetimeWonWhere = andWhere(os, { stage: "closed_won" });
+  const lifetimeLostWhere = andWhere(os, { stage: "closed_lost" });
+
+  const taskDueOrCreatedToday = {
+    OR: [
+      { due_date: { gte: today.gte, lt: today.lt } },
+      { AND: [{ due_date: null }, { created_at: today }] },
+    ],
+  };
+
+  const ticketClosedToday = {
+    OR: [
+      { closed_at: today },
+      { AND: [{ closed_at: null }, { updated_at: today }] },
+    ],
+  };
 
   const [
-    openLeadsRes,
-    openOpportunitiesRes,
-    openOppValueRes,
-    openTicketsRes,
-    openContactsRes,
-    openActivitiesRes,
-    openCallsRes,
-    openCompaniesRes,
+    openLeads,
+    openOpportunities,
+    openOppValue,
+    openTickets,
+    openContacts,
+    openActivities,
+    openCalls,
+    openCompanies,
     openMessages,
-    periodicLeadsRes,
-    periodicOpportunitiesRes,
-    periodicOppValueRes,
-    periodicTicketsRes,
-    periodicContactsRes,
-    periodicActivitiesRes,
-    periodicCallsRes,
-    periodicCompaniesRes,
+    periodicLeads,
+    periodicOpportunities,
+    periodicOppValue,
+    periodicTickets,
+    periodicContacts,
+    periodicActivities,
+    periodicCalls,
+    periodicCompanies,
     periodicMessages,
-    resultClosedTicketsRes,
-    resultClosedWonRes,
-    resultClosedWonValueRes,
-    resultClosedLostRes,
-    resultClosedLostValueRes,
-    lifetimeClosedWonRes,
-    lifetimeClosedWonValueRes,
-    lifetimeClosedLostRes,
-    lifetimeClosedLostValueRes,
-    resultLeadsConvertedRes,
-    resultLeadsRecycledRes,
-    resultLeadsDeadRes,
-    resultCompletedActivitiesRes,
+    resultClosedTickets,
+    resultClosedWon,
+    resultClosedWonValue,
+    resultClosedLost,
+    resultClosedLostValue,
+    lifetimeClosedWon,
+    lifetimeClosedWonValue,
+    lifetimeClosedLost,
+    lifetimeClosedLostValue,
+    resultLeadsConverted,
+    resultLeadsRecycled,
+    resultLeadsDead,
+    resultCompletedActivities,
   ] = await Promise.all([
-    pool.execute(
-      `SELECT COUNT(*) AS c FROM leads l
-       WHERE ${ls.where}
-         AND l.status NOT IN ('confirm','cancel')`,
-      ls.params
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS c FROM opportunities o
-       WHERE ${os.where}
-         AND o.stage NOT IN ('closed_won','closed_lost')`,
-      os.params
-    ),
-    pool.execute(
-      `SELECT COALESCE(SUM(
-          CASE WHEN UPPER(COALESCE(o.currency,'INR')) = 'INR' THEN o.amount ELSE 0 END
-        ), 0) AS s
-       FROM opportunities o
-       WHERE ${os.where}
-         AND o.stage NOT IN ('closed_won','closed_lost')`,
-      os.params
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS c FROM tickets t
-       WHERE ${ts.where}
-         AND t.status NOT IN ('resolved','closed')`,
-      ts.params
-    ),
-    pool.execute(`SELECT COUNT(*) AS c FROM contacts c WHERE ${cs.where}`, cs.params),
-    pool.execute(
-      `SELECT COUNT(*) AS c FROM tasks t
-       WHERE ${ks.where}
-         AND t.status NOT IN ('done','completed')`,
-      ks.params
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS c FROM reminders r
-       WHERE ${rs.where}
-         AND r.is_done = 0`,
-      rs.params
-    ),
-    pool.execute(`SELECT COUNT(*) AS c FROM companies g WHERE ${gs.where}`, gs.params),
+    prisma.leads.count({
+      where: andWhere(ls, { status: { notIn: ["confirm", "cancel"] } }),
+    }),
+    prisma.opportunities.count({ where: openOppWhere }),
+    sumOpportunityInr(openOppWhere),
+    prisma.tickets.count({
+      where: andWhere(ts, { status: { notIn: ["resolved", "closed"] } }),
+    }),
+    prisma.contacts.count({ where: cs }),
+    prisma.tasks.count({
+      where: andWhere(ks, { status: { notIn: ["done", "completed"] } }),
+    }),
+    prisma.reminders.count({
+      where: andWhere(rs, { is_done: false }),
+    }),
+    prisma.companies.count({ where: gs }),
     countMessagesOpenUnread(req),
-    pool.execute(
-      `SELECT COUNT(*) AS c FROM leads l
-       WHERE ${ls.where} AND DATE(l.created_at) = ?`,
-      [...ls.params, todayYmd]
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS c FROM opportunities o
-       WHERE ${os.where} AND DATE(o.created_at) = ?`,
-      [...os.params, todayYmd]
-    ),
-    pool.execute(
-      `SELECT COALESCE(SUM(
-          CASE WHEN UPPER(COALESCE(o.currency,'INR')) = 'INR' THEN o.amount ELSE 0 END
-        ), 0) AS s
-       FROM opportunities o
-       WHERE ${os.where} AND DATE(o.created_at) = ?`,
-      [...os.params, todayYmd]
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS c FROM tickets t
-       WHERE ${ts.where} AND DATE(t.created_at) = ?`,
-      [...ts.params, todayYmd]
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS c FROM contacts c
-       WHERE ${cs.where} AND DATE(c.created_at) = ?`,
-      [...cs.params, todayYmd]
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS c FROM tasks t
-       WHERE ${ks.where} AND DATE(COALESCE(t.due_date, t.created_at)) = ?`,
-      [...ks.params, todayYmd]
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS c FROM reminders r
-       WHERE ${rs.where} AND DATE(r.remind_at) = ?`,
-      [...rs.params, todayYmd]
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS c FROM companies g
-       WHERE ${gs.where} AND DATE(g.created_at) = ?`,
-      [...gs.params, todayYmd]
-    ),
+    prisma.leads.count({
+      where: andWhere(ls, { created_at: today }),
+    }),
+    prisma.opportunities.count({ where: periodicOppWhere }),
+    sumOpportunityInr(periodicOppWhere),
+    prisma.tickets.count({
+      where: andWhere(ts, { created_at: today }),
+    }),
+    prisma.contacts.count({
+      where: andWhere(cs, { created_at: today }),
+    }),
+    prisma.tasks.count({
+      where: andWhere(ks, taskDueOrCreatedToday),
+    }),
+    prisma.reminders.count({
+      where: andWhere(rs, { remind_at: today }),
+    }),
+    prisma.companies.count({
+      where: andWhere(gs, { created_at: today }),
+    }),
     countMessagesPeriodic(req, todayYmd),
-    pool.execute(
-      `SELECT COUNT(*) AS c FROM tickets t
-       WHERE ${ts.where}
-         AND t.status IN ('resolved','closed')
-         AND DATE(COALESCE(t.closed_at, t.updated_at)) = ?`,
-      [...ts.params, todayYmd]
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS c FROM opportunities o
-       WHERE ${os.where}
-         AND o.stage = 'closed_won'
-         AND DATE(o.closed_won_at) = ?`,
-      [...os.params, todayYmd]
-    ),
-    pool.execute(
-      `SELECT COALESCE(SUM(
-          CASE WHEN UPPER(COALESCE(o.currency,'INR')) = 'INR' THEN COALESCE(o.final_amount, o.amount) ELSE 0 END
-        ), 0) AS s
-       FROM opportunities o
-       WHERE ${os.where}
-         AND o.stage = 'closed_won'
-         AND DATE(o.closed_won_at) = ?`,
-      [...os.params, todayYmd]
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS c FROM opportunities o
-       WHERE ${os.where}
-         AND o.stage = 'closed_lost'
-         AND DATE(o.closed_lost_at) = ?`,
-      [...os.params, todayYmd]
-    ),
-    pool.execute(
-      `SELECT COALESCE(SUM(
-          CASE WHEN UPPER(COALESCE(o.currency,'INR')) = 'INR' THEN o.amount ELSE 0 END
-        ), 0) AS s
-       FROM opportunities o
-       WHERE ${os.where}
-         AND o.stage = 'closed_lost'
-         AND DATE(o.closed_lost_at) = ?`,
-      [...os.params, todayYmd]
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS c FROM opportunities o
-       WHERE ${os.where} AND o.stage = 'closed_won' AND o.is_deleted = 0`,
-      os.params
-    ),
-    pool.execute(
-      `SELECT COALESCE(SUM(
-          CASE WHEN UPPER(COALESCE(o.currency,'INR')) = 'INR' THEN COALESCE(o.final_amount, o.amount) ELSE 0 END
-        ), 0) AS s
-       FROM opportunities o
-       WHERE ${os.where} AND o.stage = 'closed_won' AND o.is_deleted = 0`,
-      os.params
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS c FROM opportunities o
-       WHERE ${os.where} AND o.stage = 'closed_lost' AND o.is_deleted = 0`,
-      os.params
-    ),
-    pool.execute(
-      `SELECT COALESCE(SUM(
-          CASE WHEN UPPER(COALESCE(o.currency,'INR')) = 'INR' THEN o.amount ELSE 0 END
-        ), 0) AS s
-       FROM opportunities o
-       WHERE ${os.where} AND o.stage = 'closed_lost' AND o.is_deleted = 0`,
-      os.params
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS c FROM leads l
-       WHERE ${ls.where}
-         AND l.status = 'confirm'
-         AND DATE(l.updated_at) = ?`,
-      [...ls.params, todayYmd]
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS c FROM leads l
-       WHERE ${ls.where}
-         AND l.status = 'processing'
-         AND DATE(l.updated_at) = ?`,
-      [...ls.params, todayYmd]
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS c FROM leads l
-       WHERE ${ls.where}
-         AND l.status = 'cancel'
-         AND DATE(l.updated_at) = ?`,
-      [...ls.params, todayYmd]
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS c FROM tasks t
-       WHERE ${ks.where}
-         AND t.status IN ('done','completed')
-         AND DATE(t.updated_at) = ?`,
-      [...ks.params, todayYmd]
-    ),
+    prisma.tickets.count({
+      where: andWhere(ts, { status: { in: ["resolved", "closed"] } }, ticketClosedToday),
+    }),
+    prisma.opportunities.count({ where: closedWonTodayWhere }),
+    sumOpportunityInr(closedWonTodayWhere, { useFinalAmount: true }),
+    prisma.opportunities.count({ where: closedLostTodayWhere }),
+    sumOpportunityInr(closedLostTodayWhere),
+    prisma.opportunities.count({ where: lifetimeWonWhere }),
+    sumOpportunityInr(lifetimeWonWhere, { useFinalAmount: true }),
+    prisma.opportunities.count({ where: lifetimeLostWhere }),
+    sumOpportunityInr(lifetimeLostWhere),
+    prisma.leads.count({
+      where: andWhere(ls, { status: "confirm", updated_at: today }),
+    }),
+    prisma.leads.count({
+      where: andWhere(ls, { status: "processing", updated_at: today }),
+    }),
+    prisma.leads.count({
+      where: andWhere(ls, { status: "cancel", updated_at: today }),
+    }),
+    prisma.tasks.count({
+      where: andWhere(ks, {
+        status: { in: ["done", "completed"] },
+        updated_at: today,
+      }),
+    }),
   ]);
 
-  const [[openLeads]] = openLeadsRes;
-  const [[openOpportunities]] = openOpportunitiesRes;
-  const [[openOppValue]] = openOppValueRes;
-  const [[openTickets]] = openTicketsRes;
-  const [[openContacts]] = openContactsRes;
-  const [[openActivities]] = openActivitiesRes;
-  const [[openCalls]] = openCallsRes;
-  const [[openCompanies]] = openCompaniesRes;
-  const [[periodicLeads]] = periodicLeadsRes;
-  const [[periodicOpportunities]] = periodicOpportunitiesRes;
-  const [[periodicOppValue]] = periodicOppValueRes;
-  const [[periodicTickets]] = periodicTicketsRes;
-  const [[periodicContacts]] = periodicContactsRes;
-  const [[periodicActivities]] = periodicActivitiesRes;
-  const [[periodicCalls]] = periodicCallsRes;
-  const [[periodicCompanies]] = periodicCompaniesRes;
-  const [[resultClosedTickets]] = resultClosedTicketsRes;
-  const [[resultClosedWon]] = resultClosedWonRes;
-  const [[resultClosedWonValue]] = resultClosedWonValueRes;
-  const [[resultClosedLost]] = resultClosedLostRes;
-  const [[resultClosedLostValue]] = resultClosedLostValueRes;
-  const [[lifetimeClosedWon]] = lifetimeClosedWonRes;
-  const [[lifetimeClosedWonValue]] = lifetimeClosedWonValueRes;
-  const [[lifetimeClosedLost]] = lifetimeClosedLostRes;
-  const [[lifetimeClosedLostValue]] = lifetimeClosedLostValueRes;
-  const [[resultLeadsConverted]] = resultLeadsConvertedRes;
-  const [[resultLeadsRecycled]] = resultLeadsRecycledRes;
-  const [[resultLeadsDead]] = resultLeadsDeadRes;
-  const [[resultCompletedActivities]] = resultCompletedActivitiesRes;
-
   const open = {
-    leads: Number(openLeads.c) || 0,
-    opportunities: Number(openOpportunities.c) || 0,
-    opportunities_value: Number(openOppValue.s) || 0,
-    tickets: Number(openTickets.c) || 0,
-    contacts: Number(openContacts.c) || 0,
-    activities: Number(openActivities.c) || 0,
-    calls: Number(openCalls.c) || 0,
-    companies: Number(openCompanies.c) || 0,
+    leads: Number(openLeads) || 0,
+    opportunities: Number(openOpportunities) || 0,
+    opportunities_value: Number(openOppValue) || 0,
+    tickets: Number(openTickets) || 0,
+    contacts: Number(openContacts) || 0,
+    activities: Number(openActivities) || 0,
+    calls: Number(openCalls) || 0,
+    companies: Number(openCompanies) || 0,
     messages: openMessages,
   };
 
   const periodic = {
     date: dateDmy,
-    leads: Number(periodicLeads.c) || 0,
-    opportunities: Number(periodicOpportunities.c) || 0,
-    opportunities_value: Number(periodicOppValue.s) || 0,
-    tickets: Number(periodicTickets.c) || 0,
-    contacts: Number(periodicContacts.c) || 0,
-    activities: Number(periodicActivities.c) || 0,
-    calls: Number(periodicCalls.c) || 0,
-    companies: Number(periodicCompanies.c) || 0,
+    leads: Number(periodicLeads) || 0,
+    opportunities: Number(periodicOpportunities) || 0,
+    opportunities_value: Number(periodicOppValue) || 0,
+    tickets: Number(periodicTickets) || 0,
+    contacts: Number(periodicContacts) || 0,
+    activities: Number(periodicActivities) || 0,
+    calls: Number(periodicCalls) || 0,
+    companies: Number(periodicCompanies) || 0,
     messages: periodicMessages,
   };
 
   const result = {
     date: dateDmy,
-    closed_tickets: Number(resultClosedTickets.c) || 0,
+    closed_tickets: Number(resultClosedTickets) || 0,
     opportunities: {
-      closed_won: Number(lifetimeClosedWon.c) || 0,
-      closed_won_value: Number(lifetimeClosedWonValue.s) || 0,
-      closed_lost: Number(lifetimeClosedLost.c) || 0,
-      closed_lost_value: Number(lifetimeClosedLostValue.s) || 0,
-      closed_won_today: Number(resultClosedWon.c) || 0,
-      closed_won_value_today: Number(resultClosedWonValue.s) || 0,
-      closed_lost_today: Number(resultClosedLost.c) || 0,
-      closed_lost_value_today: Number(resultClosedLostValue.s) || 0,
+      closed_won: Number(lifetimeClosedWon) || 0,
+      closed_won_value: Number(lifetimeClosedWonValue) || 0,
+      closed_lost: Number(lifetimeClosedLost) || 0,
+      closed_lost_value: Number(lifetimeClosedLostValue) || 0,
+      closed_won_today: Number(resultClosedWon) || 0,
+      closed_won_value_today: Number(resultClosedWonValue) || 0,
+      closed_lost_today: Number(resultClosedLost) || 0,
+      closed_lost_value_today: Number(resultClosedLostValue) || 0,
     },
     leads: {
-      converted: Number(resultLeadsConverted.c) || 0,
-      recycled: Number(resultLeadsRecycled.c) || 0,
-      dead: Number(resultLeadsDead.c) || 0,
+      converted: Number(resultLeadsConverted) || 0,
+      recycled: Number(resultLeadsRecycled) || 0,
+      dead: Number(resultLeadsDead) || 0,
     },
-    completed_activities: Number(resultCompletedActivities.c) || 0,
+    completed_activities: Number(resultCompletedActivities) || 0,
   };
 
   return { open, periodic, result, todayYmd, dateDmy };
 }
 
 async function loadTodaySummary(req, todayYmd, yesterdayYmd) {
-  const uid = Number(req.user.id);
-  const own = restrictToOwn(req);
+  const today = dayRange(todayYmd);
+  const yesterday = dayRange(yesterdayYmd);
+  const ls = leadScope(req);
+  const rs = reminderScope(req);
+  const ks = taskScope(req);
+  const tv = todoVisibility(req);
+  const todayDate = parseYmd(todayYmd);
 
-  const leadOwn = own ? " AND (assigned_to = ? OR created_by = ?)" : "";
-  const remOwn = own ? " AND (user_id = ? OR assigned_to_user_id = ?)" : "";
-  const taskOwn = own ? " AND (assigned_to = ? OR created_by = ?)" : "";
-  const todoVis = own
-    ? "(t.created_by = ? OR EXISTS (SELECT 1 FROM crm_todo_assignees a WHERE a.todo_id = t.id AND a.user_id = ?))"
-    : "1=1";
-  const todoDayClause = "(DATE(t.todo_date) = ? OR (t.todo_date IS NULL AND DATE(t.created_at) = ?) OR DATE(t.updated_at) = ?)";
+  const taskDueOrCreatedToday = {
+    OR: [
+      { due_date: { gte: today.gte, lt: today.lt } },
+      { AND: [{ due_date: null }, { created_at: today }] },
+    ],
+  };
 
-  const lpToday = own ? [todayYmd, uid, uid] : [todayYmd];
-  const lpYest = own ? [yesterdayYmd, uid, uid] : [yesterdayYmd];
-
-  const remParams = own ? [todayYmd, uid, uid] : [todayYmd];
-
-  const taskParams = own ? [uid, uid, todayYmd, todayYmd] : [todayYmd, todayYmd];
-
-  const todoParamsTotal = own
-    ? [uid, uid, todayYmd, todayYmd, todayYmd]
-    : [todayYmd, todayYmd, todayYmd];
-  const todoPendingParams = own ? [uid, uid, todayYmd, todayYmd] : [todayYmd, todayYmd];
+  const todoDayClause = {
+    OR: [
+      { todo_date: todayDate },
+      { AND: [{ todo_date: null }, { created_at: today }] },
+      { updated_at: today },
+    ],
+  };
 
   const [
-    todayLeadsRes,
-    yesterdayLeadsRes,
-    completedLeadsRes,
-    todayFollowupsRes,
-    followupCompletedRes,
-    todayTasksRes,
-    taskCompletedRes,
-    todoBucketTotalRes,
-    todoBucketDoneRes,
-    todayTodosPendingRes,
+    nToday,
+    nYest,
+    completedLeads,
+    followups_today,
+    followups_completed,
+    tasks_today,
+    tasks_completed,
+    todoBucketTotal,
+    todos_completed,
+    todos_today,
   ] = await Promise.all([
-    pool.execute(
-      `SELECT COUNT(*) AS todayLeads FROM leads
-       WHERE DATE(created_at) = ?${leadOwn}`,
-      lpToday
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS yesterdayLeads FROM leads
-       WHERE DATE(created_at) = ?${leadOwn}`,
-      lpYest
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS completedLeads FROM leads
-       WHERE DATE(created_at) = ?
-         AND status IN ('close_by','confirm')${leadOwn}`,
-      lpToday
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS todayFollowups FROM reminders
-       WHERE DATE(remind_at) = ?${remOwn}`,
-      remParams
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS followupCompleted FROM reminders
-       WHERE DATE(remind_at) = ? AND is_done = 1${remOwn}`,
-      remParams
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS todayTasks FROM tasks
-       WHERE 1=1
-         ${taskOwn}
-         AND (
-           (due_date IS NOT NULL AND DATE(due_date) = ?)
-           OR (due_date IS NULL AND DATE(created_at) = ?)
-         )`,
-      taskParams
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS taskCompleted FROM tasks
-       WHERE 1=1
-         ${taskOwn}
-         AND status IN ('done','completed')
-         AND (
-           (due_date IS NOT NULL AND DATE(due_date) = ?)
-           OR (due_date IS NULL AND DATE(created_at) = ?)
-         )`,
-      taskParams
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS todoBucketTotal FROM crm_todos t
-       WHERE t.is_deleted = 0 AND ${todoVis} AND ${todoDayClause}`,
-      todoParamsTotal
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS todoBucketDone FROM crm_todos t
-       WHERE t.is_deleted = 0 AND ${todoVis} AND ${todoDayClause} AND t.status = 'completed'`,
-      todoParamsTotal
-    ),
-    pool.execute(
-      `SELECT COUNT(*) AS todayTodosPending FROM crm_todos t
-       WHERE t.is_deleted = 0 AND ${todoVis}
-         AND t.status = 'pending'
-         AND (DATE(t.todo_date) = ? OR (t.carry_forward = 1 AND DATE(t.todo_date) < ?))`,
-      todoPendingParams
-    ),
+    prisma.leads.count({
+      where: andWhere(ls, { created_at: today }),
+    }),
+    prisma.leads.count({
+      where: andWhere(ls, { created_at: yesterday }),
+    }),
+    prisma.leads.count({
+      where: andWhere(ls, {
+        created_at: today,
+        status: { in: ["close_by", "confirm"] },
+      }),
+    }),
+    prisma.reminders.count({
+      where: andWhere(rs, { remind_at: today }),
+    }),
+    prisma.reminders.count({
+      where: andWhere(rs, { remind_at: today, is_done: true }),
+    }),
+    prisma.tasks.count({
+      where: andWhere(ks, taskDueOrCreatedToday),
+    }),
+    prisma.tasks.count({
+      where: andWhere(ks, { status: { in: ["done", "completed"] } }, taskDueOrCreatedToday),
+    }),
+    prisma.crm_todos.count({
+      where: andWhere({ is_deleted: false }, tv, todoDayClause),
+    }),
+    prisma.crm_todos.count({
+      where: andWhere(
+        { is_deleted: false },
+        tv,
+        todoDayClause,
+        { status: "completed" }
+      ),
+    }),
+    prisma.crm_todos.count({
+      where: andWhere(
+        { is_deleted: false },
+        tv,
+        { status: "pending" },
+        {
+          OR: [
+            { todo_date: todayDate },
+            {
+              AND: [
+                { carry_forward: true },
+                { todo_date: { lt: todayDate } },
+              ],
+            },
+          ],
+        }
+      ),
+    }),
   ]);
 
-  const [[{ todayLeads }]] = todayLeadsRes;
-  const [[{ yesterdayLeads }]] = yesterdayLeadsRes;
-  const [[{ completedLeads }]] = completedLeadsRes;
-  const [[{ todayFollowups }]] = todayFollowupsRes;
-  const [[{ followupCompleted }]] = followupCompletedRes;
-  const [[{ todayTasks }]] = todayTasksRes;
-  const [[{ taskCompleted }]] = taskCompletedRes;
-  const [[{ todoBucketTotal }]] = todoBucketTotalRes;
-  const [[{ todoBucketDone }]] = todoBucketDoneRes;
-  const [[{ todayTodosPending }]] = todayTodosPendingRes;
-  const nToday = Number(todayLeads) || 0;
-  const nYest = Number(yesterdayLeads) || 0;
   const leads_vs_yesterday_pct =
     nYest === 0 ? (nToday > 0 ? 100 : 0) : Number((((nToday - nYest) / nYest) * 100).toFixed(2));
   const leads_converted_pct =
     nToday === 0 ? 100 : Number((((Number(completedLeads) || 0) / nToday) * 100).toFixed(2));
-
-  const followups_today = Number(todayFollowups) || 0;
-  const followups_completed = Number(followupCompleted) || 0;
-  const tasks_today = Number(todayTasks) || 0;
-  const tasks_completed = Number(taskCompleted) || 0;
-  const todos_today = Number(todayTodosPending) || 0;
-  const todos_completed = Number(todoBucketDone) || 0;
 
   return {
     leads_today: nToday,
@@ -653,7 +566,7 @@ async function loadTodaySummary(req, todayYmd, yesterdayYmd) {
     _todoProgress:
       Number(todoBucketTotal) === 0
         ? 100
-        : Number((((Number(todoBucketDone) || 0) / Number(todoBucketTotal)) * 100).toFixed(2)),
+        : Number((((Number(todos_completed) || 0) / Number(todoBucketTotal)) * 100).toFixed(2)),
   };
 }
 
@@ -762,28 +675,24 @@ async function getDashboardStats(req, res) {
       todos_completed: today_summary_raw.todos_completed,
     };
 
-    const ls = leadScopeSql(req, "l");
-    const totalLeadsScoped = await safeSingleRow(
-      `SELECT COUNT(*) AS totalLeads FROM leads l WHERE ${ls.where}`,
-      ls.params,
-      { totalLeads: 0 }
-    );
-    const ks = taskScopeSql(req, "t");
-    const openTasksScoped = await safeSingleRow(
-      `SELECT COUNT(*) AS openTasks FROM tasks t
-       WHERE ${ks.where} AND t.status NOT IN ('done','completed')`,
-      ks.params,
-      { openTasks: 0 }
-    );
-    const closedThisMonth = await safeSingleRow(
-      `SELECT COUNT(*) AS closedThisMonth FROM leads l
-       WHERE ${ls.where}
-         AND l.status IN ('close_by','confirm')
-         AND YEAR(l.created_at) = YEAR(CURDATE())
-         AND MONTH(l.created_at) = MONTH(CURDATE())`,
-      ls.params,
-      { closedThisMonth: 0 }
-    );
+    const ls = leadScope(req);
+    const ks = taskScope(req);
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+
+    const [totalLeads, openTasks, closedThisMonth] = await Promise.all([
+      safeCount("leads", ls, 0),
+      safeCount("tasks", andWhere(ks, { status: { notIn: ["done", "completed"] } }), 0),
+      safeCount(
+        "leads",
+        andWhere(ls, {
+          status: { in: ["close_by", "confirm"] },
+          created_at: { gte: monthStart, lt: nextMonth },
+        }),
+        0
+      ),
+    ]);
 
     res.json({
       success: true,
@@ -808,9 +717,9 @@ async function getDashboardStats(req, res) {
         todoCompleted: today_summary.todos_completed,
         todoTotal: today_summary_raw._todoTotal,
         todoProgress: today_summary_raw._todoProgress,
-        totalLeads: Number(totalLeadsScoped.totalLeads) || 0,
-        openTasks: Number(openTasksScoped.openTasks) || 0,
-        closedThisMonth: Number(closedThisMonth.closedThisMonth) || 0,
+        totalLeads,
+        openTasks,
+        closedThisMonth,
         sections: {
           open,
           periodic,
@@ -833,7 +742,6 @@ async function getDashboardInsights(req, res) {
     if (!req.user?.id) {
       return res.status(401).json({ success: false, message: "Unauthorized" });
     }
-    const userIntId = req.user.id;
 
     const todayLocal = formatYmd(new Date());
     const toStr = (req.query.to && String(req.query.to).slice(0, 10)) || todayLocal;
@@ -849,18 +757,20 @@ async function getDashboardInsights(req, res) {
 
     const from = formatYmd(startD);
     const to = formatYmd(endD);
+    const rangeStart = parseYmd(from);
+    const rangeEndExclusive = new Date(endD.getFullYear(), endD.getMonth(), endD.getDate() + 1);
 
-    const own = restrictToOwn(req);
-    const vis = own ? " AND (created_by = ? OR assigned_to = ?)" : "";
-
-    const [statusRows] = await pool.execute(
-      `SELECT status, COUNT(*) AS c
-       FROM leads
-       WHERE is_deleted = 0${vis}
-         AND DATE(created_at) BETWEEN ? AND ?
-       GROUP BY status`,
-      own ? [userIntId, userIntId, from, to] : [from, to]
+    const baseWhere = andWhere(
+      { is_deleted: false },
+      leadScope(req),
+      { created_at: { gte: rangeStart, lt: rangeEndExclusive } }
     );
+
+    const statusGroups = await prisma.leads.groupBy({
+      by: ["status"],
+      where: baseWhere,
+      _count: { _all: true },
+    });
 
     const byStatus = {
       new: 0,
@@ -869,22 +779,17 @@ async function getDashboardInsights(req, res) {
       confirm: 0,
       cancel: 0,
     };
-    for (const row of statusRows) {
+    for (const row of statusGroups) {
       const k = String(row.status || "").toLowerCase();
       if (Object.prototype.hasOwnProperty.call(byStatus, k)) {
-        byStatus[k] = Number(row.c);
+        byStatus[k] = Number(row._count._all) || 0;
       }
     }
 
-    const [dailyRows] = await pool.execute(
-      `SELECT DATE(created_at) AS d, source, COUNT(*) AS c
-       FROM leads
-       WHERE is_deleted = 0${vis}
-         AND DATE(created_at) BETWEEN ? AND ?
-       GROUP BY DATE(created_at), source
-       ORDER BY d ASC`,
-      own ? [userIntId, userIntId, from, to] : [from, to]
-    );
+    const leadRows = await prisma.leads.findMany({
+      where: baseWhere,
+      select: { created_at: true, source: true },
+    });
 
     const dayList = [];
     const cursor = new Date(startD.getFullYear(), startD.getMonth(), startD.getDate());
@@ -894,30 +799,25 @@ async function getDashboardInsights(req, res) {
       cursor.setDate(cursor.getDate() + 1);
     }
 
+    const counts = new Map();
     const sourceSet = new Set();
-    for (const row of dailyRows) {
-      if (row.source) sourceSet.add(String(row.source));
+    for (const row of leadRows) {
+      if (!row.source) continue;
+      const source = String(row.source);
+      sourceSet.add(source);
+      const d = sqlDateToYmd(row.created_at);
+      const key = `${d}\0${source}`;
+      counts.set(key, (counts.get(key) || 0) + 1);
     }
     const sources = [...sourceSet].sort();
 
     const bySourceByDay = dayList.map((date) => {
       const row = { date };
       for (const s of sources) {
-        row[s] = 0;
+        row[s] = counts.get(`${date}\0${s}`) || 0;
       }
       return row;
     });
-
-    const idxByDate = Object.fromEntries(dayList.map((d, i) => [d, i]));
-    for (const row of dailyRows) {
-      const d = sqlDateToYmd(row.d);
-      const i = idxByDate[d];
-      if (i === undefined || !row.source) continue;
-      const key = String(row.source);
-      if (bySourceByDay[i][key] !== undefined) {
-        bySourceByDay[i][key] = Number(row.c);
-      }
-    }
 
     res.json({
       success: true,

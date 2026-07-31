@@ -1,4 +1,4 @@
-const { pool } = require("./prismaPool");
+const { pool } = require("./ddlPool");
 const { INTEGRATIONS } = require("./integrationsCatalog");
 
 let schemaEnsured = false;
@@ -8,7 +8,8 @@ let tasksClientDuePatchesDone = false;
 let fitnessTransactionPaymentDuePatchesDone = false;
 let invoicesTablePatchesDone = false;
 let companySettingsPatchesDone = false;
-const CURRENT_SCHEMA_VERSION = 11;
+let ormGapTablesPatchesDone = false;
+const CURRENT_SCHEMA_VERSION = 12;
 
 /** Lightweight patches that must run even when schema version is current. */
 async function ensureFitnessClientPatches() {
@@ -227,6 +228,166 @@ async function ensureUsersRoleOwnerPatch() {
   }
 }
 
+/** Prisma ORM models that must exist even when schema version is already current. */
+async function ensureOrmGapTablesPatches() {
+  if (ormGapTablesPatchesDone) return;
+  ormGapTablesPatchesDone = true;
+
+  try {
+    const [usersTbl] = await pool.execute(
+      `SELECT 1 FROM information_schema.tables
+       WHERE table_schema = DATABASE() AND table_name = 'users' LIMIT 1`
+    );
+    if (usersTbl.length) {
+      for (const { column, definition } of [
+        { column: "clerk_user_id", definition: "VARCHAR(100) DEFAULT NULL" },
+        { column: "last_login", definition: "DATETIME DEFAULT NULL" },
+      ]) {
+        const [cols] = await pool.execute(
+          `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = ?`,
+          [column]
+        );
+        if (!cols.length) {
+          await pool.execute(`ALTER TABLE users ADD COLUMN \`${column}\` ${definition}`);
+          console.log(`Migration: added users.${column}`);
+        }
+      }
+    }
+
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+        sender_id INT UNSIGNED NOT NULL,
+        receiver_id INT UNSIGNED NOT NULL,
+        body TEXT NOT NULL,
+        is_read TINYINT(1) NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY idx_sender (sender_id),
+        KEY idx_receiver (receiver_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS contact_requests (
+        id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+        tenant_id INT UNSIGNED DEFAULT NULL,
+        name VARCHAR(100) NOT NULL,
+        phone VARCHAR(20) NOT NULL,
+        email VARCHAR(150) NOT NULL,
+        message TEXT DEFAULT NULL,
+        type VARCHAR(20) NOT NULL DEFAULT 'contact',
+        is_read TINYINT(1) NOT NULL DEFAULT 0,
+        created_by INT UNSIGNED DEFAULT NULL,
+        assigned_to INT UNSIGNED DEFAULT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY idx_type (type),
+        KEY idx_is_read (is_read),
+        KEY idx_cr_tenant (tenant_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+    for (const col of [
+      { column: "tenant_id", definition: "INT UNSIGNED DEFAULT NULL" },
+      { column: "created_by", definition: "INT UNSIGNED DEFAULT NULL" },
+      { column: "assigned_to", definition: "INT UNSIGNED DEFAULT NULL" },
+    ]) {
+      const [c] = await pool.execute(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'contact_requests' AND COLUMN_NAME = ?`,
+        [col.column]
+      );
+      if (!c.length) {
+        await pool.execute(`ALTER TABLE contact_requests ADD COLUMN \`${col.column}\` ${col.definition}`);
+      }
+    }
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS file_attachments (
+        id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+        user_id INT UNSIGNED NOT NULL,
+        lead_id INT UNSIGNED DEFAULT NULL,
+        file_name VARCHAR(300) NOT NULL,
+        file_url VARCHAR(1000) NOT NULL,
+        size_bytes INT UNSIGNED DEFAULT 0,
+        mime_type VARCHAR(100) DEFAULT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY fk_fa_user (user_id),
+        KEY fk_fa_lead (lead_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS hr_attendance (
+        id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+        user_id INT UNSIGNED NOT NULL,
+        date DATE NOT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'present',
+        notes TEXT DEFAULT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uk_hr_attendance_user_date (user_id, date),
+        KEY idx_hr_attendance_date (date)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS hr_leaves (
+        id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+        user_id INT UNSIGNED NOT NULL,
+        start_date DATE NOT NULL,
+        end_date DATE NOT NULL,
+        leave_type VARCHAR(64) DEFAULT NULL,
+        reason TEXT DEFAULT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        approved_by INT UNSIGNED DEFAULT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY idx_hr_leaves_user (user_id),
+        KEY idx_hr_leaves_status (status)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS hr_payroll (
+        id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+        user_id INT UNSIGNED NOT NULL,
+        month INT NOT NULL,
+        year INT NOT NULL,
+        salary DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+        bonuses DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+        deductions DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+        net_pay DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+        notes TEXT DEFAULT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'pending',
+        paid_at DATETIME DEFAULT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uk_hr_payroll_user_period (user_id, month, year),
+        KEY idx_hr_payroll_period (year, month)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS hr_appraisals (
+        id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+        user_id INT UNSIGNED NOT NULL,
+        year INT NOT NULL,
+        rating DECIMAL(4,2) DEFAULT 0.00,
+        strengths TEXT DEFAULT NULL,
+        improvements TEXT DEFAULT NULL,
+        comments TEXT DEFAULT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY idx_hr_appraisals_user (user_id),
+        KEY idx_hr_appraisals_year (year)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    `);
+  } catch (e) {
+    console.warn("ensureOrmGapTablesPatches:", e.message);
+  }
+}
+
 /** Runs every startup and on-demand from invoice APIs — not gated by schema v10. */
 async function ensureInvoicesTable() {
   const [had] = await pool.execute(
@@ -387,6 +548,7 @@ async function ensureSchema() {
   await ensureCollectionsPatches();
   await dropFitnessTransactionsXorCheck();
   await ensureUsersRoleOwnerPatch();
+  await ensureOrmGapTablesPatches();
   await ensureTasksClientDuePatches();
   await ensureFitnessTransactionPaymentDuePatches();
   await ensureInvoicesTable();
@@ -1365,6 +1527,8 @@ async function ensureSchema() {
       { column: "password_reset_token", definition: "VARCHAR(255) DEFAULT NULL" },
       { column: "password_reset_expires", definition: "DATETIME DEFAULT NULL" },
       { column: "is_active", definition: "TINYINT(1) NOT NULL DEFAULT 1" },
+      { column: "clerk_user_id", definition: "VARCHAR(100) DEFAULT NULL" },
+      { column: "last_login", definition: "DATETIME DEFAULT NULL" },
     ];
     for (const { column, definition } of jwtAuthUserCols) {
       const [c] = await pool.execute(
@@ -1892,6 +2056,136 @@ async function ensureSchema() {
       console.warn("ensureSchema: final CRM compat pass:", e.message);
     }
   }
+
+  // Tables required by Prisma ORM controllers (HR / storage / DMs / contact forms)
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      sender_id INT UNSIGNED NOT NULL,
+      receiver_id INT UNSIGNED NOT NULL,
+      body TEXT NOT NULL,
+      is_read TINYINT(1) NOT NULL DEFAULT 0,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_sender (sender_id),
+      KEY idx_receiver (receiver_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS contact_requests (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      tenant_id INT UNSIGNED DEFAULT NULL,
+      name VARCHAR(100) NOT NULL,
+      phone VARCHAR(20) NOT NULL,
+      email VARCHAR(150) NOT NULL,
+      message TEXT DEFAULT NULL,
+      type VARCHAR(20) NOT NULL DEFAULT 'contact',
+      is_read TINYINT(1) NOT NULL DEFAULT 0,
+      created_by INT UNSIGNED DEFAULT NULL,
+      assigned_to INT UNSIGNED DEFAULT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_type (type),
+      KEY idx_is_read (is_read),
+      KEY idx_cr_tenant (tenant_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+  for (const col of [
+    { column: "tenant_id", definition: "INT UNSIGNED DEFAULT NULL" },
+    { column: "created_by", definition: "INT UNSIGNED DEFAULT NULL" },
+    { column: "assigned_to", definition: "INT UNSIGNED DEFAULT NULL" },
+  ]) {
+    const [c] = await pool.execute(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'contact_requests' AND COLUMN_NAME = ?`,
+      [col.column]
+    );
+    if (!c.length) {
+      await pool.execute(`ALTER TABLE contact_requests ADD COLUMN \`${col.column}\` ${col.definition}`);
+    }
+  }
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS file_attachments (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id INT UNSIGNED NOT NULL,
+      lead_id INT UNSIGNED DEFAULT NULL,
+      file_name VARCHAR(300) NOT NULL,
+      file_url VARCHAR(1000) NOT NULL,
+      size_bytes INT UNSIGNED DEFAULT 0,
+      mime_type VARCHAR(100) DEFAULT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY fk_fa_user (user_id),
+      KEY fk_fa_lead (lead_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS hr_attendance (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id INT UNSIGNED NOT NULL,
+      date DATE NOT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'present',
+      notes TEXT DEFAULT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uk_hr_attendance_user_date (user_id, date),
+      KEY idx_hr_attendance_date (date)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS hr_leaves (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id INT UNSIGNED NOT NULL,
+      start_date DATE NOT NULL,
+      end_date DATE NOT NULL,
+      leave_type VARCHAR(64) DEFAULT NULL,
+      reason TEXT DEFAULT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'pending',
+      approved_by INT UNSIGNED DEFAULT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_hr_leaves_user (user_id),
+      KEY idx_hr_leaves_status (status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS hr_payroll (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id INT UNSIGNED NOT NULL,
+      month INT NOT NULL,
+      year INT NOT NULL,
+      salary DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+      bonuses DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+      deductions DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+      net_pay DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+      notes TEXT DEFAULT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'pending',
+      paid_at DATETIME DEFAULT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uk_hr_payroll_user_period (user_id, month, year),
+      KEY idx_hr_payroll_period (year, month)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS hr_appraisals (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id INT UNSIGNED NOT NULL,
+      year INT NOT NULL,
+      rating DECIMAL(4,2) DEFAULT 0.00,
+      strengths TEXT DEFAULT NULL,
+      improvements TEXT DEFAULT NULL,
+      comments TEXT DEFAULT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_hr_appraisals_user (user_id),
+      KEY idx_hr_appraisals_year (year)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
 
   await pool.execute(
     `INSERT INTO _schema_meta (\`key\`, value) VALUES ('version', ?)

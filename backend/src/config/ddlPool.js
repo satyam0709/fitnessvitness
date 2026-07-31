@@ -1,9 +1,7 @@
 /**
- * Drop-in mysql2-style helpers backed by Prisma raw SQL.
- * Lets large controllers (dashboard/calendar/today) leave pool without a full rewrite.
- *
- * execute/query return [rows] like mysql2/promise.
- * INSERT returns [{ insertId, affectedRows }] like mysql2 ResultSetHeader.
+ * DDL-only mysql2-style helpers over Prisma raw SQL.
+ * Used exclusively by ensureSchema / ensureCalendarCrmTables / ensureCrmSchemaCompat.
+ * Application request paths must use Prisma Client ORM — not this module.
  */
 const prisma = require("./prisma");
 
@@ -58,8 +56,6 @@ async function execute(sql, params = []) {
   if (isReadSql(sql)) {
     return runOnClient(prisma, sql, params);
   }
-  // Only wrap INSERT so LAST_INSERT_ID stays on the same connection.
-  // DDL (CREATE/ALTER) must not sit in a Prisma interactive transaction.
   if (needsInsertIdTxn(sql)) {
     return prisma.$transaction(async (tx) => runOnClient(tx, sql, params));
   }
@@ -73,11 +69,8 @@ async function query(sql, params = []) {
 const pool = {
   execute,
   query,
-  /** Prefer prisma.$transaction in new code; kept for legacy call sites. */
   async getConnection() {
-    throw new Error(
-      "prismaPool.getConnection is not supported — use pool.execute/query or prisma.$transaction"
-    );
+    throw new Error("ddlPool.getConnection is not supported");
   },
 };
 

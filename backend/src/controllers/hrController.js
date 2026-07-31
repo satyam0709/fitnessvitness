@@ -1,15 +1,16 @@
-const { pool } = require("../config/prismaPool");
+const prisma = require("../config/prisma");
 
 async function getAttendance(req, res) {
   try {
     const { date, userId } = req.query;
-    let query = "SELECT * FROM hr_attendance WHERE 1=1";
-    const params = [];
-    if (date) { query += " AND date = ?"; params.push(date); }
-    if (userId) { query += " AND user_id = ?"; params.push(userId); }
-    query += " ORDER BY date DESC, created_at DESC";
-    const [rows] = await pool.execute(query, params);
-    res.json({ attendance: rows });
+    const where = {};
+    if (date) where.date = new Date(String(date).slice(0, 10));
+    if (userId) where.user_id = Number(userId);
+    const attendance = await prisma.hr_attendance.findMany({
+      where,
+      orderBy: [{ date: "desc" }, { created_at: "desc" }],
+    });
+    res.json({ attendance });
   } catch (err) {
     console.error("getAttendance error:", err);
     res.status(500).json({ error: "Failed to get attendance" });
@@ -20,22 +21,26 @@ async function markAttendance(req, res) {
   try {
     const { date, status, notes } = req.body;
     if (!date || !status) return res.status(400).json({ error: "Date and status required" });
-    const [existing] = await pool.execute(
-      "SELECT id FROM hr_attendance WHERE user_id = ? AND date = ?",
-      [req.user.id, date]
-    );
-    if (existing.length) {
-      await pool.execute(
-        "UPDATE hr_attendance SET status = ?, notes = ?, updated_at = NOW() WHERE id = ?",
-        [status, notes || "", existing[0].id]
-      );
+    const day = new Date(String(date).slice(0, 10));
+    const existing = await prisma.hr_attendance.findFirst({
+      where: { user_id: req.user.id, date: day },
+    });
+    if (existing) {
+      await prisma.hr_attendance.update({
+        where: { id: existing.id },
+        data: { status, notes: notes || "", updated_at: new Date() },
+      });
       return res.json({ success: true, message: "Attendance updated" });
     }
-    const [result] = await pool.execute(
-      "INSERT INTO hr_attendance (user_id, date, status, notes) VALUES (?, ?, ?, ?)",
-      [req.user.id, date, status, notes || ""]
-    );
-    res.status(201).json({ success: true, id: result.insertId });
+    const created = await prisma.hr_attendance.create({
+      data: {
+        user_id: req.user.id,
+        date: day,
+        status,
+        notes: notes || "",
+      },
+    });
+    res.status(201).json({ success: true, id: created.id });
   } catch (err) {
     console.error("markAttendance error:", err);
     res.status(500).json({ error: "Failed to mark attendance" });
@@ -45,13 +50,14 @@ async function markAttendance(req, res) {
 async function getLeaves(req, res) {
   try {
     const { userId, status } = req.query;
-    let query = "SELECT * FROM hr_leaves WHERE 1=1";
-    const params = [];
-    if (userId) { query += " AND user_id = ?"; params.push(userId); }
-    if (status) { query += " AND status = ?"; params.push(status); }
-    query += " ORDER BY start_date DESC";
-    const [rows] = await pool.execute(query, params);
-    res.json({ leaves: rows });
+    const where = {};
+    if (userId) where.user_id = Number(userId);
+    if (status) where.status = String(status);
+    const leaves = await prisma.hr_leaves.findMany({
+      where,
+      orderBy: { created_at: "desc" },
+    });
+    res.json({ leaves });
   } catch (err) {
     console.error("getLeaves error:", err);
     res.status(500).json({ error: "Failed to get leaves" });
@@ -61,12 +67,20 @@ async function getLeaves(req, res) {
 async function createLeaveRequest(req, res) {
   try {
     const { startDate, endDate, leaveType, reason } = req.body;
-    if (!startDate || !endDate || !leaveType) return res.status(400).json({ error: "Missing required fields" });
-    const [result] = await pool.execute(
-      "INSERT INTO hr_leaves (user_id, start_date, end_date, leave_type, reason, status) VALUES (?, ?, ?, ?, ?, 'pending')",
-      [req.user.id, startDate, endDate, leaveType, reason || ""]
-    );
-    res.status(201).json({ success: true, id: result.insertId });
+    if (!startDate || !endDate || !leaveType) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+    const created = await prisma.hr_leaves.create({
+      data: {
+        user_id: req.user.id,
+        start_date: new Date(String(startDate).slice(0, 10)),
+        end_date: new Date(String(endDate).slice(0, 10)),
+        leave_type: leaveType,
+        reason: reason || "",
+        status: "pending",
+      },
+    });
+    res.status(201).json({ success: true, id: created.id });
   } catch (err) {
     console.error("createLeaveRequest error:", err);
     res.status(500).json({ error: "Failed to create leave request" });
@@ -75,8 +89,11 @@ async function createLeaveRequest(req, res) {
 
 async function approveLeave(req, res) {
   try {
-    const { leaveId } = req.params;
-    await pool.execute("UPDATE hr_leaves SET status = 'approved', approved_by = ?, updated_at = NOW() WHERE id = ?", [req.user.id, leaveId]);
+    const leaveId = Number(req.params.leaveId || req.params.id);
+    await prisma.hr_leaves.update({
+      where: { id: leaveId },
+      data: { status: "approved", approved_by: req.user.id, updated_at: new Date() },
+    });
     res.json({ success: true });
   } catch (err) {
     console.error("approveLeave error:", err);
@@ -86,8 +103,11 @@ async function approveLeave(req, res) {
 
 async function rejectLeave(req, res) {
   try {
-    const { leaveId } = req.params;
-    await pool.execute("UPDATE hr_leaves SET status = 'rejected', approved_by = ?, updated_at = NOW() WHERE id = ?", [req.user.id, leaveId]);
+    const leaveId = Number(req.params.leaveId || req.params.id);
+    await prisma.hr_leaves.update({
+      where: { id: leaveId },
+      data: { status: "rejected", approved_by: req.user.id, updated_at: new Date() },
+    });
     res.json({ success: true });
   } catch (err) {
     console.error("rejectLeave error:", err);

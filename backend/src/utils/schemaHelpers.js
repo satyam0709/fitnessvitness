@@ -1,4 +1,4 @@
-const { pool } = require("../config/prismaPool");
+const prisma = require("../config/prisma");
 
 const tableExistsCache = new Map();
 
@@ -7,21 +7,19 @@ async function tableExists(tableName) {
   if (!key) return false;
   let dbKey = "";
   try {
-    const [[row]] = await pool.execute("SELECT DATABASE() AS db");
-    dbKey = row && row.db != null ? String(row.db).toLowerCase() : "";
+    const rows = await prisma.$queryRaw`SELECT DATABASE() AS db`;
+    dbKey = rows?.[0]?.db != null ? String(rows[0].db).toLowerCase() : "";
   } catch {
     dbKey = "";
   }
   const cacheKey = `${dbKey}::${key}`;
   if (tableExistsCache.has(cacheKey)) return tableExistsCache.get(cacheKey);
   try {
-    const [rows] = await pool.execute(
-      `SELECT 1 FROM information_schema.tables
-       WHERE table_schema = DATABASE() AND LOWER(table_name) = ?
-       LIMIT 1`,
-      [key]
-    );
-    const ok = rows.length > 0;
+    const rows = await prisma.$queryRaw`
+      SELECT 1 AS ok FROM information_schema.tables
+      WHERE table_schema = DATABASE() AND LOWER(table_name) = ${key}
+      LIMIT 1`;
+    const ok = Array.isArray(rows) && rows.length > 0;
     tableExistsCache.set(cacheKey, ok);
     return ok;
   } catch {

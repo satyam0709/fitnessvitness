@@ -33,21 +33,27 @@ async function submitContact(req, res) {
       });
     }
 
-    const insertId = await prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`INSERT INTO contact_requests (tenant_id, name, phone, email, message, type, created_by, assigned_to)
-       VALUES (${tenantId}, ${name}, ${phone}, ${email}, ${message || null}, ${type}, ${req.user?.id || null}, ${req.user?.id || null})`;
-      const rows = await tx.$queryRaw`SELECT LAST_INSERT_ID() as id`;
-      return Number(rows[0].id);
+    const created = await prisma.contact_requests.create({
+      data: {
+        tenant_id: tenantId,
+        name,
+        phone,
+        email,
+        message: message || null,
+        type,
+        created_by: req.user?.id || null,
+        assigned_to: req.user?.id || null,
+      },
     });
 
-    emitAdminChanged({ scope: "contacts", action: "new_request", id: insertId });
+    emitAdminChanged({ scope: "contacts", action: "new_request", id: created.id });
     res.status(201).json({
       success: true,
       message:
         type === "demo"
           ? "Demo request received! We'll contact you within 24 hours."
           : "Message sent! We'll get back to you shortly.",
-      data: { id: insertId },
+      data: { id: created.id },
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -62,23 +68,21 @@ async function getContacts(req, res) {
     }
 
     const { type, is_read } = req.query;
-    
-    // We construct the query string manually since we use raw query, but we pass parameters for safety
-    // Using Prisma.sql to build raw query safely
-    const { Prisma } = require("../generated/prisma");
-    let queryArgs = [Prisma.sql`tenant_id = ${tenantId}`];
+    const where = { tenant_id: tenantId };
 
-    if (type) {
-      queryArgs.push(Prisma.sql`type = ${type}`);
-    }
-    if (is_read !== undefined) {
-      queryArgs.push(Prisma.sql`is_read = ${is_read === "true" ? 1 : 0}`);
-    }
+    if (type) where.type = type;
+    if (is_read !== undefined) where.is_read = is_read === "true";
     if (isStaff(req)) {
-      queryArgs.push(Prisma.sql`(assigned_to = ${req.user.id} OR created_by = ${req.user.id})`);
+      where.OR = [
+        { assigned_to: req.user.id },
+        { created_by: req.user.id },
+      ];
     }
 
-    const rows = await prisma.$queryRaw`SELECT * FROM contact_requests WHERE ${Prisma.join(queryArgs, " AND ")} ORDER BY created_at DESC`;
+    const rows = await prisma.contact_requests.findMany({
+      where,
+      orderBy: { created_at: "desc" },
+    });
 
     res.json({ success: true, total: rows.length, data: rows });
   } catch (err) {
@@ -93,15 +97,19 @@ async function markAsRead(req, res) {
       return res.status(403).json({ success: false, message: "No tenant workspace assigned." });
     }
 
-    const { id } = req.params;
-    const { Prisma } = require("../generated/prisma");
-    
-    let whereClause = Prisma.sql`id = ${id} AND tenant_id = ${tenantId}`;
+    const id = Number(req.params.id);
+    const where = { id, tenant_id: tenantId };
     if (isStaff(req)) {
-      whereClause = Prisma.sql`${whereClause} AND (assigned_to = ${req.user.id} OR created_by = ${req.user.id})`;
+      where.OR = [
+        { assigned_to: req.user.id },
+        { created_by: req.user.id },
+      ];
     }
-    
-    await prisma.$executeRaw`UPDATE contact_requests SET is_read = 1 WHERE ${whereClause}`;
+
+    await prisma.contact_requests.updateMany({
+      where,
+      data: { is_read: true },
+    });
     emitAdminChanged({ scope: "contacts", action: "mark_read", id });
     res.json({ success: true, message: "Marked as read" });
   } catch (err) {

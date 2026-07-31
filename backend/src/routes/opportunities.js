@@ -352,15 +352,26 @@ router.get("/:id/activities", async (req, res) => {
     const row = await loadOpportunityScoped(req, id);
     if (!row) return res.status(404).json({ success: false, message: "Opportunity not found" });
 
-    const activities = await prisma.$queryRaw`
-      SELECT a.*, u.email AS created_by_email
-      FROM opportunity_activities a
-      LEFT JOIN users u ON u.id = a.created_by
-      WHERE a.opportunity_id = ${id}
-      ORDER BY a.created_at DESC
-    `;
+    const activities = await prisma.opportunity_activities.findMany({
+      where: { opportunity_id: id },
+      orderBy: { created_at: "desc" },
+    });
+    const userIds = [
+      ...new Set(activities.map((a) => a.created_by).filter(Boolean)),
+    ];
+    const users = userIds.length
+      ? await prisma.users.findMany({
+          where: { id: { in: userIds } },
+          select: { id: true, email: true },
+        })
+      : [];
+    const emailMap = Object.fromEntries(users.map((u) => [u.id, u.email]));
+    const data = activities.map((a) => ({
+      ...a,
+      created_by_email: a.created_by ? emailMap[a.created_by] || null : null,
+    }));
 
-    res.json({ success: true, data: activities });
+    res.json({ success: true, data });
   } catch (err) {
     console.error("GET /api/opportunities/:id/activities", err);
     res.status(500).json({ success: false, message: err.message });

@@ -609,6 +609,7 @@ model leads {
   reference                      String?      @db.VarChar(255)
   users_leads_assigned_toTousers users?       @relation("leads_assigned_toTousers", fields: [assigned_to], references: [id], onUpdate: NoAction, map: "fk_lead_assigned")
   users_leads_created_byTousers  users        @relation("leads_created_byTousers", fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_lead_creator")
+  file_attachments               file_attachments[]
   meetings                       meetings[]
   reminders                      reminders[]
   tasks                          tasks[]
@@ -964,17 +965,29 @@ model users {
   profile_image                                    String?                @db.VarChar(255)
   password_reset_token                             String?                @db.VarChar(255)
   password_reset_expires                           DateTime?              @db.DateTime(0)
+  clerk_user_id                                    String?                @db.VarChar(100)
+  last_login                                       DateTime?              @db.DateTime(0)
   created_at                                       DateTime               @default(now()) @db.DateTime(0)
   updated_at                                       DateTime               @default(now()) @db.DateTime(0)
   is_platform_admin                                Boolean                @default(false)
   chat_thread_members                              chat_thread_members[]
   chat_thread_messages                             chat_thread_messages[]
   chat_threads                                     chat_threads[]
+  chat_messages_sent                               chat_messages[]        @relation("chat_messages_sender")
+  chat_messages_received                           chat_messages[]        @relation("chat_messages_receiver")
   contacts_contacts_assigned_toTousers             contacts[]             @relation("contacts_assigned_toTousers")
   contacts_contacts_created_byTousers              contacts[]             @relation("contacts_created_byTousers")
+  contact_requests_created                         contact_requests[]     @relation("contact_requests_created_by")
+  contact_requests_assigned                        contact_requests[]     @relation("contact_requests_assigned_to")
   crm_calendar_events                              crm_calendar_events[]
   crm_todo_assignees                               crm_todo_assignees[]
   crm_todos                                        crm_todos[]
+  file_attachments                                 file_attachments[]
+  hr_attendance                                    hr_attendance[]
+  hr_leaves                                        hr_leaves[]            @relation("hr_leaves_user")
+  hr_leaves_approved                               hr_leaves[]            @relation("hr_leaves_approved_by")
+  hr_payroll                                       hr_payroll[]
+  hr_appraisals                                    hr_appraisals[]
   leads_leads_assigned_toTousers                   leads[]                @relation("leads_assigned_toTousers")
   leads_leads_created_byTousers                    leads[]                @relation("leads_created_byTousers")
   meeting_attendees                                meeting_attendees[]
@@ -1214,6 +1227,124 @@ model dropdown_options {
   option_value String   @db.VarChar(100)
   option_label String   @db.VarChar(100)
   created_at   DateTime @default(now()) @db.DateTime(0)
-  
+
   @@unique([field_name, option_value], map: "uk_dropdown_opt")
+}
+
+model chat_messages {
+  id                          Int      @id @default(autoincrement()) @db.UnsignedInt
+  sender_id                   Int      @db.UnsignedInt
+  receiver_id                 Int      @db.UnsignedInt
+  content                     String   @map("body") @db.Text
+  is_read                     Boolean  @default(false)
+  created_at                  DateTime @default(now()) @db.DateTime(0)
+  users_chat_messages_sender  users    @relation("chat_messages_sender", fields: [sender_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_msg_sender")
+  users_chat_messages_receiver users   @relation("chat_messages_receiver", fields: [receiver_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_msg_receiver")
+
+  @@index([sender_id], map: "idx_sender")
+  @@index([receiver_id], map: "idx_receiver")
+}
+
+model contact_requests {
+  id                                      Int       @id @default(autoincrement()) @db.UnsignedInt
+  tenant_id                               Int?      @db.UnsignedInt
+  name                                    String    @db.VarChar(100)
+  phone                                   String    @db.VarChar(20)
+  email                                   String    @db.VarChar(150)
+  message                                 String?   @db.Text
+  type                                    String    @default("contact") @db.VarChar(20)
+  is_read                                 Boolean   @default(false)
+  created_by                              Int?      @db.UnsignedInt
+  assigned_to                             Int?      @db.UnsignedInt
+  created_at                              DateTime  @default(now()) @db.DateTime(0)
+  users_contact_requests_created_by       users?    @relation("contact_requests_created_by", fields: [created_by], references: [id], onUpdate: NoAction)
+  users_contact_requests_assigned_to      users?    @relation("contact_requests_assigned_to", fields: [assigned_to], references: [id], onUpdate: NoAction)
+
+  @@index([type], map: "idx_type")
+  @@index([is_read], map: "idx_is_read")
+  @@index([tenant_id], map: "idx_cr_tenant")
+}
+
+model file_attachments {
+  id         Int      @id @default(autoincrement()) @db.UnsignedInt
+  user_id    Int      @db.UnsignedInt
+  lead_id    Int?     @db.UnsignedInt
+  file_name  String   @db.VarChar(300)
+  file_url   String   @db.VarChar(1000)
+  size_bytes Int?     @default(0) @db.UnsignedInt
+  mime_type  String?  @db.VarChar(100)
+  created_at DateTime @default(now()) @db.DateTime(0)
+  users      users    @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_fa_user")
+  leads      leads?   @relation(fields: [lead_id], references: [id], onUpdate: NoAction, map: "fk_fa_lead")
+
+  @@index([user_id], map: "fk_fa_user")
+  @@index([lead_id], map: "fk_fa_lead")
+}
+
+model hr_attendance {
+  id         Int      @id @default(autoincrement()) @db.UnsignedInt
+  user_id    Int      @db.UnsignedInt
+  date       DateTime @db.Date
+  status     String   @default("present") @db.VarChar(32)
+  notes      String?  @db.Text
+  created_at DateTime @default(now()) @db.DateTime(0)
+  updated_at DateTime @default(now()) @db.DateTime(0)
+  users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([user_id, date], map: "uk_hr_attendance_user_date")
+  @@index([date], map: "idx_hr_attendance_date")
+}
+
+model hr_leaves {
+  id          Int       @id @default(autoincrement()) @db.UnsignedInt
+  user_id     Int       @db.UnsignedInt
+  start_date  DateTime  @db.Date
+  end_date    DateTime  @db.Date
+  leave_type  String?   @db.VarChar(64)
+  reason      String?   @db.Text
+  status      String    @default("pending") @db.VarChar(32)
+  approved_by Int?      @db.UnsignedInt
+  created_at  DateTime  @default(now()) @db.DateTime(0)
+  updated_at  DateTime  @default(now()) @db.DateTime(0)
+  users       users     @relation("hr_leaves_user", fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  approver    users?    @relation("hr_leaves_approved_by", fields: [approved_by], references: [id], onUpdate: NoAction)
+
+  @@index([user_id], map: "idx_hr_leaves_user")
+  @@index([status], map: "idx_hr_leaves_status")
+}
+
+model hr_payroll {
+  id          Int       @id @default(autoincrement()) @db.UnsignedInt
+  user_id     Int       @db.UnsignedInt
+  month       Int
+  year        Int
+  salary      Decimal   @default(0.00) @db.Decimal(12, 2)
+  bonuses     Decimal   @default(0.00) @db.Decimal(12, 2)
+  deductions  Decimal   @default(0.00) @db.Decimal(12, 2)
+  net_pay     Decimal   @default(0.00) @db.Decimal(12, 2)
+  notes       String?   @db.Text
+  status      String    @default("pending") @db.VarChar(32)
+  paid_at     DateTime? @db.DateTime(0)
+  created_at  DateTime  @default(now()) @db.DateTime(0)
+  updated_at  DateTime  @default(now()) @db.DateTime(0)
+  users       users     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([user_id, month, year], map: "uk_hr_payroll_user_period")
+  @@index([year, month], map: "idx_hr_payroll_period")
+}
+
+model hr_appraisals {
+  id            Int      @id @default(autoincrement()) @db.UnsignedInt
+  user_id       Int      @db.UnsignedInt
+  year          Int
+  rating        Decimal? @default(0.00) @db.Decimal(4, 2)
+  strengths     String?  @db.Text
+  improvements  String?  @db.Text
+  comments      String?  @db.Text
+  created_at    DateTime @default(now()) @db.DateTime(0)
+  updated_at    DateTime @default(now()) @db.DateTime(0)
+  users         users    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([user_id], map: "idx_hr_appraisals_user")
+  @@index([year], map: "idx_hr_appraisals_year")
 }
