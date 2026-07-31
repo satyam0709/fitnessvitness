@@ -1,4 +1,4 @@
-const { pool } = require("../config/database");
+const { pool } = require("../config/prismaPool");
 
 const tableExistsCache = new Map();
 

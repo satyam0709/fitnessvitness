@@ -1,4 +1,4 @@
-const { mainPool: pool } = require("./database");
+const { pool } = require("./prismaPool");
 const { hashPassword } = require("../services/authService");
 require("dotenv").config();
 

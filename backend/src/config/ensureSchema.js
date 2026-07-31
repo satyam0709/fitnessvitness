@@ -1,4 +1,4 @@
-const { mainPool: pool } = require("./database");
+const { pool } = require("./prismaPool");
 const { INTEGRATIONS } = require("./integrationsCatalog");
 
 let schemaEnsured = false;

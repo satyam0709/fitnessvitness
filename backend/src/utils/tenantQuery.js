@@ -1,10 +1,14 @@
-const { getMainPool } = require("../config/database");
+const { pool } = require("../config/prismaPool");
 
 /**
  * @param {import("express").Request} _req
  */
 function getCrmPoolFromRequest(_req) {
-  return getMainPool();
+  return pool;
+}
+
+function getMainPool() {
+  return pool;
 }
 
 module.exports = {

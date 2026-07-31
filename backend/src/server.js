@@ -16,7 +16,7 @@ const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
 const crypto = require("crypto");
 
-const { testConnection } = require("./config/database");
+const { prisma } = require("./config/prisma");
 const { ensureSchema } = require("./config/ensureSchema");
 const { validateRuntimeEnv } = require("./config/runtimeValidation");
 const routes = require("./routes/index");
@@ -205,7 +205,7 @@ app.get("/api/health", async (_req, res) => {
   let dbLatency = null;
   try {
     const start = Date.now();
-    await testConnection();
+    await prisma.$queryRaw`SELECT 1 AS ok`;
     dbLatency = Date.now() - start;
   } catch (err) {
     dbStatus = "error";
@@ -301,14 +301,24 @@ app.use((err, req, res, _next) => {
   });
 });
 
+async function testPrismaConnection() {
+  try {
+    await prisma.$queryRaw`SELECT 1 AS ok`;
+    console.log("✅ DB connected successfully (Prisma)");
+  } catch (err) {
+    console.error("❌ DB connection failed:", err.message);
+    throw err;
+  }
+}
+
 async function start() {
   validateRuntimeEnv();
   await logProductionEmailConfig();
-  await testConnection();
+  await testPrismaConnection();
   await ensureSchema();
   try {
     const { ensureCrmSchemaCompat } = require("./utils/ensureCrmSchemaCompat");
-    const { pool } = require("./config/database");
+    const { pool } = require("./config/prismaPool");
     await ensureCrmSchemaCompat(pool);
   } catch (e) {
     console.warn("start: ensureCrmSchemaCompat:", e.message);

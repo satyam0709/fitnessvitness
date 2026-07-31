@@ -47,11 +47,23 @@ async function runOnClient(client, sql, params = []) {
   ];
 }
 
+function needsInsertIdTxn(sql) {
+  return String(sql || "")
+    .trim()
+    .toLowerCase()
+    .startsWith("insert");
+}
+
 async function execute(sql, params = []) {
   if (isReadSql(sql)) {
     return runOnClient(prisma, sql, params);
   }
-  return prisma.$transaction(async (tx) => runOnClient(tx, sql, params));
+  // Only wrap INSERT so LAST_INSERT_ID stays on the same connection.
+  // DDL (CREATE/ALTER) must not sit in a Prisma interactive transaction.
+  if (needsInsertIdTxn(sql)) {
+    return prisma.$transaction(async (tx) => runOnClient(tx, sql, params));
+  }
+  return runOnClient(prisma, sql, params);
 }
 
 async function query(sql, params = []) {
