@@ -42,7 +42,7 @@
 
 .title {
   margin: 0;
-  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-family: var(--font-primary);
   font-size: 16px;
   font-weight: 800;
   color: var(--yellow, #f5c400);
@@ -72,7 +72,7 @@
   border: none;
   border-bottom: 3px solid transparent;
   padding: 12px 14px 10px;
-  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 700;
   color: var(--text-muted, #64748b);
@@ -262,7 +262,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-family: var(--font-primary);
 }
 
 .dangerBody {

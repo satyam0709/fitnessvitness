@@ -22,7 +22,7 @@
 
 .title {
   margin: 0;
-  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-family: var(--font-primary);
   font-size: 1.65rem;
   font-weight: 800;
   color: var(--text-main, #1a1a2e);
@@ -223,7 +223,7 @@
   color: #fff;
   font-weight: 800;
   font-size: 14px;
-  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-family: var(--font-primary);
 }
 
 .statusCard:hover {

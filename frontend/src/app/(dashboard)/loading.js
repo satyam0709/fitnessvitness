@@ -6,7 +6,7 @@ export default function DashboardLoading() {
         display: "grid",
         placeItems: "center",
         color: "var(--text-muted, #64748b)",
-        fontFamily: "var(--font-display, Montserrat, sans-serif)",
+        fontFamily: "var(--font-primary)",
         fontSize: 14,
         letterSpacing: "0.02em",
       }}

@@ -87,7 +87,7 @@
 .logoMarkSm {
   background: var(--yellow);
   color: #1a1a2e;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 15px;
   font-weight: 900;
   width: 36px;
@@ -135,7 +135,7 @@
 .logoMark {
   background: var(--yellow);
   color: #1a1a2e;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 11px;
   font-weight: 900;
   letter-spacing: 0.08em;
@@ -148,7 +148,7 @@
 .logoText {
   background: var(--bg-deep);
   color: #ffffff;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 8px;
   font-weight: 700;
   letter-spacing: 0.12em;
@@ -231,7 +231,7 @@
   padding: 10px 12px;
   border-radius: 10px;
   text-decoration: none;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 800;
   color: var(--yellow-hover);
@@ -292,7 +292,7 @@
 
 .navSection {
   padding: 16px 14px 5px;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.14em;
@@ -320,7 +320,7 @@
   padding: 7px 10px;
   margin: 2px 8px;
   width: calc(100% - 16px);
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 12.5px;
   font-weight: 600;
   color: var(--text-muted);
@@ -510,7 +510,7 @@
   align-items: center;
   gap: 8px;
   padding: 7px 10px;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 11.5px;
   font-weight: 500;
   color: var(--text-muted);
@@ -572,7 +572,7 @@
   transform: translateY(-50%);
   background: var(--bg-deep);
   color: #fff;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 12px;
   font-weight: 600;
   padding: 6px 12px;

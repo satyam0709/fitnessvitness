@@ -18,7 +18,7 @@
   background: rgba(245,196,0,0.12);
   border: 1px solid rgba(245,196,0,0.3);
   color: #f5c400;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.12em;
@@ -30,7 +30,7 @@
   z-index: 1;
 }
 .title {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: clamp(32px, 4vw, 52px);
   font-weight: 900;
   color: #ffffff;
@@ -41,7 +41,7 @@
 }
 .title span { color: #f5c400; }
 .subtitle {
-  font-family: 'Lora', Georgia, serif;
+  font-family: var(--font-primary);
   font-size: 18px;
   color: rgba(255,255,255,0.6);
   max-width: 520px;
@@ -61,7 +61,7 @@
 .stat { text-align: center; }
 .statVal {
   display: block;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 32px;
   font-weight: 900;
   color: #f5c400;
@@ -69,7 +69,7 @@
   margin-bottom: 4px;
 }
 .statLabel {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 12px;
   font-weight: 600;
   color: rgba(255,255,255,0.5);
@@ -104,7 +104,7 @@
   top: 16px; right: 16px;
   background: #f5c400;
   color: #1a1a2e;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 10px;
   font-weight: 800;
   padding: 3px 8px;
@@ -128,14 +128,14 @@
   flex-shrink: 0;
 }
 .cardTitle {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 16px;
   font-weight: 800;
   color: #1a1a2e;
   margin: 0;
 }
 .cardDesc {
-  font-family: 'Lora', Georgia, serif;
+  font-family: var(--font-primary);
   font-size: 14px;
   color: #555770;
   line-height: 1.6;
@@ -146,7 +146,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 12px;
   font-weight: 800;
   color: #d4a900;
@@ -163,7 +163,7 @@
   text-align: center;
 }
 .ctaTitle {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 28px;
   font-weight: 900;
   color: #ffffff;
@@ -172,7 +172,7 @@
 }
 .ctaTitle span { color: #f5c400; }
 .ctaDesc {
-  font-family: 'Lora', Georgia, serif;
+  font-family: var(--font-primary);
   font-size: 16px;
   color: rgba(255,255,255,0.6);
   margin: 0 0 32px;
@@ -184,7 +184,7 @@
   padding: 14px 28px;
   background: #f5c400;
   color: #1a1a2e;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 14px;
   font-weight: 800;
   text-decoration: none;

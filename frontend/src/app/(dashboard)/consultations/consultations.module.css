@@ -2,7 +2,7 @@
   padding: 32px;
   max-width: 1400px;
   margin: 0 auto;
-  font-family: "Outfit", "Inter", sans-serif;
+  font-family: var(--font-primary);
   animation: fadeIn 0.5s ease-out;
 }
 

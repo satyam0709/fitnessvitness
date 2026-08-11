@@ -17,7 +17,7 @@
 
 .title {
   margin: 0 0 6px;
-  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-family: var(--font-primary);
   font-size: 1.65rem;
   font-weight: 800;
   color: var(--text-main);

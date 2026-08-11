@@ -15,7 +15,7 @@
 
 .title {
   margin: 0;
-  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-family: var(--font-primary);
   font-size: 1.5rem;
   font-weight: 800;
   color: var(--text-main, #1a1a2e);
@@ -613,7 +613,7 @@
 
 .webTab {
   padding: 12px 18px;
-  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-family: var(--font-primary);
   font-weight: 700;
   font-size: 13px;
   color: var(--text-muted, #64748b);

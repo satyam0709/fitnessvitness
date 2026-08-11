@@ -1,30 +1,14 @@
 import ConditionalLayout from "@/components/ConditionalLayout/conditionalLayout";
 import DeferredIconCss from "@/components/DeferredIconCss";
 import "./globals.css";
-import { Inter, Lora, Montserrat } from "next/font/google";
+import { Roboto } from "next/font/google";
 import { APP_NAME, LOGO_SRC } from "@/lib/branding";
 
-const montserrat = Montserrat({
+const roboto = Roboto({
   subsets: ["latin"],
-  variable: "--font-montserrat",
+  variable: "--font-primary-face",
   display: "swap",
-  weight: ["400", "600", "700"],
-});
-
-const inter = Inter({
-  subsets: ["latin"],
-  variable: "--font-inter",
-  display: "swap",
-  weight: ["400", "500", "600"],
-});
-
-const lora = Lora({
-  subsets: ["latin"],
-  variable: "--font-lora",
-  display: "swap",
-  weight: ["400"],
-  style: ["normal", "italic"],
-  preload: false,
+  weight: ["400", "500", "700", "900"],
 });
 
 export const metadata = {
@@ -44,11 +28,8 @@ export const viewport = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body
-        suppressHydrationWarning
-        className={`${montserrat.variable} ${inter.variable} ${lora.variable}`}
-      >
+    <html lang="en" className={roboto.variable} suppressHydrationWarning>
+      <body suppressHydrationWarning className={roboto.className}>
         <DeferredIconCss />
         <ConditionalLayout>{children}</ConditionalLayout>
       </body>

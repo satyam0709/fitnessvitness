@@ -3,7 +3,7 @@
   background: radial-gradient(circle at top right, rgba(245, 196, 0, 0.05), transparent),
               radial-gradient(circle at bottom left, rgba(0, 102, 204, 0.05), transparent);
   min-height: 100vh;
-  font-family: 'Outfit', sans-serif;
+  font-family: var(--font-primary);
 }
 
 .header {

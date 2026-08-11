@@ -59,9 +59,14 @@
   --sidebar-w:       240px;
   --sidebar-collapsed: 68px;
 
-  --font-display:    var(--font-montserrat), sans-serif;
-  --font-body:       var(--font-inter), sans-serif;
-  --font-serif:      var(--font-lora), Georgia, serif;
+  /* Single site font: set by next/font on <html> as --font-primary-face */
+  --font-primary:    var(--font-primary-face, system-ui, sans-serif);
+  --font-display:    var(--font-primary);
+  --font-body:       var(--font-primary);
+  --font-serif:      var(--font-primary);
+  --font-montserrat: var(--font-primary);
+  --font-inter:      var(--font-primary);
+  --font-lora:       var(--font-primary);
 
   --radius-xs:       6px;
   --radius-sm:       8px;

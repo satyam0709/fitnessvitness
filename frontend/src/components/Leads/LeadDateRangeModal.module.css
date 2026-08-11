@@ -39,7 +39,7 @@
     var(--crm-modal-header-end, #2d2d4e) 100%
   );
   color: var(--crm-modal-accent, var(--yellow, #f5c400));
-  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-family: var(--font-primary);
   font-size: 16px;
   font-weight: 800;
   border-bottom: 2px solid var(--crm-modal-accent, var(--yellow, #f5c400));
@@ -107,7 +107,7 @@
   border-radius: 8px;
   background: transparent;
   color: var(--text-main, #1a1a2e);
-  font-family: var(--font-body, "Inter", sans-serif);
+  font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -192,7 +192,7 @@
   padding: 0 10px;
   border: 1px solid var(--border, #e2e8f0);
   border-radius: 8px;
-  font-family: var(--font-body, "Inter", sans-serif);
+  font-family: var(--font-primary);
   font-size: 13px;
   color: var(--text-main, #1a1a2e);
 }
@@ -265,7 +265,7 @@
 
 .monthTitle {
   text-align: center;
-  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 800;
   color: var(--text-main, #1a1a2e);
@@ -367,7 +367,7 @@
   border: 1px solid var(--border, #e2e8f0);
   background: var(--bg-card, #fff);
   color: var(--text-main, #1a1a2e);
-  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 700;
   cursor: pointer;
@@ -383,7 +383,7 @@
   border: none;
   background: var(--btn-primary-bg, #f5c400);
   color: var(--btn-primary-txt, #1a1a2e);
-  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 800;
   cursor: pointer;

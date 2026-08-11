@@ -20,7 +20,7 @@
   gap: 10px;
   padding: 12px 20px;
   border-radius: 10px;
-  font-family: var(--font-display, 'Montserrat', sans-serif);
+  font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 700;
   box-shadow: 0 8px 32px rgba(0,0,0,0.18);
@@ -91,7 +91,7 @@
   font-size: 10px;
   font-weight: 700;
   color: var(--text-muted, #64748b);
-  font-family: var(--font-display, 'Montserrat', sans-serif);
+  font-family: var(--font-primary);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   white-space: nowrap;
@@ -123,7 +123,7 @@
   border-radius: var(--radius-md, 10px);
   padding: 12px 14px;
   color: #fff;
-  font-family: var(--font-display, 'Montserrat', sans-serif);
+  font-family: var(--font-primary);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -173,7 +173,7 @@
 }
 
 .pageTitle {
-  font-family: var(--font-display, 'Montserrat', sans-serif);
+  font-family: var(--font-primary);
   font-size: 22px;
   font-weight: 800;
   color: var(--text-main, #1a1a2e);
@@ -227,7 +227,7 @@
   border-radius: 8px;
   background: var(--bg-card, #fff);
   color: var(--text-main, #1a1a2e);
-  font-family: var(--font-body, 'Inter', sans-serif);
+  font-family: var(--font-primary);
   font-size: 13px;
   appearance: none;
   cursor: pointer;
@@ -258,7 +258,7 @@
   border-radius: 8px;
   background: var(--bg-card, #fff);
   color: var(--text-main, #1a1a2e);
-  font-family: var(--font-body, 'Inter', sans-serif);
+  font-family: var(--font-primary);
   font-size: 13px;
 }
 .searchInput:focus {
@@ -360,7 +360,7 @@
   background: none;
   border: none;
   color: var(--text-main, #1a1a2e);
-  font-family: var(--font-body, 'Inter', sans-serif);
+  font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -381,7 +381,7 @@
   font-size: 11px;
   font-weight: 700;
   color: var(--text-muted, #64748b);
-  font-family: var(--font-display, 'Montserrat', sans-serif);
+  font-family: var(--font-primary);
 }
 .secondaryFilters .afGroup .filterSelect {
   max-width: 100%;
@@ -414,7 +414,7 @@
   justify-content: space-between;
   padding: 10px 14px;
   color: #fff;
-  font-family: var(--font-display, 'Montserrat', sans-serif);
+  font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 700;
 }
@@ -475,7 +475,7 @@
   gap: 6px;
 }
 .kcName {
-  font-family: var(--font-display, 'Montserrat', sans-serif);
+  font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 700;
   color: var(--text-main, #1a1a2e);
@@ -606,7 +606,7 @@
   font-size: 13px;
   color: var(--text-main, #1a1a2e);
   text-align: left;
-  font-family: var(--font-body, "Inter", sans-serif);
+  font-family: var(--font-primary);
 }
 .kcCardMenuItem:hover {
   background: var(--bg-hover, #f1f5f9);
@@ -689,7 +689,7 @@
   gap: 12px;
   padding: 60px 24px;
   color: var(--text-muted, #94a3b8);
-  font-family: var(--font-display, 'Montserrat', sans-serif);
+  font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 600;
 }
@@ -709,7 +709,7 @@
 .table th {
   padding: 11px 14px;
   text-align: left;
-  font-family: var(--font-display, 'Montserrat', sans-serif);
+  font-family: var(--font-primary);
   font-size: 11px;
   font-weight: 700;
   color: var(--text-muted, #64748b);
@@ -758,7 +758,7 @@
 .tdPhone { font-family: monospace; font-size: 12.5px; }
 
 .leadName {
-  font-family: var(--font-display, 'Montserrat', sans-serif);
+  font-family: var(--font-primary);
   font-weight: 700;
   color: var(--text-main, #1a1a2e);
   text-decoration: none;
@@ -900,7 +900,7 @@
 }
 .titleBlock h1 {
   margin: 0 0 4px;
-  font-family: var(--font-display, 'Montserrat', sans-serif);
+  font-family: var(--font-primary);
   font-size: 22px;
   font-weight: 800;
 }

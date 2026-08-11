@@ -54,7 +54,7 @@
 
 .title {
   margin: 0;
-  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-family: var(--font-primary);
   font-size: 1.125rem;
   font-weight: 800;
   color: #fff;
@@ -87,7 +87,7 @@
   font-size: 14px;
   cursor: pointer;
   border: none;
-  font-family: var(--font-body, "Inter", sans-serif);
+  font-family: var(--font-primary);
   transition: filter 0.15s ease, transform 0.1s ease;
 }
 

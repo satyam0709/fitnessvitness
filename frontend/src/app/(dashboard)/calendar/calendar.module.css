@@ -26,7 +26,7 @@
 
 .navMonth h1 {
   margin: 0;
-  font-family: "Montserrat", sans-serif;
+  font-family: var(--font-primary);
   font-size: 1.35rem;
   font-weight: 800;
   color: var(--text-main);
@@ -61,7 +61,7 @@
   padding: 8px 14px;
   font-size: 12px;
   font-weight: 700;
-  font-family: "Montserrat", sans-serif;
+  font-family: var(--font-primary);
   color: var(--text-muted);
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
@@ -87,7 +87,7 @@
   padding: 8px 16px;
   font-size: 12px;
   font-weight: 700;
-  font-family: "Montserrat", sans-serif;
+  font-family: var(--font-primary);
   color: var(--text-muted);
   cursor: pointer;
 }
@@ -109,7 +109,7 @@
   padding: 10px 18px;
   font-size: 12px;
   font-weight: 700;
-  font-family: "Montserrat", sans-serif;
+  font-family: var(--font-primary);
   cursor: pointer;
   background: linear-gradient(135deg, #8b5cf6, #6366f1);
   color: #fff;
@@ -261,7 +261,7 @@
 
 .dayView,
 .listView {
-  font-family: "Montserrat", sans-serif;
+  font-family: var(--font-primary);
 }
 
 .subheading {
@@ -318,7 +318,7 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  font-family: "Montserrat", sans-serif;
+  font-family: var(--font-primary);
 }
 
 .allDayRow {
@@ -654,7 +654,7 @@
   font-size: 11px;
   font-weight: 700;
   cursor: pointer;
-  font-family: "Montserrat", sans-serif;
+  font-family: var(--font-primary);
 }
 
 .drawerTabActive {
@@ -666,7 +666,7 @@
   font-size: 11px;
   font-weight: 700;
   cursor: pointer;
-  font-family: "Montserrat", sans-serif;
+  font-family: var(--font-primary);
 }
 
 .drawerHint {

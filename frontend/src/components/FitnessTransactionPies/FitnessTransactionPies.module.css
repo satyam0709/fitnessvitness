@@ -7,7 +7,7 @@
 }
 
 .sectionTitle {
-  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-family: var(--font-primary);
   font-size: 16px;
   font-weight: 800;
   color: var(--text-main, #1a1a2e);
@@ -47,7 +47,7 @@
 }
 
 .embeddedTitle {
-  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-family: var(--font-primary);
   font-size: 14px;
   font-weight: 800;
   color: var(--text-main, #1a1a2e);

@@ -17,7 +17,7 @@
   background: none;
   border: none;
   color: var(--text-muted);
-  font-family: "Montserrat", sans-serif;
+  font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -32,7 +32,7 @@
 }
 
 .title {
-  font-family: "Montserrat", sans-serif;
+  font-family: var(--font-primary);
   font-size: 28px;
   font-weight: 900;
   color: var(--text-main);
@@ -44,7 +44,7 @@
   font-size: 14px;
   color: var(--text-muted);
   margin: 0;
-  font-family: "Inter", sans-serif;
+  font-family: var(--font-primary);
 }
 
 .layout {
@@ -70,7 +70,7 @@
 .tableHead {
   padding: 16px 20px;
   border-bottom: 1px solid var(--border);
-  font-family: "Montserrat", sans-serif;
+  font-family: var(--font-primary);
   font-weight: 800;
   font-size: 15px;
   color: var(--text-main);
@@ -93,7 +93,7 @@
 }
 
 .table th {
-  font-family: "Montserrat", sans-serif;
+  font-family: var(--font-primary);
   font-weight: 700;
   font-size: 12px;
   text-transform: uppercase;
@@ -104,7 +104,7 @@
 
 .table td {
   color: var(--text-main);
-  font-family: "Inter", sans-serif;
+  font-family: var(--font-primary);
 }
 
 .table tr:last-child td {
@@ -120,7 +120,7 @@
 .totalRow {
   display: flex;
   justify-content: space-between;
-  font-family: "Montserrat", sans-serif;
+  font-family: var(--font-primary);
   font-size: 14px;
   margin-bottom: 8px;
   color: var(--text-muted);
@@ -129,7 +129,7 @@
 .totalRowStrong {
   display: flex;
   justify-content: space-between;
-  font-family: "Montserrat", sans-serif;
+  font-family: var(--font-primary);
   font-size: 18px;
   font-weight: 900;
   color: var(--text-main);
@@ -162,7 +162,7 @@
   border-radius: 16px;
   padding: 20px 18px;
   text-align: center;
-  font-family: "Montserrat", sans-serif;
+  font-family: var(--font-primary);
 }
 
 .choiceCardTrial {
@@ -198,7 +198,7 @@
   padding: 14px 18px;
   border: none;
   border-radius: 12px;
-  font-family: "Montserrat", sans-serif;
+  font-family: var(--font-primary);
   font-weight: 800;
   font-size: 14px;
   cursor: pointer;
@@ -222,7 +222,7 @@
   padding: 14px 18px;
   border: none;
   border-radius: 12px;
-  font-family: "Montserrat", sans-serif;
+  font-family: var(--font-primary);
   font-weight: 800;
   font-size: 14px;
   cursor: pointer;
@@ -248,7 +248,7 @@
   justify-content: center;
   gap: 12px;
   color: var(--text-muted);
-  font-family: "Montserrat", sans-serif;
+  font-family: var(--font-primary);
   font-size: 14px;
 }
 

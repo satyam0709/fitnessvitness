@@ -5,7 +5,7 @@
 }
 
 .heading {
-  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-family: var(--font-primary);
   font-size: 1.35rem;
   font-weight: 800;
   margin: 0 0 8px;

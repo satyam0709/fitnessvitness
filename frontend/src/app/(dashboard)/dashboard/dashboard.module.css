@@ -40,7 +40,7 @@
   margin: 0;
   font-size: 1.1rem;
   font-weight: 700;
-  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-family: var(--font-primary);
   color: var(--text-main, #1a1a2e);
   letter-spacing: -0.01em;
 }
@@ -282,7 +282,7 @@
 }
 
 .greetLabel {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.18em;
@@ -291,7 +291,7 @@
 }
 
 .greetName {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: clamp(20px, 3vw, 28px);
   font-weight: 800;
   color: #ffffff;
@@ -311,7 +311,7 @@
   background: rgba(245, 196, 0, 0.14);
   border: 1px solid rgba(245, 196, 0, 0.25);
   color: var(--yellow, #f5c400);
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 11px;
   font-weight: 700;
   padding: 5px 12px;
@@ -386,7 +386,7 @@
 
 .oprTitle {
   margin: 0;
-  font-family: var(--font-display, 'Montserrat', sans-serif);
+  font-family: var(--font-primary);
   font-size: 14px;
   font-weight: 800;
   color: color-mix(in srgb, var(--opr-accent-strong) 75%, var(--text-main, #1a1a2e));
@@ -396,7 +396,7 @@
 }
 
 .oprDate {
-  font-family: var(--font-display, 'Montserrat', sans-serif);
+  font-family: var(--font-primary);
   font-size: 11px;
   font-weight: 600;
   color: var(--text-muted, #6b7280);
@@ -454,7 +454,7 @@
   position: absolute;
   top: 8px;
   right: 10px;
-  font-family: "Montserrat", sans-serif;
+  font-family: var(--font-primary);
   font-size: 10px;
   font-weight: 800;
   padding: 3px 8px;
@@ -475,7 +475,7 @@
 }
 
 .oprMiniCardValue {
-  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-family: var(--font-primary);
   font-size: clamp(20px, 4vw, 26px);
   font-weight: 800;
   color: color-mix(in srgb, var(--opr-accent-strong) 78%, var(--text-main, #1a1a2e));
@@ -507,7 +507,7 @@
 }
 
 .oprResultOppHeadPill {
-  font-family: "Montserrat", sans-serif;
+  font-family: var(--font-primary);
   font-size: 10px;
   font-weight: 800;
   padding: 4px 10px;
@@ -545,7 +545,7 @@
 .oprResultOppMoney {
   display: inline-block;
   margin: 0 auto 8px;
-  font-family: "Montserrat", sans-serif;
+  font-family: var(--font-primary);
   font-size: 10px;
   font-weight: 800;
   padding: 4px 10px;
@@ -584,7 +584,7 @@
 }
 
 .oprResultOppColValue {
-  font-family: var(--font-display, "Montserrat", sans-serif);
+  font-family: var(--font-primary);
   font-size: 22px;
   font-weight: 800;
   color: var(--text-main, #1a1a2e);
@@ -629,7 +629,7 @@
 }
 
 .oprCurrencyPill {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 10px;
   font-weight: 800;
   padding: 3px 8px;
@@ -647,7 +647,7 @@
 }
 
 .oprRow strong {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 13.5px;
   font-weight: 800;
   color: color-mix(in srgb, var(--opr-accent-strong) 85%, var(--text-main, #1a1a2e));
@@ -850,7 +850,7 @@
 }
 
 .statLabel {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 11.5px;
   font-weight: 700;
   color: var(--text-muted, #6b7280);
@@ -859,7 +859,7 @@
 }
 
 .statValue {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 34px;
   font-weight: 800;
   color: var(--text-main, #1a1a2e);
@@ -891,7 +891,7 @@
 }
 
 .statSubBadge {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 11px;
   font-weight: 700;
   padding: 3px 9px;
@@ -900,7 +900,7 @@
 }
 
 .statSubNote {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 11px;
   color: var(--text-muted, #6b7280);
 }
@@ -913,14 +913,14 @@
 }
 
 .progressLabel {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 11px;
   font-weight: 600;
   color: var(--text-muted, #6b7280);
 }
 
 .progressPct {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 12px;
   font-weight: 800;
 }
@@ -962,7 +962,7 @@
 }
  
 .viewAllBtn {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 11px;
   font-weight: 700;
   color: var(--yellow, #f5c400);
@@ -1033,7 +1033,7 @@
 }
 
 .chartCardTitle {
-  font-family: var(--font-display, 'Montserrat', sans-serif);
+  font-family: var(--font-primary);
   font-size: 14px;
   font-weight: 800;
   color: var(--text-main, #1a1a2e);
@@ -1042,7 +1042,7 @@
 }
 
 .chartMeta {
-  font-family: var(--font-display, 'Montserrat', sans-serif);
+  font-family: var(--font-primary);
   font-size: 10.5px;
   font-weight: 700;
   letter-spacing: 0.06em;
@@ -1130,7 +1130,7 @@
 }
 
 .taskTitle {
-  font-family: var(--font-display, 'Montserrat', sans-serif);
+  font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 700;
   color: var(--text-main, #1a1a2e);
@@ -1179,7 +1179,7 @@
 }
 
 .noteCardTitle {
-  font-family: var(--font-display, 'Montserrat', sans-serif);
+  font-family: var(--font-primary);
   font-size: 12.5px;
   font-weight: 800;
   color: #1a1a2e;
@@ -1233,7 +1233,7 @@
 }
 
 .addNoteBtn {
-  font-family: var(--font-display, 'Montserrat', sans-serif);
+  font-family: var(--font-primary);
   font-size: 12.5px;
   font-weight: 800;
   padding: 8px 16px;
@@ -1291,7 +1291,7 @@
 }
 
 .modalTitle {
-  font-family: var(--font-display, 'Montserrat', sans-serif);
+  font-family: var(--font-primary);
   font-size: 17px;
   font-weight: 800;
   color: var(--text-main);
@@ -1305,7 +1305,7 @@
 
 .modalField label {
   display: block;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 11px;
   font-weight: 700;
   color: var(--text-muted, #6b7280);
@@ -1353,7 +1353,7 @@
   border: 1.5px solid var(--border, #e4e7f0);
   border-radius: 10px;
   padding: 9px 18px;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-weight: 700;
   font-size: 13px;
   cursor: pointer;
@@ -1373,7 +1373,7 @@
   border: none;
   border-radius: 10px;
   padding: 9px 20px;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-weight: 800;
   font-size: 13px;
   cursor: pointer;
@@ -1429,7 +1429,7 @@
 }
 
 .panelTitle {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 14px;
   font-weight: 800;
   color: var(--text-main, #1a1a2e);
@@ -1458,7 +1458,7 @@
   background: transparent;
   border: none;
   color: var(--text-muted, #6b7280);
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 11px;
   font-weight: 700;
   padding: 5px 11px;
@@ -1501,7 +1501,7 @@
   height: 100%;
   min-height: 240px;
   color: var(--text-faint, #9ca3af);
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 600;
   padding: 24px;
@@ -1518,7 +1518,7 @@
 .table th {
   padding: 8px 16px;
   text-align: left;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 10.5px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -1553,7 +1553,7 @@
 }
 
 .leadName {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-weight: 700;
   font-size: 13px;
   color: var(--text-main, #1a1a2e);
@@ -1579,7 +1579,7 @@
   background: var(--bg-hover, #eef1f7);
   color: var(--text-secondary, #64748b);
   border: 1px solid var(--border, #e4e7f0);
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 10px;
   font-weight: 700;
   padding: 2px 8px;
@@ -1639,7 +1639,7 @@
 }
 
 .schedTitle {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 700;
   color: var(--text-main, #1a1a2e);
@@ -1650,7 +1650,7 @@
 }
 
 .schedTime {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 11.5px;
   color: var(--text-muted, #6b7280);
 }
@@ -1659,7 +1659,7 @@
   background: rgba(34, 197, 94, 0.14);
   border: 1px solid rgba(34, 197, 94, 0.25);
   color: #16a34a;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 10px;
   font-weight: 800;
   padding: 3px 8px;
@@ -1736,7 +1736,7 @@
   background: var(--bg-card, #fff);
   border: 1px solid var(--border, #e4e7f0);
   color: var(--text-muted, #6b7280);
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 11px;
   font-weight: 700;
   padding: 5px 11px;
@@ -1793,7 +1793,7 @@
 
 .fitnessStatValue {
   display: block;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 26px;
   font-weight: 800;
   color: var(--text-main, #1a1a2e);
@@ -1817,7 +1817,7 @@
 }
 
 .fitnessFollowupsTitle {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 12px;
   font-weight: 700;
   color: var(--text-secondary, #5a5f7d);
@@ -1849,7 +1849,7 @@
 
 .fitnessFollowupName {
   flex: 1;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 700;
   color: var(--text-main, #1a1a2e);
@@ -1914,7 +1914,7 @@
 }
 
 .fitnessTitle {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 18px;
   font-weight: 800;
   color: var(--text-main);
@@ -1930,7 +1930,7 @@
 .fitnessBtn {
   padding: 10px 20px;
   border-radius: 10px;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 12px;
   font-weight: 700;
   text-decoration: none;
@@ -2001,7 +2001,7 @@
 }
 
 .fitnessStatValue {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 42px;
   font-weight: 800;
   color: var(--text-main);
@@ -2011,7 +2011,7 @@
 }
 
 .fitnessStatLabel {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   line-height: 1.4;
   color: var(--text-muted);
   font-size: 13px;
@@ -2035,7 +2035,7 @@
 }
 
 .finLabel {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 10px;
   font-weight: 700;
   color: var(--text-muted);
@@ -2044,7 +2044,7 @@
 }
 
 .finValue {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 18px;
   font-weight: 800;
   color: var(--text-main);
@@ -2052,7 +2052,7 @@
 
 .finLink {
   margin-left: auto;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 11px;
   font-weight: 700;
   color: #f5c400;
@@ -2095,7 +2095,7 @@
   align-items: center;
   gap: 10px;
   margin-bottom: 16px;
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
@@ -2148,7 +2148,7 @@
 }
 
 .fitnessAlertTitle {
-  font-family: 'Montserrat', sans-serif;
+  font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 800;
   color: var(--text-main);
