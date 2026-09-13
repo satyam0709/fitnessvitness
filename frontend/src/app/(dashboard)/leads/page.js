@@ -11,6 +11,8 @@ import LeadDateRangeModal from "@/components/Leads/LeadDateRangeModal";
 import LeadQuickModals from "@/components/Leads/LeadQuickModals";
 import ManageCustomOptionsModal from "@/components/Leads/ManageCustomOptionsModal";
 import ConvertLeadModal from "@/components/Leads/ConvertLeadModal";
+import LeadImportModal from "@/components/Leads/LeadImportModal";
+import LeadOverflowMenu from "@/components/Leads/LeadOverflowMenu";
 import {
   useConfirmDialog,
   buildDeleteMessage,
@@ -29,6 +31,7 @@ import {
   statusChangeApiBody,
   mergeCustomOptionsWithLeads,
 } from "@/components/Leads/leadConstants";
+import { CrmFilterStrip } from "@/components/UI/CrmFilterStrip";
 import styles from "./leads.module.css";
 
 export default function LeadsPage() {
@@ -76,6 +79,7 @@ export default function LeadsPage() {
   const [addOpen,            setAddOpen]            = useState(false);
   const [dateRangeOpen,      setDateRangeOpen]      = useState(false);
   const [manageOptionsOpen,  setManageOptionsOpen]  = useState(false);
+  const [importOpen,         setImportOpen]         = useState(false);
   const [convertModal,       setConvertModal]       = useState(null); // lead object
   const [menuOpen,           setMenuOpen]           = useState(false);
   const [selectedLeads,      setSelectedLeads]      = useState(new Set());
@@ -578,7 +582,7 @@ export default function LeadsPage() {
           <div className={styles.menuWrap} ref={menuRef}>
             <button
               type="button"
-              className={styles.menuBtn}
+              className={`${styles.menuBtn} ${menuOpen ? styles.menuBtnOpen : ""}`}
               onClick={() => setMenuOpen((v) => !v)}
               title="More options"
             >
@@ -588,6 +592,9 @@ export default function LeadsPage() {
               <div className={styles.dropdown}>
                 <button type="button" className={styles.dropItem} onClick={() => { setMenuOpen(false); }}>
                   <i className="fas fa-sort" /> Lead Sorting
+                </button>
+                <button type="button" className={styles.dropItem} onClick={() => { setMenuOpen(false); setImportOpen(true); }}>
+                  <i className="fas fa-file-import" /> Import Leads
                 </button>
                 <button type="button" className={styles.dropItem} onClick={() => { setMenuOpen(false); setManageOptionsOpen(true); }}>
                   <i className="fas fa-sliders" /> Manage Custom Options
@@ -692,37 +699,26 @@ export default function LeadsPage() {
           </div>
         </div>
 
-        <div className={styles.statusStrip} role="tablist" aria-label="Filter by status">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={!filterStatus}
-              className={`${styles.statusChip} ${!filterStatus ? styles.statusChipActive : ""}`}
-              style={{ background: "#0f172a" }}
-              onClick={() => setFilterStatus("")}
-            >
-              <span className={styles.statusChipLabel}>All Leads</span>
-              <span className={styles.statusChipCount}>{baseFilteredLeads.length}</span>
-            </button>
-            {statusColumns.map((st) => {
-              const n = statusCount(st.key, st.isCustom);
-              const active = filterStatus === st.key;
-              return (
-                <button
-                  key={st.key}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  className={`${styles.statusChip} ${active ? styles.statusChipActive : ""} ${st.isCustom ? styles.statusChipCustom : ""}`}
-                  style={{ background: st.color }}
-                  onClick={() => toggleStatusFilter(st.key)}
-                >
-                  <span className={styles.statusChipLabel}>{st.label}</span>
-                  <span className={styles.statusChipCount}>{n}</span>
-                </button>
-              );
-            })}
-          </div>
+        <CrmFilterStrip
+          ariaLabel="Filter by status"
+          activeKey={filterStatus || ""}
+          items={[
+            {
+              key: "",
+              label: "All Leads",
+              count: baseFilteredLeads.length,
+              color: "#64748b",
+              onClick: () => setFilterStatus(""),
+            },
+            ...statusColumns.map((st) => ({
+              key: st.key,
+              label: st.label,
+              count: statusCount(st.key, st.isCustom),
+              color: st.color,
+              onClick: () => toggleStatusFilter(st.key),
+            })),
+          ]}
+        />
       </div>
 
       {/* ── KANBAN VIEW ───────────────────────────────────────────────────── */}
@@ -895,6 +891,12 @@ export default function LeadsPage() {
         />
       )}
 
+      <LeadImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onComplete={() => { fetchLeads(); fetchCustomOptions(); }}
+      />
+
       {/* ── ConvertLeadModal ──────────────────────────────────────────── */}
       {convertModal && (
         <ConvertLeadModal
@@ -971,31 +973,8 @@ const CARD_TOOLBAR = [
   { key: "followup", icon: "fa-calendar-plus", title: "Follow-up" },
 ];
 
-const MENU_ITEMS = [
-  { key: "whatsapp", icon: "fa-whatsapp", label: "Whatsapp", fab: true },
-  { key: "reminder", icon: "fa-bell", label: "Set Reminder" },
-  { key: "meeting", icon: "fa-briefcase", label: "Set Meeting" },
-  { key: "copy", icon: "fa-copy", label: "Copy Lead" },
-  { key: "duplicate", icon: "fa-clone", label: "Duplicate Lead" },
-  { key: "link-client", icon: "fa-link", label: "Link Client" },
-  { key: "change-log", icon: "fa-history", label: "Change Log" },
-  { key: "task", icon: "fa-list-check", label: "Create Task" },
-  { key: "quotation", icon: "fa-file-invoice", label: "Create Quotation" },
-  { key: "invoice", icon: "fa-file-invoice-dollar", label: "Create Invoice" },
-];
-
 function KanbanCard({ lead, statuses, customStatuses = [], onStatusChange, onDelete, onOpenAction, onMenuAction }) {
   const displaySt = formatLeadStatus(lead);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef(null);
-
-  useEffect(() => {
-    function close(e) {
-      if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false);
-    }
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, []);
 
   const createdBy = lead.created_by_name || "—";
   const assignedTo = lead.assigned_name || "—";
@@ -1044,34 +1023,11 @@ function KanbanCard({ lead, statuses, customStatuses = [], onStatusChange, onDel
             <i className={`fas ${a.icon}`} />
           </button>
         ))}
-        <div className={styles.kcMoreWrap} ref={menuRef}>
-          <button
-            type="button"
-            className={styles.kcIconBtn}
-            title="More"
-            onClick={() => setMenuOpen((v) => !v)}
-          >
-            <i className="fas fa-ellipsis-vertical" />
-          </button>
-          {menuOpen && (
-            <div className={styles.kcCardMenu}>
-              {MENU_ITEMS.map((m) => (
-                <button
-                  key={m.key}
-                  type="button"
-                  className={styles.kcCardMenuItem}
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onMenuAction(m.key, lead);
-                  }}
-                >
-                  <i className={`${m.fab ? "fab" : "fas"} ${m.icon}`} />
-                  {m.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <LeadOverflowMenu
+          className={styles.kcMoreWrap}
+          triggerClassName={styles.kcIconBtn}
+          onSelect={(key) => onMenuAction(key, lead)}
+        />
       </div>
       <div className={styles.kcFooter}>
         <LeadStatusSelect
@@ -1094,17 +1050,7 @@ function KanbanCard({ lead, statuses, customStatuses = [], onStatusChange, onDel
 // ─────────────────────────────────────────────────────────────────────────────
 function ListRow({ lead, idx, statuses, customStatuses = [], selected, onToggle, onStatusChange, onDelete, onOpenAction, onMenuAction }) {
   const [expanded, setExpanded] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef(null);
   const displaySt = formatLeadStatus(lead);
-
-  useEffect(() => {
-    function close(e) {
-      if (menuRef.current && !menuRef.current.contains(e.target)) setMenuOpen(false);
-    }
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, []);
 
   return (
     <>
@@ -1172,34 +1118,10 @@ function ListRow({ lead, idx, statuses, customStatuses = [], selected, onToggle,
                 <i className={`fas ${a.icon}`} />
               </button>
             ))}
-            <div className={styles.kcMoreWrap} ref={menuRef} style={{ position: "relative" }}>
-              <button
-                type="button"
-                className={styles.actionBtn}
-                title="More"
-                onClick={() => setMenuOpen((v) => !v)}
-              >
-                <i className="fas fa-ellipsis-vertical" />
-              </button>
-              {menuOpen && (
-                <div className={styles.kcCardMenu} style={{ right: 0, left: "auto" }}>
-                  {MENU_ITEMS.map((m) => (
-                    <button
-                      key={m.key}
-                      type="button"
-                      className={styles.kcCardMenuItem}
-                      onClick={() => {
-                        setMenuOpen(false);
-                        onMenuAction(m.key, lead);
-                      }}
-                    >
-                      <i className={`${m.fab ? "fab" : "fas"} ${m.icon}`} />
-                      {m.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            <LeadOverflowMenu
+              triggerClassName={styles.actionBtn}
+              onSelect={(key) => onMenuAction(key, lead)}
+            />
           </div>
         </td>
       </tr>

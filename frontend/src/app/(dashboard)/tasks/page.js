@@ -14,6 +14,7 @@ import { taskStatusForDb } from "@/lib/taskStatus";
 import { useListHighlight, itemHighlightClass } from "@/lib/useListHighlight";
 import TaskModal, { CATEGORY_LABEL } from "@/components/Tasks/TaskModal";
 import ManageTaskCustomOptionsModal from "@/components/Tasks/ManageTaskCustomOptionsModal";
+import { CrmFilterStrip } from "@/components/UI/CrmFilterStrip";
 import styles from "./tasksPage.module.css";
 
 const KANBAN = [
@@ -81,6 +82,17 @@ function startOfToday() {
   const t = new Date();
   t.setHours(0, 0, 0, 0);
   return t;
+}
+
+function matchesTaskCard(t, cardFilter) {
+  if (!cardFilter) return true;
+  if (cardFilter === "overdue" || cardFilter === "due_today") {
+    const due = parseDateOnly(t.due_date);
+    if (isDoneStatus(t.status) || !due) return false;
+    const diff = Math.round((due - startOfToday()) / 86400000);
+    return cardFilter === "overdue" ? diff < 0 : diff === 0;
+  }
+  return kanbanColumn(t.status) === cardFilter;
 }
 
 function dueMeta(dueDate) {
@@ -157,6 +169,7 @@ function TasksPageContent() {
   const [clientFilterQ, setClientFilterQ] = useState("");
   const [clientFilterId, setClientFilterId] = useState("");
   const [clientFilterHits, setClientFilterHits] = useState([]);
+  const [cardFilter, setCardFilter] = useState("");
 
   useLayoutEffect(() => {
     if (highlightId) setViewMode("list");
@@ -309,10 +322,11 @@ function TasksPageContent() {
   const byKanban = useMemo(() => {
     const map = { pending: [], progress: [], done: [], carried: [] };
     for (const t of items) {
+      if (!matchesTaskCard(t, cardFilter)) continue;
       map[kanbanColumn(t.status)].push(t);
     }
     return map;
-  }, [items]);
+  }, [items, cardFilter]);
 
   const categoryFilterOpts = useMemo(() => {
     const known = new Set(BASE_CATEGORY_FILTER_OPTS.map((c) => c.value));
@@ -327,7 +341,7 @@ function TasksPageContent() {
   }, [customCategories]);
 
   const sortedList = useMemo(() => {
-    const list = [...items];
+    let list = items.filter((t) => matchesTaskCard(t, cardFilter));
     const { key, dir } = listSort;
     const mul = dir === "desc" ? -1 : 1;
     list.sort((a, b) => {
@@ -343,7 +357,7 @@ function TasksPageContent() {
       return (da - db) * mul;
     });
     return list;
-  }, [items, listSort]);
+  }, [items, listSort, cardFilter]);
 
   function clearFilters() {
     setSearchInput("");
@@ -595,12 +609,20 @@ function TasksPageContent() {
         <p className={styles.calHint}>Calendar view opens from the main Calendar page. Use List view for date sorting.</p>
       ) : null}
 
-      <div className={styles.statsRow}>
-        <span className={styles.statChip}>🔴 Overdue: {stats.overdue}</span>
-        <span className={styles.statChip}>🟡 Due Today: {stats.dueToday}</span>
-        <span className={styles.statChip}>🟢 Done This Week: {stats.doneWeek}</span>
-        <span className={styles.statChip}>📋 Total Active: {stats.active}</span>
-      </div>
+      <CrmFilterStrip
+        ariaLabel="Filter tasks"
+        activeKey={cardFilter}
+        items={[
+          { key: "", label: "All Tasks", count: items.length, color: "#64748b" },
+          { key: "pending", label: "Pending", count: items.filter((t) => kanbanColumn(t.status) === "pending").length, color: "#64748b" },
+          { key: "progress", label: "In Progress", count: items.filter((t) => kanbanColumn(t.status) === "progress").length, color: "#2563eb" },
+          { key: "done", label: "Done", count: items.filter((t) => kanbanColumn(t.status) === "done").length, color: "#16a34a" },
+          { key: "carried", label: "Carried Forward", count: items.filter((t) => kanbanColumn(t.status) === "carried").length, color: "#0ea5e9" },
+          { key: "due_today", label: "Due Today", count: stats.dueToday, color: "#f59e0b" },
+          { key: "overdue", label: "Overdue", count: stats.overdue, color: "#dc2626" },
+        ]}
+        onSelect={(key) => setCardFilter((prev) => (prev === key ? "" : key))}
+      />
 
       <div className={styles.filters}>
         <select

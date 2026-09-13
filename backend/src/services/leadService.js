@@ -1772,6 +1772,21 @@ async function deleteCustomOption({ fieldName, optionValue }) {
   };
 }
 
+async function getCustomOptionUsage({ fieldName, optionValue }) {
+  if (!fieldName || !optionValue) {
+    const err = new Error("fieldName and optionValue are required");
+    err.status = 400;
+    throw err;
+  }
+  const col = LEAD_COLUMN_MAP[fieldName];
+  if (!col) return { success: true, data: { total: 0 } };
+  const val = String(optionValue).trim();
+  const total = await prisma.leads.count({
+    where: { is_deleted: false, [col]: val },
+  });
+  return { success: true, data: { total } };
+}
+
 async function convertLeadToOpportunity(req, leadId, body = {}) {
   const lead = await prisma.leads.findFirst({
     where: { id: Number(leadId), is_deleted: false, tenant_id: tenantId(req) }
@@ -1909,5 +1924,6 @@ module.exports = {
   getCustomOptions,
   renameCustomOption,
   deleteCustomOption,
+  getCustomOptionUsage,
   registerCustomOptionIfNeeded,
 };

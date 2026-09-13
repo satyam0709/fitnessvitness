@@ -24,6 +24,7 @@ import {
 import { useUserRole } from "@/components/Dashboard/UserRoleContext";
 import { taskStatusForDb } from "@/lib/taskStatus";
 import { useTenantFeatures } from "@/contexts/TenantFeaturesContext";
+import { CrmFilterStrip } from "@/components/UI/CrmFilterStrip";
 import styles from "./dashboard.module.css";
 
 function normLeadStatus(lead) {
@@ -74,39 +75,21 @@ function fmtInrPill(n) {
 
 function TodayOverviewWidget({ summary }) {
   const by = summary?.by_type || {};
-  const toneClass = {
-    teal: styles.todayTone_teal,
-    blue: styles.todayTone_blue,
-    amber: styles.todayTone_amber,
-    green: styles.todayTone_green,
-    slate: styles.todayTone_slate,
-    indigo: styles.todayTone_indigo,
-    rose: styles.todayTone_rose,
-    orange: styles.todayTone_orange,
-    cyan: styles.todayTone_cyan,
-  };
   const rows = [
-    { icon: "fa-phone", label: "Lead Follow-ups", key: "lead_followup", tone: "teal" },
-    { icon: "fa-handshake", label: "Meetings", key: "meeting", tone: "blue" },
-    { icon: "fa-bell", label: "Reminders", key: "reminder", tone: "amber" },
-    { icon: "fa-user-check", label: "Client Check-ins", key: "client_followup", tone: "green" },
-    { icon: "fa-circle-check", label: "Todos", key: "todo", tone: "slate" },
-    { icon: "fa-clipboard-list", label: "CRM Tasks", key: "task", tone: "indigo" },
-    { icon: "fa-calendar-day", label: "Calendar Events", key: "calendar_event", tone: "rose" },
-    { icon: "fa-bullseye", label: "Prospect follow-ups", key: "opportunity_followup", tone: "orange" },
+    { key: "lead_followup", label: "Lead Follow-ups", color: "#0d9488" },
+    { key: "meeting", label: "Meetings", color: "#2563eb" },
+    { key: "reminder", label: "Reminders", color: "#f59e0b" },
+    { key: "client_followup", label: "Client Check-ins", color: "#16a34a" },
+    { key: "todo", label: "Todos", color: "#64748b" },
+    { key: "task", label: "CRM Tasks", color: "#6366f1" },
+    { key: "calendar_event", label: "Calendar Events", color: "#e11d48" },
+    { key: "opportunity_followup", label: "Prospect follow-ups", color: "#ea580c" },
   ];
   if (Number(by.google_event ?? 0) > 0) {
-    rows.push({
-      icon: "fa-globe",
-      label: "Google Calendar",
-      key: "google_event",
-      tone: "cyan",
-    });
+    rows.push({ key: "google_event", label: "Google Calendar", color: "#06b6d4" });
   }
   const total = Number(summary?.total ?? 0);
   const allClear = total === 0;
-  const attentionRows = rows.filter((r) => Number(by[r.key] ?? 0) > 0);
-  const displayRows = allClear ? rows : attentionRows.length ? attentionRows : rows;
 
   return (
     <section className={styles.todayWidget} aria-label="Today's tasks">
@@ -121,48 +104,19 @@ function TodayOverviewWidget({ summary }) {
           Open Command Center <i className="fas fa-arrow-right" aria-hidden />
         </Link>
       </div>
-      {allClear ? (
-        <div className={styles.todayWidgetClear}>
-          <span className={styles.todayWidgetClearIcon} aria-hidden>
-            <i className="fas fa-check" />
-          </span>
-          <div>
-            <strong>All clear</strong>
-            <p>No follow-ups, meetings, or tasks due today.</p>
-          </div>
-        </div>
-      ) : (
-        <>
-          <div className={styles.todayWidgetGrid}>
-            {displayRows.map((r) => {
-              const count = Number(by[r.key] ?? 0);
-              return (
-                <Link
-                  key={r.key}
-                  href="/today"
-                  className={`${styles.todayTaskTile} ${toneClass[r.tone] || ""} ${count > 0 ? styles.todayTaskTileActive : ""}`}
-                >
-                  <span className={styles.todayTaskIcon} aria-hidden>
-                    <i className={`fas ${r.icon}`} />
-                  </span>
-                  <span className={styles.todayTaskMeta}>
-                    <span className={styles.todayTaskLabel}>{r.label}</span>
-                    <span className={styles.todayTaskHint}>{count > 0 ? "Due today" : "None today"}</span>
-                  </span>
-                  <span className={styles.todayWidgetCount}>{count}</span>
-                </Link>
-              );
-            })}
-          </div>
-          {attentionRows.length > 0 && attentionRows.length < rows.length ? (
-            <p className={styles.todayWidgetFooter}>
-              Showing {attentionRows.length} of {rows.length} categories with open work
-            </p>
-          ) : (
-            <p className={styles.todayWidgetFooter}>Jump into Command Center to complete or reschedule</p>
-          )}
-        </>
-      )}
+      <CrmFilterStrip
+        ariaLabel="Today's task categories"
+        items={[
+          { key: "all", label: "All Today", count: total, color: "#64748b", href: "/today" },
+          ...rows.map((r) => ({
+            key: r.key,
+            label: r.label,
+            count: Number(by[r.key] ?? 0),
+            color: r.color,
+            href: "/today",
+          })),
+        ]}
+      />
     </section>
   );
 }
@@ -583,6 +537,11 @@ export default function DashboardPage() {
       s.on("leads:changed", onRefresh);
       s.on("workspace:access", onRefresh);
       s.on("opportunities:changed", onRefresh);
+      s.on("invoices:changed", onRefresh);
+      s.on("collections:changed", onRefresh);
+      s.on("tickets:changed", onRefresh);
+      s.on("contacts:changed", onRefresh);
+      s.on("notes:changed", onRefresh);
       s.on("fitness:changed", onFitness);
 
       return () => {
@@ -595,6 +554,11 @@ export default function DashboardPage() {
         s.off("leads:changed", onRefresh);
         s.off("workspace:access", onRefresh);
         s.off("opportunities:changed", onRefresh);
+        s.off("invoices:changed", onRefresh);
+        s.off("collections:changed", onRefresh);
+        s.off("tickets:changed", onRefresh);
+        s.off("contacts:changed", onRefresh);
+        s.off("notes:changed", onRefresh);
         s.off("fitness:changed", onFitness);
       };
     }

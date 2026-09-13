@@ -56,7 +56,7 @@
 .activeTab {
   background: var(--yellow);
   border-color: var(--yellow);
-  color: #1a1a2e; /* Hardcoded dark text so it's readable on yellow even in dark mode */
+  color: #1a1a1a; /* Hardcoded dark text so it's readable on yellow even in dark mode */
 }
 
 .activeTab:hover {

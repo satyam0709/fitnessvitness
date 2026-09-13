@@ -74,7 +74,7 @@ export default function AnalyticsPage() {
                     <td>
                       <div style={{display: 'flex', alignItems: 'center', gap: '10px'}}>
                         <div style={{flex: 1, height: '4px', background: '#f1f5f9', borderRadius: '2px', overflow: 'hidden'}}>
-                          <div style={{width: `${s.pct_of_total}%`, height: '100%', background: '#f5c400'}}></div>
+                          <div style={{width: `${s.pct_of_total}%`, height: '100%', background: '#8bc34a'}}></div>
                         </div>
                         <span style={{fontSize: '11px', fontWeight: 700}}>{s.pct_of_total}%</span>
                       </div>
@@ -177,7 +177,7 @@ export default function AnalyticsPage() {
                       </Link>
                     </td>
                     <td>
-                      <span style={{color: '#f5c400'}}>
+                      <span style={{color: '#8bc34a'}}>
                         {[...Array(r.tier)].map((_, i) => <i key={i} className="fa-solid fa-star" style={{fontSize: '10px'}}></i>)}
                       </span>
                     </td>

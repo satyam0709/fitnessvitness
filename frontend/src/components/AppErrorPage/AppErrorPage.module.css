@@ -109,9 +109,9 @@
   text-decoration: none;
   border: none;
   cursor: pointer;
-  background: linear-gradient(135deg, var(--yellow-hover, #d4a900), var(--yellow));
-  color: var(--btn-primary-txt, #1a1a2e);
-  box-shadow: 0 4px 18px rgba(245, 196, 0, 0.35);
+  background: linear-gradient(135deg, var(--yellow-hover, #7cb342), var(--yellow));
+  color: var(--btn-primary-txt, #1a1a1a);
+  box-shadow: 0 4px 18px rgba(139, 195, 74, 0.35);
   transition: filter 0.15s ease;
 }
 

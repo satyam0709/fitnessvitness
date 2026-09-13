@@ -27,7 +27,7 @@
 }
 
 .addBtn {
-  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  background: linear-gradient(135deg, #8bc34a 0%, #7cb342 100%);
   color: white;
   padding: 12px 24px;
   border-radius: 14px;
@@ -37,7 +37,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  box-shadow: 0 10px 15px -3px rgba(16, 185, 129, 0.3);
+  box-shadow: 0 10px 15px -3px rgba(139, 195, 74, 0.3);
   transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
@@ -138,7 +138,7 @@
 }
 
 .chipActive {
-  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  background: linear-gradient(135deg, #8bc34a 0%, #7cb342 100%);
   color: #fff;
   border-color: #10b981;
   box-shadow: 0 4px 12px rgba(16, 185, 129, 0.35);
@@ -332,7 +332,7 @@
   padding: 10px 24px;
   border-radius: 10px;
   border: none;
-  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  background: linear-gradient(135deg, #8bc34a 0%, #7cb342 100%);
   color: #0f1419;
   font-size: 14px;
   font-weight: 800;
@@ -446,7 +446,7 @@
 .highRisk { background: rgba(239, 68, 68, 0.08) !important; }
 
 .clientLink {
-  color: #f5c400;
+  color: #8bc34a;
   font-weight: 700;
   text-decoration: none;
 }
@@ -466,8 +466,8 @@
 
 .dueInput:focus {
   outline: none;
-  border-color: #f5c400;
-  box-shadow: 0 0 0 3px rgba(245, 196, 0, 0.12);
+  border-color: #8bc34a;
+  box-shadow: 0 0 0 3px rgba(139, 195, 74, 0.12);
 }
 
 .badge {
@@ -495,7 +495,7 @@
 
 .tier {
   font-size: 14px;
-  color: #f5c400;
+  color: #8bc34a;
   letter-spacing: 2px;
 }
 

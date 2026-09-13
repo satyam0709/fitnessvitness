@@ -1,19 +1,19 @@
 .navbar {
   --nav-bg:        #ffffff;
   --nav-border:    transparent;
-  --nav-text:      #1A1A2E;
+  --nav-text:      #1a1a1a;
   --nav-text-muted:#555770;
   --drop-bg:       #ffffff;
   --drop-border:   #EBEBEB;
   --mobile-bg:     #F8F8F8;
   --mobile-border: #EBEBEB;
 
-  --yellow:        #F5C400;
-  --yellow-hover:  #D4A900;
-  --yellow-glow:   rgba(245, 196, 0, 0.35);
-  --yellow-tint:   rgba(245, 196, 0, 0.09);
-  --dark:          #1A1A2E;
-  --dark-2:        #2D2D4E;
+  --yellow:        #8bc34a;
+  --yellow-hover:  #7cb342;
+  --yellow-glow:   rgba(139, 195, 74, 0.35);
+  --yellow-tint:   rgba(139, 195, 74, 0.09);
+  --dark:          #1a1a1a;
+  --dark-2:        #2a2a2a;
   --ease:          cubic-bezier(0.16, 1, 0.3, 1);
   --drop-shadow:   0 8px 32px rgba(0,0,0,0.13), 0 2px 8px rgba(0,0,0,0.06);
 }
@@ -99,7 +99,7 @@
 .logoMark {
   display: inline-block;
   background: var(--yellow);
-  color: #1A1A2E;
+  color: #1a1a1a;
   font-family: var(--font-primary);
   font-size: 15px;
   font-weight: 900;
@@ -121,7 +121,7 @@
 }
 
 .logoText1 {
-  background: #1a1a2e;
+  background: #1a1a1a;
   color: white;
   font-family: var(--font-primary);
   font-size: 14px;
@@ -305,7 +305,7 @@
   align-items: center;
   padding: 9px 18px;
   background: var(--yellow);
-  color: #1A1A2E;
+  color: #1a1a1a;
   font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 800;

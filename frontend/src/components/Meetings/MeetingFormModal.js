@@ -130,6 +130,9 @@ export default function MeetingFormModal({ open, onClose, initialMeeting = null,
   const [meId, setMeId] = useState(null);
 
   const [freq, setFreq] = useState("once");
+  const [frequencies, setFrequencies] = useState(MEET_FREQ);
+  const [templates, setTemplates] = useState([]);
+  const [freqNotes, setFreqNotes] = useState({});
   const [startDt, setStartDt] = useState("");
   const [endDt, setEndDt] = useState("");
   const [attendees, setAttendees] = useState([]);
@@ -174,6 +177,26 @@ export default function MeetingFormModal({ open, onClose, initialMeeting = null,
     setErr("");
     setSaving(false);
   }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    (async () => {
+      try {
+        const res = await apiFetch("/meetings/meta");
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || !json.success || !json.data) return;
+        if (Array.isArray(json.data.frequencies) && json.data.frequencies.length) {
+          setFrequencies(json.data.frequencies);
+        }
+        if (Array.isArray(json.data.templates)) setTemplates(json.data.templates);
+        if (json.data.frequency_notes && typeof json.data.frequency_notes === "object") {
+          setFreqNotes(json.data.frequency_notes);
+        }
+      } catch {
+        /* keep fallbacks */
+      }
+    })();
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -345,7 +368,7 @@ export default function MeetingFormModal({ open, onClose, initialMeeting = null,
           <div className={local.recurrenceBlock}>
             <span className={shell.label}>Meeting recurrence</span>
             <div className={local.radioRow} role="radiogroup" aria-label="Recurrence">
-              {MEET_FREQ.map((f) => (
+              {frequencies.map((f) => (
                 <label key={f.key} className={local.radioLabel}>
                   <input
                     type="radio"
@@ -357,6 +380,7 @@ export default function MeetingFormModal({ open, onClose, initialMeeting = null,
                 </label>
               ))}
             </div>
+            {freqNotes[freq] ? <p className={local.hint}>{freqNotes[freq]}</p> : null}
             <p className={local.hint}>
               Recurrence flags are stored in the meeting record until full scheduling automation is available.
             </p>
@@ -436,12 +460,29 @@ export default function MeetingFormModal({ open, onClose, initialMeeting = null,
                 id={`${id}-mtpl`}
                 className={shell.select}
                 value={template}
-                onChange={(e) => setTemplate(e.target.value)}
+                onChange={(e) => {
+                  const key = e.target.value;
+                  setTemplate(key);
+                  const tpl = templates.find((t) => t.key === key);
+                  if (tpl) {
+                    setTitle(tpl.title || "");
+                    setMessage(tpl.message || "");
+                  }
+                }}
               >
                 <option value="">Select…</option>
-                <option value="standup">Stand-up</option>
-                <option value="sales">Sales call</option>
-                <option value="support">Support</option>
+                {(templates.length
+                  ? templates
+                  : [
+                      { key: "standup", label: "Stand-up" },
+                      { key: "sales", label: "Sales call" },
+                      { key: "support", label: "Support" },
+                    ]
+                ).map((t) => (
+                  <option key={t.key} value={t.key}>
+                    {t.label}
+                  </option>
+                ))}
               </select>
             </div>
             <div className={local.togglePair}>

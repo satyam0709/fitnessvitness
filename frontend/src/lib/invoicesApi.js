@@ -40,6 +40,16 @@ export async function createInvoice(payload) {
   return json;
 }
 
+export async function updateInvoice(id, payload) {
+  const res = await apiFetch(`/v2/invoices/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const json = await parseJson(res);
+  return json;
+}
+
 export async function fetchInvoiceReceipt(id) {
   const res = await apiFetch(`/v2/invoices/${encodeURIComponent(id)}/receipt`);
   const json = await parseJson(res);
@@ -57,5 +67,63 @@ export async function fetchInvoice(id) {
 
 export async function deleteInvoice(id) {
   const res = await apiFetch(`/v2/invoices/${id}`, { method: "DELETE" });
+  return parseJson(res);
+}
+
+export async function fetchInvoicePayments(id) {
+  const res = await apiFetch(`/v2/invoices/${encodeURIComponent(id)}/payments`);
+  return parseJson(res);
+}
+
+export async function createInvoicePayment(id, payload) {
+  const res = await apiFetch(`/v2/invoices/${encodeURIComponent(id)}/payments`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return parseJson(res);
+}
+
+export async function patchInvoicePayment(id, paymentId, payload) {
+  const res = await apiFetch(
+    `/v2/invoices/${encodeURIComponent(id)}/payments/${encodeURIComponent(paymentId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }
+  );
+  return parseJson(res);
+}
+
+export async function markInvoicePaid(id, payload = {}) {
+  const res = await apiFetch(`/v2/invoices/${encodeURIComponent(id)}/mark-paid`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return parseJson(res);
+}
+
+export async function duplicateInvoice(id) {
+  const res = await apiFetch(`/v2/invoices/${encodeURIComponent(id)}/duplicate`, { method: "POST" });
+  return parseJson(res);
+}
+
+export async function emailInvoice(id, to) {
+  const res = await apiFetch(`/v2/invoices/${encodeURIComponent(id)}/email`, {
+    method: "POST",
+    body: JSON.stringify({ to }),
+  });
+  return parseJson(res);
+}
+
+export async function fetchInvoiceWhatsapp(id) {
+  const res = await apiFetch(`/v2/invoices/${encodeURIComponent(id)}/whatsapp`);
+  return parseJson(res);
+}
+
+export async function createPaymentReminder(id, payload = {}) {
+  const res = await apiFetch(`/v2/invoices/${encodeURIComponent(id)}/payment-reminder`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
   return parseJson(res);
 }

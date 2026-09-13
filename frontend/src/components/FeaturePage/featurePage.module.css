@@ -11,7 +11,7 @@
   position: absolute;
   top: -150px; right: -150px;
   width: 500px; height: 500px;
-  background: radial-gradient(circle, rgba(245,196,0,0.08) 0%, transparent 70%);
+  background: radial-gradient(circle, rgba(139, 195, 74,0.08) 0%, transparent 70%);
   pointer-events: none;
 }
 
@@ -69,7 +69,7 @@
 .heroBtn:hover {
   background: var(--yellow-hover);
   transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(245,196,0,0.4);
+  box-shadow: 0 8px 24px rgba(139, 195, 74,0.4);
 }
 
 .body {
@@ -119,7 +119,7 @@
 .stepCard:hover {
   box-shadow: var(--shadow-md);
   transform: translateY(-3px);
-  border-color: rgba(245,196,0,0.3);
+  border-color: rgba(139, 195, 74,0.3);
 }
 
 .stepNum {
@@ -169,7 +169,7 @@
 }
 
 .benefitItem:hover {
-  border-color: rgba(245,196,0,0.3);
+  border-color: rgba(139, 195, 74,0.3);
   box-shadow: var(--shadow-sm);
 }
 
@@ -215,7 +215,7 @@
 }
 
 .useCaseCard:hover {
-  border-color: rgba(245,196,0,0.3);
+  border-color: rgba(139, 195, 74,0.3);
   transform: translateY(-2px);
 }
 
@@ -296,7 +296,7 @@
 .btnPrimary:hover {
   background: var(--yellow-hover);
   transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(245,196,0,0.4);
+  box-shadow: 0 8px 24px rgba(139, 195, 74,0.4);
 }
 
 .btnSecondary {

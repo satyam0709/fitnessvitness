@@ -18,7 +18,7 @@
 
 .modal {
   background: var(--bg-card, #fff);
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   border-radius: var(--radius-md, 12px);
   width: min(720px, 100%);
   max-height: min(92vh, 900px);
@@ -38,10 +38,10 @@
   flex-shrink: 0;
   background: linear-gradient(
     135deg,
-    var(--crm-modal-header-start, #1a1a2e) 0%,
-    var(--crm-modal-header-end, #2d2d4e) 100%
+    var(--crm-modal-header-start, #1a1a1a) 0%,
+    var(--crm-modal-header-end, #2a2a2a) 100%
   );
-  border-bottom: 3px solid var(--crm-modal-accent, #f5c400);
+  border-bottom: 3px solid var(--crm-modal-accent, #8bc34a);
   padding: 16px 20px;
   display: flex;
   align-items: center;
@@ -54,13 +54,13 @@
   font-family: var(--font-primary);
   font-size: 18px;
   font-weight: 800;
-  color: var(--crm-modal-accent, #f5c400);
+  color: var(--crm-modal-accent, #8bc34a);
 }
 
 .closeBtn {
-  background: var(--crm-modal-accent-dim, rgba(245, 196, 0, 0.18));
+  background: var(--crm-modal-accent-dim, rgba(139, 195, 74, 0.18));
   border: none;
-  color: var(--yellow, #f5c400);
+  color: var(--yellow, #8bc34a);
   width: 36px;
   height: 36px;
   border-radius: 8px;
@@ -74,8 +74,8 @@
 }
 
 .closeBtn:hover {
-  background: var(--yellow, #f5c400);
-  color: var(--btn-primary-txt, #1a1a2e);
+  background: var(--yellow, #8bc34a);
+  color: var(--btn-primary-txt, #1a1a1a);
 }
 
 .form {
@@ -148,8 +148,8 @@
 .select:focus,
 .textarea:focus {
   outline: none;
-  border-color: var(--crm-modal-accent, #f5c400);
-  box-shadow: 0 0 0 2px var(--crm-modal-accent-dim, rgba(245, 196, 0, 0.25));
+  border-color: var(--crm-modal-accent, #8bc34a);
+  box-shadow: 0 0 0 2px var(--crm-modal-accent-dim, rgba(139, 195, 74, 0.25));
 }
 
 .textarea {
@@ -176,7 +176,7 @@
   gap: 6px;
   font-size: 13px;
   font-weight: 600;
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   cursor: pointer;
 }
 
@@ -201,7 +201,7 @@
 }
 
 .switchOn {
-  background: var(--yellow, #f5c400);
+  background: var(--yellow, #8bc34a);
 }
 
 .switchKnob {
@@ -245,12 +245,12 @@
   padding: 10px 22px;
   border-radius: 8px;
   border: none;
-  background: linear-gradient(135deg, var(--yellow-hover, #d4a900), var(--yellow, #f5c400));
-  color: var(--btn-primary-txt, #1a1a2e);
+  background: linear-gradient(135deg, var(--yellow-hover, #7cb342), var(--yellow, #8bc34a));
+  color: var(--btn-primary-txt, #1a1a1a);
   cursor: pointer;
   font-weight: 700;
   font-size: 14px;
-  box-shadow: 0 2px 8px rgba(245, 196, 0, 0.35);
+  box-shadow: 0 2px 8px rgba(139, 195, 74, 0.35);
 }
 
 .btnSubmit:hover:not(:disabled) {
@@ -272,7 +272,7 @@
   font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 800;
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   margin: 8px 0 0;
   padding-top: 8px;
   border-top: 1px solid var(--border, #ebebeb);

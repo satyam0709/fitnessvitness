@@ -74,6 +74,8 @@ export default function TaskModal({ open, onClose, task, onSaved }) {
   const [dueDate, setDueDate] = useState("");
   const [assignedTo, setAssignedTo] = useState("");
   const [frequency, setFrequency] = useState("once");
+  const [freqOpts, setFreqOpts] = useState(FREQ_OPTS);
+  const [freqNotes, setFreqNotes] = useState({});
   const [titleTouched, setTitleTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
@@ -171,6 +173,23 @@ export default function TaskModal({ open, onClose, task, onSaved }) {
         }
       } catch (e) {
         console.warn("Failed to load task custom options");
+      }
+    })();
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    (async () => {
+      try {
+        const res = await apiFetch("/tasks/meta");
+        const json = await res.json();
+        const freqs = json?.data?.frequencies;
+        if (json.success && Array.isArray(freqs) && freqs.length) {
+          setFreqOpts(freqs.map((f) => ({ value: f.key, label: f.label })));
+        }
+        if (json?.data?.frequency_notes) setFreqNotes(json.data.frequency_notes);
+      } catch {
+        setFreqOpts(FREQ_OPTS);
       }
     })();
   }, [open]);
@@ -474,12 +493,13 @@ export default function TaskModal({ open, onClose, task, onSaved }) {
                   value={frequency}
                   onChange={(e) => setFrequency(e.target.value)}
                 >
-                  {FREQ_OPTS.map((f) => (
+                  {freqOpts.map((f) => (
                     <option key={f.value} value={f.value}>
                       {f.label}
                     </option>
                   ))}
                 </select>
+                {freqNotes[frequency] ? <p className={styles.freqNote}>{freqNotes[frequency]}</p> : null}
               </div>
             </div>
             <div className={shell.field}>

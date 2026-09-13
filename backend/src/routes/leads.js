@@ -5,6 +5,7 @@ const multer = require("multer");
 const { verifyToken } = require("../middleware/verifyToken");
 const { requireFeature } = require("../middleware/requireFeature");
 const leadService = require("../services/leadService");
+const leadImportRouter = require("./leadImport");
 
 /** Fingerprint — if Render stack still shows createLeadHandler/pool.execute, old build is live. */
 const LEADS_ROUTE_BUILD = "prisma-leadService-2026-07-14-v3";
@@ -96,6 +97,14 @@ router.delete("/custom-options", handleService(async (req) => {
   const { fieldName, optionValue } = req.body || {};
   return leadService.deleteCustomOption({ fieldName, optionValue });
 }));
+
+router.get("/custom-options/usage", handleService(async (req) => {
+  const fieldName = req.query.fieldName;
+  const optionValue = req.query.optionValue;
+  return leadService.getCustomOptionUsage({ fieldName, optionValue });
+}));
+
+router.use("/import", leadImportRouter);
 
 router.get("/", handleService((req) => leadService.listLeads(req)));
 

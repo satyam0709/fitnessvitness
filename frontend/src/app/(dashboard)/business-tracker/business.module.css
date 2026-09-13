@@ -92,7 +92,7 @@
 
 .stat:hover {
   transform: translateY(-4px);
-  border-color: #f5c400;
+  border-color: #8bc34a;
   box-shadow: 0 15px 30px -10px rgba(0,0,0,0.1);
 }
 
@@ -188,7 +188,7 @@
   gap: 12px;
 }
 
-.monthlySection h2 i { color: #f5c400; }
+.monthlySection h2 i { color: #8bc34a; }
 
 .totalsRow {
   background: var(--grey-100);
@@ -243,7 +243,7 @@
   transition: all 0.2s ease;
 }
 
-.field input:focus { border-color: #f5c400; outline: none; background: #fffdf5; }
+.field input:focus { border-color: #8bc34a; outline: none; background: #f6f8f3; }
 
 .searchResults {
   background: var(--bg-card);
@@ -261,7 +261,7 @@
   border-bottom: 1px solid var(--border);
 }
 
-.searchItem:hover { background: #fffdf5; }
+.searchItem:hover { background: #f6f8f3; }
 
 .row { display: flex; gap: 20px; }
 .row .field { flex: 1; }
@@ -281,12 +281,12 @@
 .submitBtn {
   padding: 12px 32px;
   border-radius: 14px;
-  background: #f5c400;
-  color: #1a1a2e;
+  background: #8bc34a;
+  color: #1a1a1a;
   font-weight: 800;
   border: none;
   cursor: pointer;
-  box-shadow: 0 4px 12px rgba(245, 196, 0, 0.3);
+  box-shadow: 0 4px 12px rgba(139, 195, 74, 0.3);
 }
 
 .submitBtn:hover { transform: translateY(-2px); }
@@ -314,7 +314,7 @@
   border: 1px solid #dcfce7;
 }
 
-.clientLink { color: #f5c400; font-weight: 700; text-decoration: none; }
+.clientLink { color: #8bc34a; font-weight: 700; text-decoration: none; }
 .clientLink:hover { text-decoration: underline; }
 
 .revenueSection {

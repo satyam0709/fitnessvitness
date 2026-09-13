@@ -49,8 +49,9 @@ function safeNotifyWorkspace(payload) {
 }
 
 function safeNotifyCrm(event, payload) {
-  crmSubs.forEach((handler, events) => {
-    if (!events.has(event) && !events.has("*")) return;
+  crmSubs.forEach((events, handler) => {
+    if (typeof handler !== "function") return;
+    if (!events?.has?.(event) && !events?.has?.("*")) return;
     try {
       handler(event, payload);
     } catch {
@@ -105,9 +106,18 @@ async function ensureSocket(getTokenFn) {
     s.on("notifications:new", (payload) => safeNotifyNotif("new", payload));
     s.on("notifications:read", (payload) => safeNotifyNotif("read", payload));
 
-    s.on("calendar:changed", (payload) => safeNotifyCalendar(payload));
-    s.on("meetings:changed", (payload) => safeNotifyCalendar({ ...payload, _channel: "meetings" }));
-    s.on("todos:changed", (payload) => safeNotifyCalendar({ ...payload, _channel: "todos" }));
+    s.on("calendar:changed", (payload) => {
+      safeNotifyCalendar(payload);
+      safeNotifyCrm("calendar:changed", payload);
+    });
+    s.on("meetings:changed", (payload) => {
+      safeNotifyCalendar({ ...payload, _channel: "meetings" });
+      safeNotifyCrm("meetings:changed", payload);
+    });
+    s.on("todos:changed", (payload) => {
+      safeNotifyCalendar({ ...payload, _channel: "todos" });
+      safeNotifyCrm("todos:changed", payload);
+    });
     // Keep workspace access events on this same socket so the app doesn't juggle multiple connections.
     s.on("workspace:access", (payload) => safeNotifyWorkspace(payload));
 
@@ -121,6 +131,11 @@ async function ensureSocket(getTokenFn) {
     s.on("opportunities:changed", (payload) => safeNotifyCrm("opportunities:changed", payload));
     s.on("collections:changed", (payload) => safeNotifyCrm("collections:changed", payload));
     s.on("invoices:changed", (payload) => safeNotifyCrm("invoices:changed", payload));
+    s.on("quotations:changed", (payload) => safeNotifyCrm("quotations:changed", payload));
+    s.on("brochures:changed", (payload) => safeNotifyCrm("brochures:changed", payload));
+    s.on("storage:changed", (payload) => safeNotifyCrm("storage:changed", payload));
+    s.on("fitness:changed", (payload) => safeNotifyCrm("fitness:changed", payload));
+    s.on("leads:import:progress", (payload) => safeNotifyCrm("leads:import:progress", payload));
 
     s.io.on("reconnect_attempt", async () => {
       try {
@@ -246,6 +261,10 @@ export function subscribeTodayLive(handler, getTokenFn) {
       "leads:changed",
       "opportunities:changed",
       "collections:changed",
+      "meetings:changed",
+      "todos:changed",
+      "tickets:changed",
+      "invoices:changed",
     ],
     notify,
     getTokenFn

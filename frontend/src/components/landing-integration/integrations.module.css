@@ -47,7 +47,7 @@
 .btnPrimary {
   padding: 14px 32px;
   background: var(--yellow);
-  color: #1a1a2e; /* Hardcoded dark text for readability on yellow */
+  color: #1a1a1a; /* Hardcoded dark text for readability on yellow */
   font-family: var(--font-display);
   font-size: 15px;
   font-weight: 700;

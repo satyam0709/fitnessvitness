@@ -90,7 +90,7 @@
 
 .statusLabel {
   font-weight: 700;
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   min-width: 0;
 }
 
@@ -112,7 +112,7 @@
 
 .statusCount {
   font-weight: 800;
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -195,5 +195,5 @@
 
 .cardMenu:hover {
   background: var(--bg-hover, #f3f4f6);
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
 }

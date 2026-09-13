@@ -49,7 +49,7 @@ function getBasePoolConfig(overrides = {}) {
     password: process.env.DB_PASSWORD || process.env.DB_PASS,
     database: process.env.DB_NAME,
     waitForConnections: true,
-    connectionLimit: 10,
+    connectionLimit: Math.max(1, Number(process.env.MYSQL_POOL_LIMIT) || 2),
     queueLimit: 0,
     charset: "utf8mb4",
     connectTimeout: 30000,

@@ -22,20 +22,20 @@ function fmtInr(n) {
   }).format(Number(n) || 0);
 }
 
-/** Spectrum similar to reference: warm to cool, enough for 10+ slices */
+/** Brand palette: black + green shades from Fitness Vitness logo */
 const DEFAULT_PALETTE = [
-  "#f97316",
-  "#ef4444",
-  "#facc15",
-  "#84cc16",
-  "#22c55e",
-  "#14b8a6",
-  "#2dd4bf",
-  "#22d3ee",
-  "#38bdf8",
-  "#3b82f6",
-  "#8b5cf6",
-  "#ec4899",
+  "#8bc34a",
+  "#1a1a1a",
+  "#7cb342",
+  "#689f38",
+  "#558b2f",
+  "#33691e",
+  "#aed581",
+  "#9ccc65",
+  "#2e7d32",
+  "#1b5e20",
+  "#c5e1a5",
+  "#4a4a4a",
 ];
 
 function pctSliceLabel({ cx, cy, midAngle, innerRadius, outerRadius, percent }) {

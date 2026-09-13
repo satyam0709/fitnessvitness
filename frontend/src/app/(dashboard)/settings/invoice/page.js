@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@/contexts/AuthContext";
 import { fetchCompanySettings } from "@/lib/invoicesApi";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, getAccessToken, getApiBase } from "@/lib/api";
 import styles from "../../invoice/invoicePages.module.css";
 
 export default function InvoiceSettingsPage() {
@@ -26,6 +26,12 @@ export default function InvoiceSettingsPage() {
   const [invoice_ifsc, setIfsc] = useState("");
   const [invoice_currency, setCur] = useState("INR");
   const [invoice_gst_mode, setGstMode] = useState("none");
+  const [invoice_start_no, setStartNo] = useState("1");
+  const [logoUrl, setLogoUrl] = useState(null);
+  const [signUrl, setSignUrl] = useState(null);
+  const [logoPreview, setLogoPreview] = useState("");
+  const [signPreview, setSignPreview] = useState("");
+  const [uploading, setUploading] = useState("");
 
   const load = useCallback(async () => {
     if (!isLoaded) return;
@@ -46,6 +52,9 @@ export default function InvoiceSettingsPage() {
         setIfsc(row.invoice_ifsc || "");
         setCur(row.invoice_currency || "INR");
         setGstMode(row.invoice_gst_mode || "none");
+        setStartNo(String(row.invoice_start_no || 1));
+        setLogoUrl(row.logo_url || null);
+        setSignUrl(row.signature_url || row.invoice_nongst?.signature_url || row.invoice_gst?.signature_url || null);
       }
     } catch (e) {
       setErr(e.message || "Error");
@@ -57,6 +66,77 @@ export default function InvoiceSettingsPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    let alive = true;
+    async function toObj(rel) {
+      if (!rel) return "";
+      const base = getApiBase();
+      const token = getAccessToken();
+      const res = await fetch(`${base}${rel}`, {
+        credentials: "include",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) return "";
+      const blob = await res.blob();
+      const obj = URL.createObjectURL(blob);
+      if (!alive) {
+        URL.revokeObjectURL(obj);
+        return "";
+      }
+      return obj;
+    }
+    (async () => {
+      const [logo, sign] = await Promise.all([toObj(logoUrl), toObj(signUrl)]);
+      if (!alive) return;
+      setLogoPreview(logo);
+      setSignPreview(sign);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [logoUrl, signUrl]);
+
+  async function uploadAsset(kind, file) {
+    if (!file) return;
+    setUploading(kind);
+    setErr(null);
+    try {
+      const fd = new FormData();
+      fd.append(kind === "logo" ? "logo" : "signature", file);
+      const path = kind === "logo" ? "/v2/settings/web/logo" : "/v2/settings/web/invoice-signature";
+      const res = await apiFetch(path, { method: "POST", body: fd });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.message || "Upload failed");
+      setOk(true);
+      setTimeout(() => setOk(false), 4000);
+      await load();
+    } catch (e) {
+      setErr(e.message || "Upload failed");
+    } finally {
+      setUploading("");
+    }
+  }
+
+  async function resetStart() {
+    setUploading("start");
+    setErr(null);
+    try {
+      const res = await apiFetch("/v2/settings/web/invoice-start-reset", {
+        method: "POST",
+        body: JSON.stringify({ start: invoice_start_no }),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.message || "Reset failed");
+      setOk(true);
+      setTimeout(() => setOk(false), 4000);
+      await load();
+    } catch (e) {
+      setErr(e.message || "Could not reset invoice start");
+    } finally {
+      setUploading("");
+    }
+  }
 
   async function onSubmit(e) {
     e.preventDefault();
@@ -217,6 +297,66 @@ export default function InvoiceSettingsPage() {
           {saving ? "Saving…" : "Save settings"}
         </button>
       </form>
+
+      <div className={styles.card} style={{ marginTop: 20 }}>
+        <h2 className={styles.cardTitle}>Branding on invoices</h2>
+        <p className={styles.sub}>Logo and signature appear on printable invoices and quotations.</p>
+        <div className={styles.brandGrid}>
+          <div className={styles.brandSlot}>
+            <span className={styles.label}>Logo</span>
+            {logoPreview ? <img src={logoPreview} alt="Invoice logo" className={styles.brandImg} /> : null}
+            <label className={styles.fileBtn}>
+              {uploading === "logo" ? "Uploading…" : "Upload logo"}
+              <input
+                type="file"
+                accept="image/*"
+                hidden
+                disabled={!!uploading}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (file) uploadAsset("logo", file);
+                }}
+              />
+            </label>
+          </div>
+          <div className={styles.brandSlot}>
+            <span className={styles.label}>Signature</span>
+            {signPreview ? <img src={signPreview} alt="Invoice signature" className={styles.brandImg} /> : null}
+            <label className={styles.fileBtn}>
+              {uploading === "signature" ? "Uploading…" : "Upload signature"}
+              <input
+                type="file"
+                accept="image/*"
+                hidden
+                disabled={!!uploading}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (file) uploadAsset("signature", file);
+                }}
+              />
+            </label>
+          </div>
+        </div>
+        <div className={styles.row2} style={{ marginTop: 16 }}>
+          <div className={styles.field}>
+            <label className={styles.label}>Next invoice start number</label>
+            <input
+              type="number"
+              min="1"
+              className={styles.input}
+              value={invoice_start_no}
+              onChange={(e) => setStartNo(e.target.value)}
+            />
+          </div>
+          <div className={styles.field} style={{ display: "flex", alignItems: "flex-end" }}>
+            <button type="button" className={styles.btnGhost} disabled={uploading === "start"} onClick={resetStart}>
+              {uploading === "start" ? "Saving…" : "Reset start number"}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

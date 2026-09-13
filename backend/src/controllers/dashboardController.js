@@ -1,5 +1,6 @@
 const prisma = require("../config/prisma");
 const { canSeeAllTeamRecords } = require("../utils/crmTeamAccess");
+const { promisePool } = require("../utils/promisePool");
 
 function formatYmd(d) {
   const pad = (x) => String(x).padStart(2, "0");
@@ -190,7 +191,7 @@ function andWhere(...parts) {
 }
 
 const INR_CURRENCY = {
-  OR: [{ currency: null }, { currency: "INR" }, { currency: "inr" }],
+  currency: { in: ["INR", "inr"] },
 };
 
 /**
@@ -335,72 +336,90 @@ async function loadDashboardPanels(req) {
     resultLeadsRecycled,
     resultLeadsDead,
     resultCompletedActivities,
-  ] = await Promise.all([
-    prisma.leads.count({
-      where: andWhere(ls, { status: { notIn: ["confirm", "cancel"] } }),
-    }),
-    prisma.opportunities.count({ where: openOppWhere }),
-    sumOpportunityInr(openOppWhere),
-    prisma.tickets.count({
-      where: andWhere(ts, { status: { notIn: ["resolved", "closed"] } }),
-    }),
-    prisma.contacts.count({ where: cs }),
-    prisma.tasks.count({
-      where: andWhere(ks, { status: { notIn: ["done", "completed"] } }),
-    }),
-    prisma.reminders.count({
-      where: andWhere(rs, { is_done: false }),
-    }),
-    prisma.companies.count({ where: gs }),
-    countMessagesOpenUnread(req),
-    prisma.leads.count({
-      where: andWhere(ls, { created_at: today }),
-    }),
-    prisma.opportunities.count({ where: periodicOppWhere }),
-    sumOpportunityInr(periodicOppWhere),
-    prisma.tickets.count({
-      where: andWhere(ts, { created_at: today }),
-    }),
-    prisma.contacts.count({
-      where: andWhere(cs, { created_at: today }),
-    }),
-    prisma.tasks.count({
-      where: andWhere(ks, taskDueOrCreatedToday),
-    }),
-    prisma.reminders.count({
-      where: andWhere(rs, { remind_at: today }),
-    }),
-    prisma.companies.count({
-      where: andWhere(gs, { created_at: today }),
-    }),
-    countMessagesPeriodic(req, todayYmd),
-    prisma.tickets.count({
-      where: andWhere(ts, { status: { in: ["resolved", "closed"] } }, ticketClosedToday),
-    }),
-    prisma.opportunities.count({ where: closedWonTodayWhere }),
-    sumOpportunityInr(closedWonTodayWhere, { useFinalAmount: true }),
-    prisma.opportunities.count({ where: closedLostTodayWhere }),
-    sumOpportunityInr(closedLostTodayWhere),
-    prisma.opportunities.count({ where: lifetimeWonWhere }),
-    sumOpportunityInr(lifetimeWonWhere, { useFinalAmount: true }),
-    prisma.opportunities.count({ where: lifetimeLostWhere }),
-    sumOpportunityInr(lifetimeLostWhere),
-    prisma.leads.count({
-      where: andWhere(ls, { status: "confirm", updated_at: today }),
-    }),
-    prisma.leads.count({
-      where: andWhere(ls, { status: "processing", updated_at: today }),
-    }),
-    prisma.leads.count({
-      where: andWhere(ls, { status: "cancel", updated_at: today }),
-    }),
-    prisma.tasks.count({
-      where: andWhere(ks, {
-        status: { in: ["done", "completed"] },
-        updated_at: today,
-      }),
-    }),
-  ]);
+  ] = await promisePool(
+    [
+      () =>
+        prisma.leads.count({
+          where: andWhere(ls, { status: { notIn: ["confirm", "cancel"] } }),
+        }),
+      () => prisma.opportunities.count({ where: openOppWhere }),
+      () => sumOpportunityInr(openOppWhere),
+      () =>
+        prisma.tickets.count({
+          where: andWhere(ts, { status: { notIn: ["resolved", "closed"] } }),
+        }),
+      () => prisma.contacts.count({ where: cs }),
+      () =>
+        prisma.tasks.count({
+          where: andWhere(ks, { status: { notIn: ["done", "completed"] } }),
+        }),
+      () =>
+        prisma.reminders.count({
+          where: andWhere(rs, { is_done: false }),
+        }),
+      () => prisma.companies.count({ where: gs }),
+      () => countMessagesOpenUnread(req),
+      () =>
+        prisma.leads.count({
+          where: andWhere(ls, { created_at: today }),
+        }),
+      () => prisma.opportunities.count({ where: periodicOppWhere }),
+      () => sumOpportunityInr(periodicOppWhere),
+      () =>
+        prisma.tickets.count({
+          where: andWhere(ts, { created_at: today }),
+        }),
+      () =>
+        prisma.contacts.count({
+          where: andWhere(cs, { created_at: today }),
+        }),
+      () =>
+        prisma.tasks.count({
+          where: andWhere(ks, taskDueOrCreatedToday),
+        }),
+      () =>
+        prisma.reminders.count({
+          where: andWhere(rs, { remind_at: today }),
+        }),
+      () =>
+        prisma.companies.count({
+          where: andWhere(gs, { created_at: today }),
+        }),
+      () => countMessagesPeriodic(req, todayYmd),
+      () =>
+        prisma.tickets.count({
+          where: andWhere(ts, { status: { in: ["resolved", "closed"] } }, ticketClosedToday),
+        }),
+      () => prisma.opportunities.count({ where: closedWonTodayWhere }),
+      () => sumOpportunityInr(closedWonTodayWhere, { useFinalAmount: true }),
+      () => prisma.opportunities.count({ where: closedLostTodayWhere }),
+      () => sumOpportunityInr(closedLostTodayWhere),
+      () => prisma.opportunities.count({ where: lifetimeWonWhere }),
+      () => sumOpportunityInr(lifetimeWonWhere, { useFinalAmount: true }),
+      () => prisma.opportunities.count({ where: lifetimeLostWhere }),
+      () => sumOpportunityInr(lifetimeLostWhere),
+      () =>
+        prisma.leads.count({
+          where: andWhere(ls, { status: "confirm", updated_at: today }),
+        }),
+      () =>
+        prisma.leads.count({
+          where: andWhere(ls, { status: "processing", updated_at: today }),
+        }),
+      () =>
+        prisma.leads.count({
+          where: andWhere(ls, { status: "cancel", updated_at: today }),
+        }),
+      () =>
+        prisma.tasks.count({
+          where: andWhere(ks, {
+            status: { in: ["done", "completed"] },
+            updated_at: today,
+          }),
+        }),
+    ],
+    3
+  );
 
   const open = {
     leads: Number(openLeads) || 0,
@@ -468,11 +487,7 @@ async function loadTodaySummary(req, todayYmd, yesterdayYmd) {
   };
 
   const todoDayClause = {
-    OR: [
-      { todo_date: todayDate },
-      { AND: [{ todo_date: null }, { created_at: today }] },
-      { updated_at: today },
-    ],
+    OR: [{ todo_date: todayDate }, { updated_at: today }],
   };
 
   const [
@@ -486,61 +501,74 @@ async function loadTodaySummary(req, todayYmd, yesterdayYmd) {
     todoBucketTotal,
     todos_completed,
     todos_today,
-  ] = await Promise.all([
-    prisma.leads.count({
-      where: andWhere(ls, { created_at: today }),
-    }),
-    prisma.leads.count({
-      where: andWhere(ls, { created_at: yesterday }),
-    }),
-    prisma.leads.count({
-      where: andWhere(ls, {
-        created_at: today,
-        status: { in: ["close_by", "confirm"] },
-      }),
-    }),
-    prisma.reminders.count({
-      where: andWhere(rs, { remind_at: today }),
-    }),
-    prisma.reminders.count({
-      where: andWhere(rs, { remind_at: today, is_done: true }),
-    }),
-    prisma.tasks.count({
-      where: andWhere(ks, taskDueOrCreatedToday),
-    }),
-    prisma.tasks.count({
-      where: andWhere(ks, { status: { in: ["done", "completed"] } }, taskDueOrCreatedToday),
-    }),
-    prisma.crm_todos.count({
-      where: andWhere({ is_deleted: false }, tv, todoDayClause),
-    }),
-    prisma.crm_todos.count({
-      where: andWhere(
-        { is_deleted: false },
-        tv,
-        todoDayClause,
-        { status: "completed" }
-      ),
-    }),
-    prisma.crm_todos.count({
-      where: andWhere(
-        { is_deleted: false },
-        tv,
-        { status: "pending" },
-        {
-          OR: [
-            { todo_date: todayDate },
+  ] = await promisePool(
+    [
+      () =>
+        prisma.leads.count({
+          where: andWhere(ls, { created_at: today }),
+        }),
+      () =>
+        prisma.leads.count({
+          where: andWhere(ls, { created_at: yesterday }),
+        }),
+      () =>
+        prisma.leads.count({
+          where: andWhere(ls, {
+            created_at: today,
+            status: { in: ["close_by", "confirm"] },
+          }),
+        }),
+      () =>
+        prisma.reminders.count({
+          where: andWhere(rs, { remind_at: today }),
+        }),
+      () =>
+        prisma.reminders.count({
+          where: andWhere(rs, { remind_at: today, is_done: true }),
+        }),
+      () =>
+        prisma.tasks.count({
+          where: andWhere(ks, taskDueOrCreatedToday),
+        }),
+      () =>
+        prisma.tasks.count({
+          where: andWhere(ks, { status: { in: ["done", "completed"] } }, taskDueOrCreatedToday),
+        }),
+      () =>
+        prisma.crm_todos.count({
+          where: andWhere({ is_deleted: false }, tv, todoDayClause),
+        }),
+      () =>
+        prisma.crm_todos.count({
+          where: andWhere(
+            { is_deleted: false },
+            tv,
+            todoDayClause,
+            { status: "completed" }
+          ),
+        }),
+      () =>
+        prisma.crm_todos.count({
+          where: andWhere(
+            { is_deleted: false },
+            tv,
+            { status: "pending" },
             {
-              AND: [
-                { carry_forward: true },
-                { todo_date: { lt: todayDate } },
+              OR: [
+                { todo_date: todayDate },
+                {
+                  AND: [
+                    { carry_forward: true },
+                    { todo_date: { lt: todayDate } },
+                  ],
+                },
               ],
-            },
-          ],
-        }
-      ),
-    }),
-  ]);
+            }
+          ),
+        }),
+    ],
+    3
+  );
 
   const leads_vs_yesterday_pct =
     nYest === 0 ? (nToday > 0 ? 100 : 0) : Number((((nToday - nYest) / nYest) * 100).toFixed(2));
@@ -681,18 +709,22 @@ async function getDashboardStats(req, res) {
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
     const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
-    const [totalLeads, openTasks, closedThisMonth] = await Promise.all([
-      safeCount("leads", ls, 0),
-      safeCount("tasks", andWhere(ks, { status: { notIn: ["done", "completed"] } }), 0),
-      safeCount(
-        "leads",
-        andWhere(ls, {
-          status: { in: ["close_by", "confirm"] },
-          created_at: { gte: monthStart, lt: nextMonth },
-        }),
-        0
-      ),
-    ]);
+    const [totalLeads, openTasks, closedThisMonth] = await promisePool(
+      [
+        () => safeCount("leads", ls, 0),
+        () => safeCount("tasks", andWhere(ks, { status: { notIn: ["done", "completed"] } }), 0),
+        () =>
+          safeCount(
+            "leads",
+            andWhere(ls, {
+              status: { in: ["close_by", "confirm"] },
+              created_at: { gte: monthStart, lt: nextMonth },
+            }),
+            0
+          ),
+      ],
+      3
+    );
 
     res.json({
       success: true,

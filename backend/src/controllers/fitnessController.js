@@ -561,7 +561,16 @@ async function searchClients(req, res) {
           { email: { contains: searchTerm } },
         ],
       },
-      select: { client_id: true, full_name: true, phone: true, status: true, tier: true },
+      select: {
+        client_id: true,
+        full_name: true,
+        phone: true,
+        email: true,
+        address: true,
+        city: true,
+        status: true,
+        tier: true,
+      },
       take: 20,
     });
     res.json({ success: true, data: rows });
@@ -2870,44 +2879,21 @@ async function getDashboardStats(req, res) {
     nextWeek.setDate(nextWeek.getDate() + 7);
     const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
     const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    const todayMs = today.getTime();
+    const nextWeekMs = nextWeek.getTime();
 
-    const [
-      active,
-      onHold,
-      needAttention,
-      overdueFollowups,
-      expiringSoon,
-      fiveStar,
-      consultCount,
-      highRisk,
-      notifs,
-    ] = await Promise.all([
-      prisma.fitness_clients.count({ where: { status: "Active" } }),
-      prisma.fitness_clients.count({ where: { status: "Hold" } }),
-      prisma.fitness_clients.count({
-        where: { progress: { in: ["Poor", "Very_Poor"] } },
-      }),
-      prisma.fitness_clients.count({
-        where: { status: "Active", next_due_date: { lt: today } },
-      }),
-      prisma.fitness_clients.count({
-        where: {
-          status: "Active",
-          plan_expiry_date: { gte: today, lte: nextWeek },
+    const [clients, consultCount, notifs] = await Promise.all([
+      prisma.fitness_clients.findMany({
+        select: {
+          status: true,
+          progress: true,
+          next_due_date: true,
+          plan_expiry_date: true,
+          tier: true,
         },
       }),
-      prisma.fitness_clients.count({ where: { tier: 5 } }),
       prisma.fitness_consultations.count({
         where: { consult_date: { gte: monthStart, lte: monthEnd } },
-      }),
-      prisma.fitness_clients.count({
-        where: {
-          OR: [
-            { progress: { in: ["Poor", "Very_Poor"] } },
-            { next_due_date: { lt: today } },
-            { plan_expiry_date: { lte: nextWeek } },
-          ],
-        },
       }),
       prisma.notifications.findMany({
         where: {
@@ -2927,6 +2913,41 @@ async function getDashboardStats(req, res) {
         },
       }),
     ]);
+
+    let active = 0;
+    let onHold = 0;
+    let needAttention = 0;
+    let overdueFollowups = 0;
+    let expiringSoon = 0;
+    let fiveStar = 0;
+    let highRisk = 0;
+    for (const c of clients) {
+      const status = String(c.status || "");
+      const progress = String(c.progress || "");
+      const dueMs = c.next_due_date ? new Date(c.next_due_date).getTime() : NaN;
+      const expiryMs = c.plan_expiry_date ? new Date(c.plan_expiry_date).getTime() : NaN;
+      if (status === "Active") active += 1;
+      if (status === "Hold") onHold += 1;
+      if (progress === "Poor" || progress === "Very_Poor") needAttention += 1;
+      if (status === "Active" && Number.isFinite(dueMs) && dueMs < todayMs) overdueFollowups += 1;
+      if (
+        status === "Active" &&
+        Number.isFinite(expiryMs) &&
+        expiryMs >= todayMs &&
+        expiryMs <= nextWeekMs
+      ) {
+        expiringSoon += 1;
+      }
+      if (Number(c.tier) === 5) fiveStar += 1;
+      if (
+        progress === "Poor" ||
+        progress === "Very_Poor" ||
+        (Number.isFinite(dueMs) && dueMs < todayMs) ||
+        (Number.isFinite(expiryMs) && expiryMs <= nextWeekMs)
+      ) {
+        highRisk += 1;
+      }
+    }
 
     const seen = new Set();
     const notifRows = [];

@@ -1,6 +1,6 @@
 .page {
   min-height: calc(100vh - 120px);
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
 }
 
 .header {
@@ -77,13 +77,13 @@
 }
 
 .filterBtn:hover {
-  border-color: var(--yellow, #f5c400);
+  border-color: var(--yellow, #8bc34a);
 }
 
 .filterActive {
-  background: var(--yellow, #f5c400);
-  border-color: var(--yellow, #f5c400);
-  color: var(--btn-primary-txt, #1a1a2e);
+  background: var(--yellow, #8bc34a);
+  border-color: var(--yellow, #8bc34a);
+  color: var(--btn-primary-txt, #1a1a1a);
   font-weight: 600;
 }
 
@@ -105,7 +105,7 @@
 }
 
 .sectionToday {
-  background: rgba(245, 196, 0, 0.15);
+  background: rgba(139, 195, 74, 0.15);
   color: #92400e;
 }
 

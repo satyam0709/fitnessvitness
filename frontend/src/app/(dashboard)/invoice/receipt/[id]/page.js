@@ -7,6 +7,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { fetchInvoiceReceipt } from "@/lib/invoicesApi";
 import PaymentReceiptView from "@/components/Invoice/PaymentReceiptView";
 import { useToast } from "@/components/Toast/ToastContext";
+import { subscribeCrmLive } from "@/lib/chatRealtime";
 import styles from "../../invoicePages.module.css";
 
 export default function PaymentReceiptPage() {
@@ -39,6 +40,11 @@ export default function PaymentReceiptPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!isLoaded || !id) return undefined;
+    return subscribeCrmLive(["invoices:changed"], () => load());
+  }, [isLoaded, id, load]);
 
   return (
     <div className={styles.page}>

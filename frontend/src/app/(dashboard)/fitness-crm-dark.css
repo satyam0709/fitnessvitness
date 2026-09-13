@@ -83,7 +83,7 @@
 }
 
 [data-theme="dark"] [data-dashboard-shell] [class*="goldRow"] {
-  background: rgba(245, 196, 0, 0.1) !important;
+  background: rgba(139, 195, 74, 0.1) !important;
 }
 
 [data-theme="dark"] [data-dashboard-shell] [class*="highRisk"],
@@ -290,7 +290,7 @@
 [data-theme="dark"] [data-dashboard-shell] [class*="warnRow"],
 [data-theme="dark"] [data-dashboard-shell] [class*="highlightRowYellow"],
 [data-theme="dark"] [data-dashboard-shell] [class*="rowHighlight"] {
-  background: rgba(245, 196, 0, 0.12) !important;
+  background: rgba(139, 195, 74, 0.12) !important;
   color: var(--text-main);
 }
 

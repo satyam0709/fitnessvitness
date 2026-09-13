@@ -38,8 +38,8 @@
   padding: 10px 12px;
   border-radius: 8px;
   margin-bottom: 14px;
-  background: rgba(245, 196, 0, 0.18);
-  border: 1px solid rgba(245, 196, 0, 0.45);
+  background: rgba(139, 195, 74, 0.18);
+  border: 1px solid rgba(139, 195, 74, 0.45);
   color: var(--text, #0f172a);
 }
 
@@ -75,7 +75,7 @@
 }
 
 .navActive {
-  background: var(--yellow-tint, rgba(245, 196, 0, 0.2));
+  background: var(--yellow-tint, rgba(139, 195, 74, 0.2));
   color: var(--yellow-hover, #a16207);
   font-weight: 700;
 }

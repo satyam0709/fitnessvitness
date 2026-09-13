@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
+import { subscribeCrmLive } from "@/lib/chatRealtime";
 import { useTodayFeed } from "@/lib/useTodayFeed";
 import { APP_NAME, LOGO_SRC } from "@/lib/branding";
 import styles from "./sidebar.module.css";
@@ -19,67 +20,73 @@ const NAV = [
         label: "Today",
         icon: "fa-calendar-day",
         href: "/today",
-        color: "#eab308",
-        bg: "rgba(234,179,8,0.18)",
+        color: "#8bc34a",
+        bg: "rgba(139,195,74,0.18)",
         badge: true,
       },
-      { label: "Dashboard", icon: "fa-gauge-high",   href: "/dashboard",  color: "#3b82f6", bg: "rgba(59,130,246,0.15)" },
+      { label: "Dashboard", icon: "fa-gauge-high",   href: "/dashboard",  color: "#1a1a1a", bg: "rgba(26,26,26,0.08)" },
       {
         label: "Lead",
         icon: "fa-filter",
         href: "/leads",
-        color: "#f59e0b",
-        bg: "rgba(245,158,11,0.15)",
+        color: "#689f38",
+        bg: "rgba(104,159,56,0.15)",
       },
-      { label: "Task",      icon: "fa-list-check",    href: "/tasks",      color: "#22c55e", bg: "rgba(34,197,94,0.15)" },
+      { label: "Task",      icon: "fa-list-check",    href: "/tasks",      color: "#8bc34a", bg: "rgba(139,195,74,0.15)" },
       {
         label: "Opportunities",
         icon: "fa-briefcase",
         href: "/opportunities",
-        color: "#16a34a",
-        bg: "rgba(22,163,74,0.15)",
+        color: "#558b2f",
+        bg: "rgba(85,139,47,0.15)",
       },
-      { label: "Tickets",   icon: "fa-ticket",        href: "/tickets",    color: "#ef4444", bg: "rgba(239,68,68,0.15)" },
-      { label: "Reminder",  icon: "fa-bell",          href: "/reminders",  color: "#f5c400", bg: "rgba(245,196,0,0.18)" },
-      { label: "Meeting",   icon: "fa-video",         href: "/meetings",   color: "#06b6d4", bg: "rgba(6,182,212,0.15)" },
-      { label: "To Do",     icon: "fa-clipboard-list", href: "/todos",     color: "#0ea5e9", bg: "rgba(14,165,233,0.15)" },
+      { label: "Tickets",   icon: "fa-ticket",        href: "/tickets",    color: "#33691e", bg: "rgba(51,105,30,0.12)" },
+      { label: "Reminder",  icon: "fa-bell",          href: "/reminders",  color: "#8bc34a", bg: "rgba(139,195,74,0.18)" },
+      { label: "Meeting",   icon: "fa-video",         href: "/meetings",   color: "#1a1a1a", bg: "rgba(26,26,26,0.08)" },
+      { label: "To Do",     icon: "fa-clipboard-list", href: "/todos",     color: "#7cb342", bg: "rgba(124,179,66,0.15)" },
       {
         label: "Collections",
         icon: "fa-hand-holding-dollar",
         href: "/collections",
-        color: "#059669",
-        bg: "rgba(5,150,105,0.15)",
+        color: "#689f38",
+        bg: "rgba(104,159,56,0.15)",
         collectionsBadge: true,
       },
       {
         label: "Invoices",
         icon: "fa-file-invoice-dollar",
-        href: "/invoice/sales",
-        color: "#ca8a04",
-        bg: "rgba(234,179,8,0.15)",
+        color: "#558b2f",
+        bg: "rgba(85,139,47,0.15)",
+        children: [
+          { label: "List", href: "/invoice/sales" },
+          { label: "Add", href: "/invoice/sales/new" },
+          { label: "Quotation", href: "/invoice/quotation" },
+          { label: "Payment Method", href: "/invoice/payment-method" },
+          { label: "Brochure", href: "/invoice/brochure" },
+        ],
       },
     ],
   },
   {
     section: "Fitness CRM",
     items: [
-      { label: "Clients", icon: "fa-users", href: "/clients", color: "#10b981", bg: "rgba(16,185,129,0.15)" },
-      { label: "Business Tracker", icon: "fa-chart-line", href: "/business-tracker", color: "#f59e0b", bg: "rgba(245,158,11,0.15)" },
-      { label: "External / walk-in", icon: "fa-store", href: "/external-sales", color: "#14b8a6", bg: "rgba(20,184,166,0.15)" },
-      { label: "Consultations", icon: "fa-stethoscope", href: "/consultations", color: "#0ea5e9", bg: "rgba(14,165,233,0.15)" },
-      { label: "Analytics", icon: "fa-chart-pie", href: "/analytics", color: "#8b5cf6", bg: "rgba(139,92,246,0.15)" },
-      { label: "Meal Plans", icon: "fa-utensils", href: "/meal-plans", color: "#f97316", bg: "rgba(249,115,22,0.15)" },
+      { label: "Clients", icon: "fa-users", href: "/clients", color: "#8bc34a", bg: "rgba(139,195,74,0.15)" },
+      { label: "Business Tracker", icon: "fa-chart-line", href: "/business-tracker", color: "#1a1a1a", bg: "rgba(26,26,26,0.08)" },
+      { label: "External / walk-in", icon: "fa-store", href: "/external-sales", color: "#689f38", bg: "rgba(104,159,56,0.15)" },
+      { label: "Consultations", icon: "fa-stethoscope", href: "/consultations", color: "#7cb342", bg: "rgba(124,179,66,0.15)" },
+      { label: "Analytics", icon: "fa-chart-pie", href: "/analytics", color: "#558b2f", bg: "rgba(85,139,47,0.15)" },
+      { label: "Meal Plans", icon: "fa-utensils", href: "/meal-plans", color: "#8bc34a", bg: "rgba(139,195,74,0.15)" },
     ],
   },
   {
     section: "Workspace",
     items: [
-      { label: "Notes",    icon: "fa-note-sticky",   href: "/notes",     color: "#ef4444", bg: "rgba(239,68,68,0.15)"   },
-      { label: "Calendar", icon: "fa-calendar-days",  href: "/calendar",  color: "#3b82f6", bg: "rgba(59,130,246,0.15)"  },
-      { label: "Companies", icon: "fa-building",      href: "/companies", color: "#a855f7", bg: "rgba(168,85,247,0.15)" },
-      { label: "Contacts", icon: "fa-address-book",   href: "/contacts",  color: "#0ea5e9", bg: "rgba(14,165,233,0.15)"  },
-      { label: "Storage",  icon: "fa-hard-drive",     href: "/storage",   color: "#14b8a6", bg: "rgba(20,184,166,0.15)"  },
-      { label: "Reports",  icon: "fa-chart-bar",      href: "/reports",   color: "#6366f1", bg: "rgba(99,102,241,0.15)"  },
+      { label: "Notes",    icon: "fa-note-sticky",   href: "/notes",     color: "#1a1a1a", bg: "rgba(26,26,26,0.08)"   },
+      { label: "Calendar", icon: "fa-calendar-days",  href: "/calendar",  color: "#8bc34a", bg: "rgba(139,195,74,0.15)"  },
+      { label: "Companies", icon: "fa-building",      href: "/companies", color: "#689f38", bg: "rgba(104,159,56,0.15)" },
+      { label: "Contacts", icon: "fa-address-book",   href: "/contacts",  color: "#7cb342", bg: "rgba(124,179,66,0.15)"  },
+      { label: "Storage",  icon: "fa-hard-drive",     href: "/storage",   color: "#558b2f", bg: "rgba(85,139,47,0.15)"  },
+      { label: "Reports",  icon: "fa-chart-bar",      href: "/reports",   color: "#1a1a1a", bg: "rgba(26,26,26,0.08)"  },
     ],
   },
 ];
@@ -99,9 +106,9 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle }) {
   useEffect(() => { setMounted(true); }, []);
 
   useEffect(() => {
-    if (!isLoaded) return;
+    if (!isLoaded) return undefined;
     let cancelled = false;
-    (async () => {
+    async function loadReportsCount() {
       try {
         const res = await apiFetch("/reports/pipeline");
         const json = await res.json().catch(() => ({}));
@@ -111,16 +118,21 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle }) {
       } catch {
         if (!cancelled) setReportsCount(0);
       }
-    })();
+    }
+    loadReportsCount();
+    const unsub = subscribeCrmLive(["leads:changed", "opportunities:changed"], () => {
+      if (!cancelled) loadReportsCount();
+    });
     return () => {
       cancelled = true;
+      unsub();
     };
   }, [isLoaded]);
 
   useEffect(() => {
-    if (!isLoaded) return;
+    if (!isLoaded) return undefined;
     let cancelled = false;
-    (async () => {
+    async function loadCollectionsCount() {
       try {
         const res = await apiFetch("/collections/summary");
         const json = await res.json().catch(() => ({}));
@@ -130,9 +142,14 @@ export default function Sidebar({ collapsed, mobileOpen, onToggle }) {
       } catch {
         if (!cancelled) setCollectionsOpen(0);
       }
-    })();
+    }
+    loadCollectionsCount();
+    const unsub = subscribeCrmLive(["collections:changed"], () => {
+      if (!cancelled) loadCollectionsCount();
+    });
     return () => {
       cancelled = true;
+      unsub();
     };
   }, [isLoaded]);
 

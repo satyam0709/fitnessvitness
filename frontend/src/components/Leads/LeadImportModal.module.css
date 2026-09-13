@@ -1,0 +1,338 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  z-index: 2100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.modal {
+  background: var(--bg-card, #fff);
+  color: var(--text, #111);
+  border-radius: 12px;
+  width: min(920px, 100%);
+  max-height: min(92vh, 900px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--crm-modal-border, var(--border, #e2e8f0));
+  box-shadow: var(--shadow-lg, 0 24px 48px rgba(0, 0, 0, 0.2));
+  font-family: var(--font-primary);
+}
+
+.header {
+  flex-shrink: 0;
+  background: linear-gradient(
+    135deg,
+    var(--crm-modal-header-start, #1a1a2e) 0%,
+    var(--crm-modal-header-end, #2d2d4e) 100%
+  );
+  border-bottom: 3px solid var(--crm-modal-accent, var(--brand-primary));
+  color: #fff;
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.title {
+  margin: 0;
+  font-family: var(--font-primary);
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--crm-modal-accent, var(--brand-primary));
+}
+
+.closeBtn {
+  background: rgba(var(--brand-primary-rgb), 0.15);
+  border: none;
+  color: #fff;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.stepBar {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.stepItem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted, #64748b);
+  white-space: nowrap;
+}
+
+.stepItemActive {
+  color: var(--brand-primary);
+  font-weight: 600;
+}
+
+.stepNum {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--border, #e2e8f0);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+}
+
+.stepItemActive .stepNum {
+  background: var(--brand-primary);
+  color: #fff;
+}
+
+.body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px 20px;
+  min-height: 280px;
+}
+
+.footer {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border, #e2e8f0);
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.footerActions {
+  display: flex;
+  gap: 8px;
+}
+
+.dropZone {
+  border: 2px dashed var(--border, #cbd5e1);
+  border-radius: 12px;
+  padding: 36px 20px;
+  text-align: center;
+  color: var(--text-muted, #64748b);
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.dropZoneActive {
+  border-color: var(--brand-primary);
+  background: rgba(var(--brand-primary-rgb), 0.06);
+}
+
+.dropZone i {
+  font-size: 32px;
+  color: var(--brand-primary);
+  margin-bottom: 8px;
+}
+
+.hiddenInput {
+  display: none;
+}
+
+.progressWrap {
+  position: relative;
+  height: 8px;
+  background: var(--border, #e2e8f0);
+  border-radius: 999px;
+  margin-top: 16px;
+  overflow: hidden;
+}
+
+.progressBar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--brand-primary), var(--brand-secondary));
+  transition: width 0.2s ease;
+}
+
+.progressLabel {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-muted, #64748b);
+}
+
+.tableWrap {
+  overflow: auto;
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 8px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.table th,
+.table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border, #e2e8f0);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.table th {
+  background: var(--bg-subtle, #f8fafc);
+  font-weight: 600;
+}
+
+.mappingGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.mappingRow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.mappingRow select {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #e2e8f0);
+  background: var(--bg-card, #fff);
+}
+
+.requiredLabel {
+  font-weight: 600;
+}
+
+.modeRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.modeRow select {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #e2e8f0);
+}
+
+.summaryGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.summaryGrid > div {
+  background: var(--bg-subtle, #f8fafc);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.meta {
+  margin: 0 0 12px;
+  color: var(--text-muted, #64748b);
+  font-size: 13px;
+}
+
+.errorBox {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 13px;
+}
+
+.doneBanner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: rgba(var(--brand-primary-rgb), 0.12);
+  color: var(--brand-primary);
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.historyBlock h3 {
+  margin: 16px 0 8px;
+  font-size: 14px;
+}
+
+.historyList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.historyList li {
+  margin-bottom: 6px;
+}
+
+.btnPrimary,
+.btnSecondary,
+.btnGhost,
+.btnDanger,
+.linkBtn {
+  font-family: var(--font-primary);
+  cursor: pointer;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.btnPrimary {
+  background: var(--brand-primary);
+  color: #fff;
+  border: none;
+  padding: 10px 16px;
+}
+
+.btnPrimary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btnSecondary {
+  background: rgba(var(--brand-primary-rgb), 0.12);
+  color: var(--brand-primary);
+  border: 1px solid rgba(var(--brand-primary-rgb), 0.35);
+  padding: 8px 14px;
+  margin-top: 12px;
+}
+
+.btnGhost {
+  background: transparent;
+  border: 1px solid var(--border, #e2e8f0);
+  color: var(--text, #111);
+  padding: 10px 16px;
+}
+
+.btnDanger {
+  background: #ef4444;
+  color: #fff;
+  border: none;
+  padding: 10px 16px;
+}
+
+.linkBtn {
+  background: none;
+  border: none;
+  color: var(--brand-secondary);
+  padding: 0;
+  text-decoration: underline;
+}

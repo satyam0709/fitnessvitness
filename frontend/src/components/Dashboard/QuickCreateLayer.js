@@ -50,6 +50,20 @@ export function QuickReminderModal({ open, onClose }) {
   useAuth();
   const [users, setUsers] = useState([]);
   const [freq, setFreq] = useState("once");
+  const [frequencies, setFrequencies] = useState(REM_FREQ);
+  const [templates, setTemplates] = useState([]);
+  const [freqNotes, setFreqNotes] = useState({});
+  const [weekdays, setWeekdays] = useState([
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+  ]);
+  const [timeHm, setTimeHm] = useState("09:00");
+  const [weekday, setWeekday] = useState("Monday");
   const [remindAt, setRemindAt] = useState("");
   const [tagUserIds, setTagUserIds] = useState([]);
   const [template, setTemplate] = useState("");
@@ -63,6 +77,8 @@ export function QuickReminderModal({ open, onClose }) {
 
   const reset = useCallback(() => {
     setFreq("once");
+    setTimeHm("09:00");
+    setWeekday("Monday");
     setRemindAt("");
     setTagUserIds([]);
     setTemplate("");
@@ -76,6 +92,29 @@ export function QuickReminderModal({ open, onClose }) {
   }, []);
 
   useResetOnOpen(open, reset);
+
+  useEffect(() => {
+    if (!open) return;
+    (async () => {
+      try {
+        const res = await apiFetch("/reminders/meta");
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || !json.success || !json.data) return;
+        if (Array.isArray(json.data.frequencies) && json.data.frequencies.length) {
+          setFrequencies(json.data.frequencies);
+        }
+        if (Array.isArray(json.data.templates)) setTemplates(json.data.templates);
+        if (Array.isArray(json.data.weekdays) && json.data.weekdays.length) {
+          setWeekdays(json.data.weekdays);
+        }
+        if (json.data.frequency_notes && typeof json.data.frequency_notes === "object") {
+          setFreqNotes(json.data.frequency_notes);
+        }
+      } catch {
+        /* keep fallbacks */
+      }
+    })();
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -95,7 +134,20 @@ export function QuickReminderModal({ open, onClose }) {
   async function onSubmit(e) {
     e.preventDefault();
     setErr("");
-    if (!title.trim() || !message.trim() || !remindAt) {
+    const schedule = frequencies.find((f) => f.key === freq)?.schedule || "datetime";
+    if (!title.trim() || !message.trim()) {
+      setErr("Title and message are required.");
+      return;
+    }
+    if (schedule === "time" && !timeHm) {
+      setErr("Time is required for a daily reminder.");
+      return;
+    }
+    if (schedule === "week_time" && (!timeHm || !weekday)) {
+      setErr("Weekday and time are required for a weekly reminder.");
+      return;
+    }
+    if (schedule === "datetime" && !remindAt) {
       setErr("Title, message, and date are required.");
       return;
     }
@@ -131,6 +183,9 @@ export function QuickReminderModal({ open, onClose }) {
           remind_at: toSqlDateTime(remindAt),
           assigned_to_user_id: assignedTo ? Number(assignedTo) : null,
           reminder_type: reminderType,
+          recurrence: freq,
+          time: schedule === "time" || schedule === "week_time" ? timeHm : undefined,
+          weekday: schedule === "week_time" ? weekday : undefined,
         }),
       });
       const json = await res.json().catch(() => ({}));
@@ -164,7 +219,7 @@ export function QuickReminderModal({ open, onClose }) {
           <div className={styles.field}>
             <span className={styles.label}>Frequency</span>
             <div className={styles.radioRow} role="radiogroup">
-              {REM_FREQ.map((f) => (
+              {frequencies.map((f) => (
                 <label key={f.key} className={styles.radioLabel}>
                   <input
                     type="radio"
@@ -176,6 +231,7 @@ export function QuickReminderModal({ open, onClose }) {
                 </label>
               ))}
             </div>
+            {freqNotes[freq] ? <p className={styles.hint}>{freqNotes[freq]}</p> : null}
             <p className={styles.hint}>
               Frequency and tags are also reflected in the note; assignee and template type are stored on the reminder record.
             </p>
@@ -199,20 +255,69 @@ export function QuickReminderModal({ open, onClose }) {
                 ))}
               </select>
             </div>
+            {freq === "daily" ? (
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor={`${id}-tm`}>
+                  Time <span className={styles.req}>*</span>
+                </label>
+                <input
+                  id={`${id}-tm`}
+                  type="time"
+                  className={styles.input}
+                  value={timeHm}
+                  onChange={(e) => setTimeHm(e.target.value)}
+                  required
+                />
+              </div>
+            ) : freq === "weekly" ? (
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor={`${id}-wd`}>
+                  Weekday <span className={styles.req}>*</span>
+                </label>
+                <select
+                  id={`${id}-wd`}
+                  className={styles.select}
+                  value={weekday}
+                  onChange={(e) => setWeekday(e.target.value)}
+                >
+                  {weekdays.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor={`${id}-ra`}>
+                  Date <span className={styles.req}>*</span>
+                </label>
+                <input
+                  id={`${id}-ra`}
+                  type="datetime-local"
+                  className={styles.input}
+                  value={remindAt}
+                  onChange={(e) => setRemindAt(e.target.value)}
+                  required
+                />
+              </div>
+            )}
+          </div>
+          {freq === "weekly" ? (
             <div className={styles.field}>
-              <label className={styles.label} htmlFor={`${id}-ra`}>
-                Date <span className={styles.req}>*</span>
+              <label className={styles.label} htmlFor={`${id}-wtm`}>
+                Time <span className={styles.req}>*</span>
               </label>
               <input
-                id={`${id}-ra`}
-                type="datetime-local"
+                id={`${id}-wtm`}
+                type="time"
                 className={styles.input}
-                value={remindAt}
-                onChange={(e) => setRemindAt(e.target.value)}
+                value={timeHm}
+                onChange={(e) => setTimeHm(e.target.value)}
                 required
               />
             </div>
-          </div>
+          ) : null}
           <div className={styles.field}>
             <label className={styles.label} htmlFor={`${id}-ru`}>Tag users in note (optional)</label>
             <select
@@ -239,12 +344,29 @@ export function QuickReminderModal({ open, onClose }) {
                 id={`${id}-tpl`}
                 className={styles.select}
                 value={template}
-                onChange={(e) => setTemplate(e.target.value)}
+                onChange={(e) => {
+                  const key = e.target.value;
+                  setTemplate(key);
+                  const tpl = templates.find((t) => t.key === key);
+                  if (tpl) {
+                    setTitle(tpl.title || "");
+                    setMessage(tpl.message || "");
+                  }
+                }}
               >
                 <option value="">Select…</option>
-                <option value="follow_up">Follow up</option>
-                <option value="payment">Payment</option>
-                <option value="meeting">Meeting prep</option>
+                {(templates.length
+                  ? templates
+                  : [
+                      { key: "follow_up", label: "Follow up" },
+                      { key: "payment", label: "Payment" },
+                      { key: "meeting", label: "Meeting prep" },
+                    ]
+                ).map((t) => (
+                  <option key={t.key} value={t.key}>
+                    {t.label}
+                  </option>
+                ))}
               </select>
             </div>
             <div className={styles.toggleRow}>

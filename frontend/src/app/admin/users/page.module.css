@@ -416,8 +416,8 @@
 
 .addUserHeader {
   flex-shrink: 0;
-  background: linear-gradient(135deg, var(--crm-modal-header-start, #1a1a2e) 0%, var(--crm-modal-header-end, #2d2d4e) 100%);
-  border-bottom: 3px solid var(--crm-modal-accent, #f5c400);
+  background: linear-gradient(135deg, var(--crm-modal-header-start, #1a1a1a) 0%, var(--crm-modal-header-end, #2a2a2a) 100%);
+  border-bottom: 3px solid var(--crm-modal-accent, #8bc34a);
   color: #fff;
   padding: 16px 20px;
   display: flex;
@@ -431,11 +431,11 @@
   font-family: var(--font-primary);
   font-size: 18px;
   font-weight: 800;
-  color: var(--crm-modal-accent, #f5c400);
+  color: var(--crm-modal-accent, #8bc34a);
 }
 
 .addUserClose {
-  background: rgba(245, 196, 0, 0.15);
+  background: rgba(139, 195, 74, 0.15);
   border: none;
   color: #fff;
   width: 36px;
@@ -464,7 +464,7 @@
 
 .addUserScope {
   padding: 10px 12px;
-  background: rgba(245, 196, 0, 0.08);
+  background: rgba(139, 195, 74, 0.08);
   border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--text-main, #1f2937);
@@ -526,8 +526,8 @@
 .addUserInput:focus,
 .addUserSelect:focus {
   outline: none;
-  border-color: var(--crm-modal-accent, #f5c400);
-  box-shadow: 0 0 0 2px var(--crm-modal-accent-dim, rgba(245, 196, 0, 0.25));
+  border-color: var(--crm-modal-accent, #8bc34a);
+  box-shadow: 0 0 0 2px var(--crm-modal-accent-dim, rgba(139, 195, 74, 0.25));
 }
 
 .addUserEmailStatus {
@@ -575,12 +575,12 @@
   padding: 10px 22px;
   border-radius: 8px;
   border: none;
-  background: linear-gradient(135deg, var(--yellow-hover, #d4a900), var(--yellow, #f5c400));
-  color: var(--btn-primary-txt, #1a1a2e);
+  background: linear-gradient(135deg, var(--yellow-hover, #7cb342), var(--yellow, #8bc34a));
+  color: var(--btn-primary-txt, #1a1a1a);
   cursor: pointer;
   font-weight: 700;
   font-size: 14px;
-  box-shadow: 0 2px 8px rgba(245, 196, 0, 0.35);
+  box-shadow: 0 2px 8px rgba(139, 195, 74, 0.35);
 }
 
 .addUserSubmitBtn:disabled {

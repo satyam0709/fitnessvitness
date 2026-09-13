@@ -1,7 +1,14 @@
+const path = require("path");
+const multer = require("multer");
 const prisma = require("../config/prisma");
-const { emitInvoicesChanged } = require("../realtime/meetingsRealtime");
-
-// ── Company Settings ─────────────────────────────────────────
+const { emitInvoicesChanged, emitStorageChanged } = require("../realtime/meetingsRealtime");
+const {
+  getWebSettings,
+  updateWebSettings,
+  resetInvoiceStart,
+  ensureUploadDir,
+  resolveWebAsset,
+} = require("../services/webSettingsService");
 
 function computeInvoiceSettingsComplete(row) {
   if (!row) return false;
@@ -12,9 +19,10 @@ function computeInvoiceSettingsComplete(row) {
   return company.length > 0 && bank.length > 0 && acc.length > 0 && ifsc.length > 0;
 }
 
-async function getCompanySettings(req, res) {
+async function getCompanySettings(_req, res) {
   try {
-    const data = await prisma.company_settings.findUnique({ where: { id: 1 } });
+    const pack = await getWebSettings();
+    const data = pack.data;
     res.json({
       success: true,
       data,
@@ -66,9 +74,107 @@ async function updateCompanySettings(req, res) {
   }
 }
 
-// ── Integrations ─────────────────────────────────────────────
+async function getWebSettingsHandler(_req, res) {
+  try {
+    const pack = await getWebSettings();
+    res.json({
+      success: true,
+      ...pack,
+      invoiceSettingsComplete: computeInvoiceSettingsComplete(pack.data),
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+}
 
-async function getIntegrations(req, res) {
+async function putWebSettingsHandler(req, res) {
+  try {
+    const pack = await updateWebSettings(req.body || {});
+    emitInvoicesChanged({ reason: "web_settings_updated" });
+    res.json({ success: true, ...pack });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, message: err.message });
+  }
+}
+
+async function resetInvoiceStartHandler(req, res) {
+  try {
+    const pack = await resetInvoiceStart(req.body?.start || req.body?.invoice_start_no);
+    emitInvoicesChanged({ reason: "invoice_start_reset" });
+    res.json({ success: true, ...pack });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    cb(null, ensureUploadDir());
+  },
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname || "") || ".png";
+    cb(null, `${Date.now()}-${Math.random().toString(36).slice(2, 10)}${ext}`);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    if (/^image\//.test(file.mimetype)) return cb(null, true);
+    cb(new Error("Only image files allowed"));
+  },
+});
+
+function uploadLogoMiddleware(req, res, next) {
+  upload.single("logo")(req, res, (err) => {
+    if (err) return res.status(400).json({ success: false, message: err.message });
+    next();
+  });
+}
+
+function uploadSignatureMiddleware(req, res, next) {
+  upload.single("signature")(req, res, (err) => {
+    if (err) return res.status(400).json({ success: false, message: err.message });
+    next();
+  });
+}
+
+async function uploadLogoHandler(req, res) {
+  try {
+    if (!req.file) return res.status(400).json({ success: false, message: "logo file required" });
+    const pack = await updateWebSettings({ logo_path: req.file.filename });
+    emitInvoicesChanged({ action: "logo" });
+    emitStorageChanged({ action: "logo" });
+    res.json({ success: true, ...pack });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, message: err.message });
+  }
+}
+
+async function uploadSignatureHandler(req, res) {
+  try {
+    if (!req.file) return res.status(400).json({ success: false, message: "signature file required" });
+    const pack = await updateWebSettings({ invoice_signature_path: req.file.filename });
+    emitInvoicesChanged({ action: "signature" });
+    emitStorageChanged({ action: "signature" });
+    res.json({ success: true, ...pack });
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, message: err.message });
+  }
+}
+
+async function getWebAssetHandler(req, res) {
+  try {
+    const abs = resolveWebAsset(req.params.file);
+    if (!abs) return res.status(404).json({ success: false, message: "Not found" });
+    return res.sendFile(abs);
+  } catch (err) {
+    res.status(err.status || 500).json({ success: false, message: err.message });
+  }
+}
+
+async function getIntegrations(_req, res) {
   try {
     const integrations = await prisma.integrations.findMany({
       orderBy: { key: "asc" },
@@ -107,4 +213,12 @@ module.exports = {
   updateCompanySettings,
   getIntegrations,
   toggleIntegration,
+  getWebSettingsHandler,
+  putWebSettingsHandler,
+  resetInvoiceStartHandler,
+  uploadLogoMiddleware,
+  uploadSignatureMiddleware,
+  uploadLogoHandler,
+  uploadSignatureHandler,
+  getWebAssetHandler,
 };

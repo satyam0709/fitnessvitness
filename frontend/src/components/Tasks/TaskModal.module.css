@@ -46,14 +46,14 @@
 }
 
 .segBtn:hover {
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   background: rgba(255, 255, 255, 0.7);
 }
 
 .segBtnOn {
   background: var(--bg-card, #fff);
-  color: var(--text-main, #1a1a2e);
-  border-color: var(--crm-modal-accent, #f5c400);
+  color: var(--text-main, #1a1a1a);
+  border-color: var(--crm-modal-accent, #8bc34a);
   box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
 }
 
@@ -77,7 +77,7 @@
 
 .priBtn:hover {
   border-color: #cbd5e1;
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
 }
 
 .priBtnOnLow {
@@ -132,12 +132,12 @@
 }
 
 .clientOpt:hover {
-  background: var(--crm-modal-accent-dim, rgba(245, 196, 0, 0.18));
+  background: var(--crm-modal-accent-dim, rgba(139, 195, 74, 0.18));
 }
 
 .clientOpt strong {
   font-size: 14px;
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
 }
 
 .sub {
@@ -150,6 +150,12 @@
   font-size: 12px;
   color: #15803d;
   font-weight: 600;
+}
+
+.freqNote {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-muted, #64748b);
 }
 
 @media (max-width: 640px) {

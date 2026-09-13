@@ -1,7 +1,7 @@
 .container {
   padding: 2rem;
-  background: radial-gradient(circle at top right, rgba(245, 196, 0, 0.05), transparent),
-              radial-gradient(circle at bottom left, rgba(0, 102, 204, 0.05), transparent);
+  background: radial-gradient(circle at top right, rgba(139, 195, 74, 0.05), transparent),
+              radial-gradient(circle at bottom left, rgba(26, 26, 26, 0.05), transparent);
   min-height: 100vh;
   font-family: var(--font-primary);
 }
@@ -12,10 +12,10 @@
   align-items: center;
   margin-bottom: 2rem;
   padding: 1.5rem 2rem;
-  background: #004d7a;
+  background: #1a1a1a;
   border-radius: 12px;
   color: white;
-  box-shadow: 0 10px 30px rgba(0, 77, 122, 0.2);
+  box-shadow: 0 10px 30px rgba(26, 26, 26, 0.25);
 }
 
 .brand {

@@ -23,7 +23,7 @@
 .panel {
   width: min(440px, 100%);
   background: var(--bg-card, #fff);
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   border-radius: var(--radius-md, 12px);
   border: 1px solid var(--crm-modal-border, var(--border));
   box-shadow: var(--shadow-lg);
@@ -45,10 +45,10 @@
 .header {
   background: linear-gradient(
     135deg,
-    var(--crm-modal-header-start, #1a1a2e) 0%,
-    var(--crm-modal-header-end, #2d2d4e) 100%
+    var(--crm-modal-header-start, #1a1a1a) 0%,
+    var(--crm-modal-header-end, #2a2a2a) 100%
   );
-  border-bottom: 3px solid var(--crm-modal-accent, #f5c400);
+  border-bottom: 3px solid var(--crm-modal-accent, #8bc34a);
   padding: 16px 20px;
 }
 
@@ -97,7 +97,7 @@
 
 .cancel {
   background: var(--bg-hover, #f1f5f9);
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   border: 1px solid var(--border, #e2e8f0);
 }
 
@@ -118,11 +118,11 @@
 .confirmNeutral {
   background: linear-gradient(
     135deg,
-    var(--yellow-hover, #d4a900),
-    var(--yellow, #f5c400)
+    var(--yellow-hover, #7cb342),
+    var(--yellow, #8bc34a)
   );
-  color: var(--btn-primary-txt, #1a1a2e);
-  box-shadow: 0 2px 10px rgba(245, 196, 0, 0.3);
+  color: var(--btn-primary-txt, #1a1a1a);
+  box-shadow: 0 2px 10px rgba(139, 195, 74, 0.3);
 }
 
 .confirmNeutral:hover {

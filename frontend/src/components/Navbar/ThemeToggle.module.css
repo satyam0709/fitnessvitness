@@ -1,7 +1,7 @@
 .btn {
   background: none;
   border: 1.5px solid var(--border-color, #EBEBEB);
-  color: var(--text-main, #1A1A2E);
+  color: var(--text-main, #1a1a1a);
   cursor: pointer;
   padding: 6px 9px;
   border-radius: 8px;
@@ -14,8 +14,8 @@
 }
 
 .btn:hover {
-  background: rgba(245, 196, 0, 0.12);
-  border-color: #F5C400;
+  background: rgba(139, 195, 74, 0.12);
+  border-color: #8bc34a;
   transform: scale(1.05);
 }
 

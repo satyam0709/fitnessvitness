@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch, publicFileUrl } from "@/lib/api";
+import { subscribeCrmLive } from "@/lib/chatRealtime";
 import LeadQuickModals from "@/components/Leads/LeadQuickModals";
 import LeadDetailHeader from "@/components/Leads/LeadDetailHeader";
 import LeadHistoryPanel from "@/components/Leads/LeadHistoryPanel";
@@ -17,7 +18,7 @@ const STATUSES = LEGACY_STATUSES.map(({ key, label, color }) => ({ key, label, c
 export default function LeadDetailPage() {
   const params = useParams();
   const router = useRouter();
-  useAuth();
+  const { isLoaded } = useAuth();
 
   const [lead, setLead] = useState(null);
   const [followups, setFollowups] = useState([]);
@@ -71,6 +72,11 @@ export default function LeadDetailPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!isLoaded || !id) return undefined;
+    return subscribeCrmLive(["leads:changed"], () => load());
+  }, [isLoaded, id, load]);
 
   function handleAction(type) {
     if (type === "change-log") {
@@ -151,7 +157,7 @@ export default function LeadDetailPage() {
               <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                 {label}
               </p>
-              <p style={{ margin: "4px 0 0", fontSize: 14, color: "#1a1a2e" }}>{val || "—"}</p>
+              <p style={{ margin: "4px 0 0", fontSize: 14, color: "#1a1a1a" }}>{val || "—"}</p>
             </div>
           ))}
         </div>

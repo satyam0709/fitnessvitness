@@ -15,6 +15,15 @@ const {
   createClientFromOpportunity,
   linkExistingClient,
 } = require("../services/opportunityClientService");
+const {
+  parseOpportunityOptionValue,
+  registerOpportunityOptionIfNeeded,
+  listOpportunityCustomOptions,
+  addOpportunityOption,
+  getOpportunityOptionUsage,
+  renameOpportunityOption,
+  deleteOpportunityOption,
+} = require("../services/opportunityOptionsService");
 
 function tenantId(req) {
   return req.user?.tenantId ?? req.tenantId ?? null;
@@ -45,27 +54,6 @@ const STAGE_ALIAS = {
 };
 const VALID_STAGE = new Set(Object.keys(STAGE_ALIAS));
 const FOLLOWUP_TYPES = new Set(["call", "email", "meeting", "whatsapp", "demo", "other"]);
-const OPPORTUNITY_TYPES = new Set(["new_business", "upsell", "renewal", "cross_sell", "other"]);
-const LEAD_SOURCES = new Set([
-  "website",
-  "referral",
-  "social_media",
-  "email_campaign",
-  "cold_call",
-  "walk_in",
-  "partner",
-  "other",
-]);
-/** Allowed `product_category` values — intake / service detail (column name kept for API compatibility). */
-const PRODUCT_CATEGORIES = new Set([
-  "initial_consultation",
-  "follow_up",
-  "membership_or_program",
-  "personal_training",
-  "nutrition_or_supplements",
-  "general_inquiry",
-  "other",
-]);
 
 function normalizeStage(raw, fallback = "qualification_done") {
   const key = String(raw || "").trim().toLowerCase();
@@ -77,10 +65,6 @@ function normalizeDatetime(v) {
   const s = String(v).trim();
   if (!s) return null;
   return s.replace("T", " ");
-}
-
-function normalizeEnum(v) {
-  return String(v || "").trim().toLowerCase().replace(/\s+/g, "_");
 }
 
 function applyScope(req) {
@@ -215,6 +199,77 @@ function shouldAdvanceToConsultationDone(stage) {
   const s = normalizeStage(stage);
   return ["qualification_done", "open", "proposal", "negotiation"].includes(s);
 }
+
+router.get("/custom-options", async (_req, res) => {
+  try {
+    const data = await listOpportunityCustomOptions(prisma);
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error("GET /opportunities/custom-options", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.get("/custom-options/usage", async (req, res) => {
+  try {
+    const { fieldName, optionValue } = req.query || {};
+    if (!fieldName || !optionValue) {
+      return res.status(400).json({ success: false, message: "fieldName and optionValue are required" });
+    }
+    const usage = await getOpportunityOptionUsage(prisma, fieldName, optionValue);
+    res.json({ success: true, data: usage });
+  } catch (err) {
+    console.error("GET /opportunities/custom-options/usage", err);
+    res.status(err.status || 500).json({ success: false, message: err.message, usage: err.usage });
+  }
+});
+
+router.post("/custom-options", async (req, res) => {
+  try {
+    const { fieldName, value, label } = req.body || {};
+    const result = await addOpportunityOption(prisma, fieldName, value, label);
+    emitOppChanges(req, "options_changed");
+    res.status(201).json(result);
+  } catch (err) {
+    console.error("POST /opportunities/custom-options", err);
+    res.status(err.status || 500).json({ success: false, message: err.message });
+  }
+});
+
+router.put("/custom-options/rename", async (req, res) => {
+  try {
+    const { fieldName, oldValue, newValue } = req.body || {};
+    if (!fieldName || !oldValue || !newValue) {
+      return res.status(400).json({ success: false, message: "fieldName, oldValue, and newValue are required" });
+    }
+    const result = await renameOpportunityOption(prisma, fieldName, oldValue, newValue);
+    emitOppChanges(req, "options_changed");
+    res.json(result);
+  } catch (err) {
+    console.error("PUT /opportunities/custom-options/rename", err);
+    res.status(err.status || 500).json({ success: false, message: err.message });
+  }
+});
+
+router.delete("/custom-options", async (req, res) => {
+  try {
+    const { fieldName, optionValue, transferTo } = req.body || {};
+    if (!fieldName || !optionValue) {
+      return res.status(400).json({ success: false, message: "fieldName and optionValue are required" });
+    }
+    const result = await deleteOpportunityOption(prisma, fieldName, optionValue, { transferTo });
+    emitOppChanges(req, "options_changed");
+    res.json(result);
+  } catch (err) {
+    console.error("DELETE /opportunities/custom-options", err);
+    res.status(err.status || 500).json({
+      success: false,
+      message: err.message,
+      code: err.code,
+      usage: err.usage,
+    });
+  }
+});
 
 router.get("/", async (req, res) => {
   try {
@@ -562,22 +617,10 @@ router.post("/", async (req, res) => {
     const title = String(req.body?.title || "").trim();
     if (!title) return res.status(400).json({ success: false, message: "title is required" });
 
-    const productCategory = req.body?.product_category ? normalizeEnum(req.body.product_category) : null;
-    if (productCategory && !PRODUCT_CATEGORIES.has(productCategory)) {
-      return res.status(400).json({ success: false, message: "Invalid product_category" });
-    }
-    const followupType = req.body?.followup_type ? normalizeEnum(req.body.followup_type) : null;
-    if (followupType && !FOLLOWUP_TYPES.has(followupType)) {
-      return res.status(400).json({ success: false, message: "Invalid followup_type" });
-    }
-    const opportunityType = req.body?.opportunity_type ? normalizeEnum(req.body.opportunity_type) : null;
-    if (opportunityType && !OPPORTUNITY_TYPES.has(opportunityType)) {
-      return res.status(400).json({ success: false, message: "Invalid opportunity_type" });
-    }
-    const leadSource = req.body?.lead_source ? normalizeEnum(req.body.lead_source) : null;
-    if (leadSource && !LEAD_SOURCES.has(leadSource)) {
-      return res.status(400).json({ success: false, message: "Invalid lead_source" });
-    }
+    const productCategory = parseOpportunityOptionValue(req.body?.product_category);
+    const followupType = parseOpportunityOptionValue(req.body?.followup_type);
+    const opportunityType = parseOpportunityOptionValue(req.body?.opportunity_type);
+    const leadSource = parseOpportunityOptionValue(req.body?.lead_source);
 
     const ownerId = Number(req.body?.owner_user_id) || req.user.id;
     const phone = req.body?.phone ? String(req.body.phone).trim().slice(0, 20) : null;
@@ -615,6 +658,10 @@ router.post("/", async (req, res) => {
     });
 
     const oppId = createdOpp.id;
+    await registerOpportunityOptionIfNeeded(prisma, "product_category", productCategory);
+    await registerOpportunityOptionIfNeeded(prisma, "followup_type", followupType);
+    await registerOpportunityOptionIfNeeded(prisma, "opportunity_type", opportunityType);
+    await registerOpportunityOptionIfNeeded(prisma, "source", leadSource);
     let row = await loadOpportunityScoped(req, oppId);
     if (followupAt && row) {
       await syncFollowupReminder(prisma, row, req.user.id);
@@ -642,22 +689,14 @@ router.put("/:id", async (req, res) => {
     }
     const stage = normalizeStage(stageRaw, normalizeStage(existing.stage));
 
-    const nextProductCategory = req.body?.product_category != null ? normalizeEnum(req.body.product_category) : null;
-    if (req.body?.product_category != null && nextProductCategory && !PRODUCT_CATEGORIES.has(nextProductCategory)) {
-      return res.status(400).json({ success: false, message: "Invalid product_category" });
-    }
-    const nextFollowupType = req.body?.followup_type != null ? normalizeEnum(req.body.followup_type) : null;
-    if (req.body?.followup_type != null && nextFollowupType && !FOLLOWUP_TYPES.has(nextFollowupType)) {
-      return res.status(400).json({ success: false, message: "Invalid followup_type" });
-    }
-    const nextOpportunityType = req.body?.opportunity_type != null ? normalizeEnum(req.body.opportunity_type) : null;
-    if (req.body?.opportunity_type != null && nextOpportunityType && !OPPORTUNITY_TYPES.has(nextOpportunityType)) {
-      return res.status(400).json({ success: false, message: "Invalid opportunity_type" });
-    }
-    const nextLeadSource = req.body?.lead_source != null ? normalizeEnum(req.body.lead_source) : null;
-    if (req.body?.lead_source != null && nextLeadSource && !LEAD_SOURCES.has(nextLeadSource)) {
-      return res.status(400).json({ success: false, message: "Invalid lead_source" });
-    }
+    const nextProductCategory =
+      req.body?.product_category != null ? parseOpportunityOptionValue(req.body.product_category) : null;
+    const nextFollowupType =
+      req.body?.followup_type != null ? parseOpportunityOptionValue(req.body.followup_type) : null;
+    const nextOpportunityType =
+      req.body?.opportunity_type != null ? parseOpportunityOptionValue(req.body.opportunity_type) : null;
+    const nextLeadSource =
+      req.body?.lead_source != null ? parseOpportunityOptionValue(req.body.lead_source) : null;
 
     const nextFollowupAt =
       req.body?.followup_at != null ? normalizeDatetime(req.body.followup_at) : existing.followup_at;
@@ -690,6 +729,19 @@ router.put("/:id", async (req, res) => {
         updated_at: new Date()
       }
     });
+
+    if (req.body?.product_category !== undefined) {
+      await registerOpportunityOptionIfNeeded(prisma, "product_category", nextProductCategory);
+    }
+    if (req.body?.followup_type !== undefined) {
+      await registerOpportunityOptionIfNeeded(prisma, "followup_type", nextFollowupType);
+    }
+    if (req.body?.opportunity_type !== undefined) {
+      await registerOpportunityOptionIfNeeded(prisma, "opportunity_type", nextOpportunityType);
+    }
+    if (req.body?.lead_source !== undefined) {
+      await registerOpportunityOptionIfNeeded(prisma, "source", nextLeadSource);
+    }
 
     let row = await loadOpportunityScoped(req, id);
     if (row && (req.body?.followup_at !== undefined || req.body?.followup_type !== undefined)) {

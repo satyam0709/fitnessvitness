@@ -36,6 +36,22 @@ async function getCustomers(req, res) {
   }
 }
 
+async function getCustomerById(req, res) {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id < 1) {
+      return res.status(400).json({ success: false, message: "Invalid customer id" });
+    }
+    const customer = await prisma.customers.findFirst({
+      where: { id, is_deleted: false },
+    });
+    if (!customer) return res.status(404).json({ success: false, message: "Customer not found" });
+    res.json({ success: true, customer });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+}
+
 async function createCustomer(req, res) {
   try {
     const { name, email, phone, company, city, country, lead_id } = req.body;
@@ -115,4 +131,4 @@ async function deleteCustomer(req, res) {
   }
 }
 
-module.exports = { getCustomers, createCustomer, updateCustomer, deleteCustomer };
+module.exports = { getCustomers, getCustomerById, createCustomer, updateCustomer, deleteCustomer };

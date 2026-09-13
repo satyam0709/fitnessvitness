@@ -14,6 +14,7 @@ const {
 } = require("../realtime/meetingsRealtime");
 const { fetchGoogleEvents } = require("../services/googleCalendarService");
 const { fetchAppleEvents, isConnected: isAppleCalendarConnected, getAppleCalendarSettings } = require("../services/appleCalendarService");
+const { promisePool } = require("../utils/promisePool");
 
 const GOOGLE_FETCH_TIMEOUT_MS = 3000;
 const OVERDUE_LIMIT = 200;
@@ -1739,25 +1740,30 @@ router.get("/", async (req, res) => {
       collectionFollowups,
       paymentDues,
       fitnessClientTasks,
-    ] = await Promise.all([
-      safeFetch("todos", () => fetchTodos(date, userId, tenantId)),
-      safeFetch("meetings", () => fetchMeetings(date, userId)),
-      safeFetch("reminders", () => fetchReminders(date, userId)),
-      safeFetch("lead_followup", () => fetchLeadFollowups(date, userId, tenantId)),
-      safeFetch("client_followup", () => fetchClientFollowups(date)),
-      safeFetch("tasks", () => fetchTasks(date, userId, tenantId)),
-      safeFetch("calendar_events", () => fetchCalendarEvents(date, userId)),
-      includeGoogle
-        ? safeFetch("google_events", () => fetchGoogleEventsForToday(date))
-        : Promise.resolve([]),
-      safeFetch("apple_events", () => fetchAppleEventsForToday(date, userId)),
-      safeFetch("opportunity_followup", () => fetchOpportunityFollowups(date, userId)),
-      safeFetch("collection_followup", () =>
-        fetchCollectionFollowups(date, userId, req.user?.role)
-      ),
-      safeFetch("fitness_payment_due", () => fetchPaymentDues(date)),
-      safeFetch("fitness_client_task", () => fetchFitnessClientTasks(date)),
-    ]);
+    ] = await promisePool(
+      [
+        () => safeFetch("todos", () => fetchTodos(date, userId, tenantId)),
+        () => safeFetch("meetings", () => fetchMeetings(date, userId)),
+        () => safeFetch("reminders", () => fetchReminders(date, userId)),
+        () => safeFetch("lead_followup", () => fetchLeadFollowups(date, userId, tenantId)),
+        () => safeFetch("client_followup", () => fetchClientFollowups(date)),
+        () => safeFetch("tasks", () => fetchTasks(date, userId, tenantId)),
+        () => safeFetch("calendar_events", () => fetchCalendarEvents(date, userId)),
+        () =>
+          includeGoogle
+            ? safeFetch("google_events", () => fetchGoogleEventsForToday(date))
+            : [],
+        () => safeFetch("apple_events", () => fetchAppleEventsForToday(date, userId)),
+        () => safeFetch("opportunity_followup", () => fetchOpportunityFollowups(date, userId)),
+        () =>
+          safeFetch("collection_followup", () =>
+            fetchCollectionFollowups(date, userId, req.user?.role)
+          ),
+        () => safeFetch("fitness_payment_due", () => fetchPaymentDues(date)),
+        () => safeFetch("fitness_client_task", () => fetchFitnessClientTasks(date)),
+      ],
+      3
+    );
 
     const raw = [
       ...todos,
@@ -1779,29 +1785,39 @@ router.get("/", async (req, res) => {
     );
     const summary = buildSummary(items);
     const upcomingRaw = (
-      await Promise.all([
-        safeFetch("upcoming_todos", () => fetchUpcomingTodos(date, userId, tenantId)),
-        safeFetch("upcoming_tasks", () => fetchUpcomingTasks(date, userId, tenantId)),
-        safeFetch("upcoming_meetings", () => fetchUpcomingMeetings(date, userId)),
-        safeFetch("upcoming_reminders", () => fetchUpcomingReminders(date, userId)),
-        safeFetch("upcoming_calendar_events", () => fetchUpcomingCalendarEvents(date, userId)),
-        includeGoogle
-          ? safeFetch("upcoming_google_events", () => fetchGoogleEventsUpcoming(date))
-          : Promise.resolve([]),
-        safeFetch("upcoming_apple_events", () => fetchAppleEventsUpcoming(date, userId)),
-        safeFetch("upcoming_client_followups", () => fetchUpcomingClientFollowups(date)),
-        safeFetch("upcoming_lead_followups", () =>
-          fetchUpcomingLeadFollowups(date, userId, tenantId)
-        ),
-        safeFetch("upcoming_opportunity_followups", () =>
-          fetchUpcomingOpportunityFollowups(date, userId)
-        ),
-        safeFetch("upcoming_collection_followups", () =>
-          fetchUpcomingCollectionFollowups(date, userId, req.user?.role)
-        ),
-        safeFetch("upcoming_fitness_client_tasks", () => fetchUpcomingFitnessClientTasks(date)),
-        safeFetch("upcoming_payment_dues", () => fetchUpcomingPaymentDues(date)),
-      ])
+      await promisePool(
+        [
+          () => safeFetch("upcoming_todos", () => fetchUpcomingTodos(date, userId, tenantId)),
+          () => safeFetch("upcoming_tasks", () => fetchUpcomingTasks(date, userId, tenantId)),
+          () => safeFetch("upcoming_meetings", () => fetchUpcomingMeetings(date, userId)),
+          () => safeFetch("upcoming_reminders", () => fetchUpcomingReminders(date, userId)),
+          () =>
+            safeFetch("upcoming_calendar_events", () => fetchUpcomingCalendarEvents(date, userId)),
+          () =>
+            includeGoogle
+              ? safeFetch("upcoming_google_events", () => fetchGoogleEventsUpcoming(date))
+              : [],
+          () =>
+            safeFetch("upcoming_apple_events", () => fetchAppleEventsUpcoming(date, userId)),
+          () => safeFetch("upcoming_client_followups", () => fetchUpcomingClientFollowups(date)),
+          () =>
+            safeFetch("upcoming_lead_followups", () =>
+              fetchUpcomingLeadFollowups(date, userId, tenantId)
+            ),
+          () =>
+            safeFetch("upcoming_opportunity_followups", () =>
+              fetchUpcomingOpportunityFollowups(date, userId)
+            ),
+          () =>
+            safeFetch("upcoming_collection_followups", () =>
+              fetchUpcomingCollectionFollowups(date, userId, req.user?.role)
+            ),
+          () =>
+            safeFetch("upcoming_fitness_client_tasks", () => fetchUpcomingFitnessClientTasks(date)),
+          () => safeFetch("upcoming_payment_dues", () => fetchUpcomingPaymentDues(date)),
+        ],
+        3
+      )
     ).flat();
     const upcoming = sortItems(
       upcomingRaw.map((row) => enrichTodayItem(normalizeItem(row), date))

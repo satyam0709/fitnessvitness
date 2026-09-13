@@ -358,9 +358,16 @@ async function getReceiptPayload(invoiceId, user) {
   delete invoice.line_items_json;
   delete invoice.payment_meta_json;
 
-  const company = await prisma.company_settings.findUnique({
-    where: { id: 1 },
-  });
+  let company = {};
+  try {
+    const { getWebSettings } = require("./webSettingsService");
+    const { fileToDataUri } = require("./invoiceDocumentHtml");
+    const pack = await getWebSettings();
+    company = pack?.data || {};
+    company.logo_data_uri = fileToDataUri(null, company.logo_path);
+  } catch {
+    company = {};
+  }
   return { invoice, company };
 }
 

@@ -6,19 +6,20 @@ import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
 import { useTodayFeed } from "@/lib/useTodayFeed";
 import { useToast } from "@/components/Toast/ToastContext";
+import { CrmFilterStrip } from "@/components/UI/CrmFilterStrip";
 import styles from "./todayPage.module.css";
 
 const FILTERS = [
-  { id: "all", label: "All" },
-  { id: "calls", label: "📞 Calls" },
-  { id: "tasks", label: "📋 Tasks" },
-  { id: "meetings", label: "🤝 Meetings" },
-  { id: "reminders", label: "🔔 Reminders" },
-  { id: "events", label: "📅 Events" },
-  { id: "checkins", label: "⚖️ Check-ins" },
-  { id: "plans", label: "🍽 Plans" },
-  { id: "prospects", label: "🎯 Prospects" },
-  { id: "payments", label: "💰 Payments" },
+  { id: "all", label: "All", color: "#64748b" },
+  { id: "calls", label: "Calls", color: "#0d9488" },
+  { id: "tasks", label: "Tasks", color: "#6366f1" },
+  { id: "meetings", label: "Meetings", color: "#2563eb" },
+  { id: "reminders", label: "Reminders", color: "#f59e0b" },
+  { id: "events", label: "Events", color: "#e11d48" },
+  { id: "checkins", label: "Check-ins", color: "#16a34a" },
+  { id: "plans", label: "Plans", color: "#0ea5e9" },
+  { id: "prospects", label: "Prospects", color: "#ea580c" },
+  { id: "payments", label: "Payments", color: "#16a34a" },
 ];
 
 const SOURCE_META = {
@@ -226,6 +227,7 @@ export default function TodayPage() {
   const { showToast } = useToast();
   const { loading, error, summary, items, upcoming, load } = useTodayFeed({ enabled: isLoaded });
   const [filter, setFilter] = useState("all");
+  const [bucket, setBucket] = useState("all");
   const [doneSession, setDoneSession] = useState([]);
   const [doneExpanded, setDoneExpanded] = useState(false);
   const [doingKey, setDoingKey] = useState(null);
@@ -296,36 +298,52 @@ export default function TodayPage() {
   const overdueCount = summary?.overdue ?? overdueItems.length;
   const dueTodayCount = summary?.due_today ?? todayItems.length;
 
+  const typeCounts = useMemo(() => {
+    const pool = displayItems.filter((it) => !doneKeys.has(itemKey(it)));
+    const out = {};
+    for (const f of FILTERS) {
+      out[f.id] = f.id === "all" ? pool.length : pool.filter((it) => matchesFilter(it, f.id)).length;
+    }
+    return out;
+  }, [displayItems, doneKeys]);
+
+  const showOverdue = bucket === "all" || bucket === "overdue";
+  const showToday = bucket === "all" || bucket === "today";
+  const showUpcoming = bucket === "all";
+  const showDone = bucket === "all" || bucket === "done";
+
+  useEffect(() => {
+    if (bucket === "done") setDoneExpanded(true);
+  }, [bucket]);
+
   return (
     <div className={styles.page}>
       <header className={styles.header}>
         <h1 className={styles.title}>Today&apos;s Command Center</h1>
         <p className={styles.subtitle}>{formatHeaderDate()}</p>
-        <div className={styles.stats}>
-          <span className={`${styles.statChip} ${styles.statOverdue}`}>
-            🔴 {overdueCount} Overdue
-          </span>
-          <span className={`${styles.statChip} ${styles.statDue}`}>
-            🟡 {dueTodayCount} Due Today
-          </span>
-          <span className={`${styles.statChip} ${styles.statDone}`}>
-            ✅ {sessionDoneCount} Done This Session
-          </span>
-        </div>
+        <CrmFilterStrip
+          ariaLabel="Today status"
+          activeKey={bucket}
+          items={[
+            { key: "all", label: "All Today", count: (overdueCount || 0) + (dueTodayCount || 0), color: "#64748b" },
+            { key: "overdue", label: "Overdue", count: overdueCount, color: "#dc2626" },
+            { key: "today", label: "Due Today", count: dueTodayCount, color: "#f59e0b" },
+            { key: "done", label: "Done This Session", count: sessionDoneCount, color: "#16a34a" },
+          ]}
+          onSelect={(key) => setBucket((prev) => (prev === key ? "all" : key || "all"))}
+        />
+        <CrmFilterStrip
+          ariaLabel="Filter by type"
+          activeKey={filter}
+          items={FILTERS.map((f) => ({
+            key: f.id,
+            label: f.label,
+            count: typeCounts[f.id] || 0,
+            color: f.color,
+          }))}
+          onSelect={(key) => setFilter(key || "all")}
+        />
       </header>
-
-      <div className={styles.filters}>
-        {FILTERS.map((f) => (
-          <button
-            key={f.id}
-            type="button"
-            className={`${styles.filterBtn} ${filter === f.id ? styles.filterActive : ""}`}
-            onClick={() => setFilter(f.id)}
-          >
-            {f.label}
-          </button>
-        ))}
-      </div>
 
       {error ? <div className={styles.error}>{error}</div> : null}
 
@@ -337,10 +355,10 @@ export default function TodayPage() {
         </div>
       ) : (
         <>
-          {overdueItems.length > 0 ? (
+          {showOverdue && overdueItems.length > 0 ? (
             <section className={styles.section}>
               <h2 className={`${styles.sectionHeader} ${styles.sectionOverdue}`}>
-                ⚠️ Overdue — {overdueItems.length} items from before today
+                Overdue — {overdueItems.length} items from before today
               </h2>
               <div className={styles.cardList}>
                 {overdueItems.map((it) => (
@@ -355,27 +373,29 @@ export default function TodayPage() {
             </section>
           ) : null}
 
-          <section className={styles.section}>
-            <h2 className={`${styles.sectionHeader} ${styles.sectionToday}`}>
-              📅 Today — {todayItems.length} items
-            </h2>
-            {todayItems.length === 0 && overdueItems.length === 0 ? (
-              <p className={styles.empty}>✅ All clear for today!</p>
-            ) : (
-              <div className={styles.cardList}>
-                {todayItems.map((it) => (
-                  <TodayCard
-                    key={itemKey(it)}
-                    item={it}
-                    onDone={handleDone}
-                    doing={doingKey === itemKey(it)}
-                  />
-                ))}
-              </div>
-            )}
-          </section>
+          {showToday ? (
+            <section className={styles.section}>
+              <h2 className={`${styles.sectionHeader} ${styles.sectionToday}`}>
+                Today — {todayItems.length} items
+              </h2>
+              {todayItems.length === 0 && overdueItems.length === 0 ? (
+                <p className={styles.empty}>All clear for today!</p>
+              ) : (
+                <div className={styles.cardList}>
+                  {todayItems.map((it) => (
+                    <TodayCard
+                      key={itemKey(it)}
+                      item={it}
+                      onDone={handleDone}
+                      doing={doingKey === itemKey(it)}
+                    />
+                  ))}
+                </div>
+              )}
+            </section>
+          ) : null}
 
-          {filteredUpcoming.length > 0 ? (
+          {showUpcoming && filteredUpcoming.length > 0 ? (
             <section className={styles.section}>
               <h2 className={`${styles.sectionHeader} ${styles.sectionUpcoming}`}>
                 Upcoming — {filteredUpcoming.length} next up
@@ -393,7 +413,7 @@ export default function TodayPage() {
             </section>
           ) : null}
 
-          {filteredDone.length > 0 ? (
+          {showDone && filteredDone.length > 0 ? (
             <section className={styles.section}>
               <h2
                 className={`${styles.sectionHeader} ${styles.sectionDone}`}
@@ -404,7 +424,7 @@ export default function TodayPage() {
                 role="button"
                 tabIndex={0}
               >
-                ✅ Done Today ({filteredDone.length}) {doneExpanded ? "▼" : "▶"}
+                Done Today ({filteredDone.length}) {doneExpanded ? "▼" : "▶"}
               </h2>
               {doneExpanded ? (
                 <div className={styles.cardList}>

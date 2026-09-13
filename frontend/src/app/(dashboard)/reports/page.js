@@ -16,6 +16,7 @@ import {
   Legend,
 } from "recharts";
 import { apiFetch, getApiBase } from "@/lib/api";
+import { subscribeCrmLive } from "@/lib/chatRealtime";
 import styles from "./reports.module.css";
 
 const RevenuePieCard = dynamic(
@@ -128,6 +129,14 @@ export default function ReportsPage() {
   useEffect(() => {
     loadReports();
   }, [loadReports]);
+
+  useEffect(() => {
+    if (!isLoaded) return undefined;
+    return subscribeCrmLive(
+      ["leads:changed", "tasks:changed", "opportunities:changed", "invoices:changed", "collections:changed"],
+      () => loadReports()
+    );
+  }, [isLoaded, loadReports]);
 
   const summary = useMemo(() => {
     const pipelineTotal = data.pipeline.reduce((acc, r) => acc + Number(r.count || 0), 0);
@@ -321,7 +330,7 @@ export default function ReportsPage() {
                   <XAxis dataKey="status" />
                   <YAxis />
                   <Tooltip />
-                  <Bar dataKey="count" fill="#f5c400" radius={[6, 6, 0, 0]} />
+                  <Bar dataKey="count" fill="#8bc34a" radius={[6, 6, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             ) : activeTab === "conversion" ? (
@@ -358,7 +367,7 @@ export default function ReportsPage() {
                   <YAxis />
                   <Tooltip />
                   <Legend />
-                  <Line type="monotone" dataKey="revenue_total" name="Invoice revenue" stroke="#f5c400" strokeWidth={3} />
+                  <Line type="monotone" dataKey="revenue_total" name="Invoice revenue" stroke="#8bc34a" strokeWidth={3} />
                   <Line type="monotone" dataKey="booked_won_total" name="Booked Closed Won" stroke="#16a34a" strokeWidth={2} />
                 </LineChart>
               </ResponsiveContainer>

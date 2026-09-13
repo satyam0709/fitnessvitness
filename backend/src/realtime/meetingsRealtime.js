@@ -215,6 +215,21 @@ function emitInvoicesChanged(payload) {
   ioRef.emit("invoices:changed", payload || {});
 }
 
+function emitQuotationsChanged(payload) {
+  if (!ioRef) return;
+  ioRef.emit("quotations:changed", payload || {});
+}
+
+function emitBrochuresChanged(payload) {
+  if (!ioRef) return;
+  ioRef.emit("brochures:changed", payload || {});
+}
+
+function emitStorageChanged(payload) {
+  if (!ioRef) return;
+  ioRef.emit("storage:changed", payload || {});
+}
+
 /** Broadcast CRM opportunity list changes to connected clients (same pattern as fitness). */
 function emitOpportunitiesChanged(payload) {
   if (!ioRef) return;
@@ -253,11 +268,17 @@ function emitNotesChanged(payload) {
   ioRef.emit("notes:changed", payload || {});
 }
 
-function emitUserEvent(userId, payload) {
+function emitUserEvent(userId, eventNameOrPayload, payload) {
   if (!ioRef || userId == null) return;
   const uid = Number(userId);
   if (!Number.isFinite(uid) || uid <= 0) return;
-  ioRef.to(`user:${uid}`).emit("user:event", payload || {});
+  if (typeof eventNameOrPayload === "string") {
+    const data = payload || {};
+    ioRef.to(`user:${uid}`).emit(eventNameOrPayload, data);
+    ioRef.emit(eventNameOrPayload, data);
+    return;
+  }
+  ioRef.to(`user:${uid}`).emit("user:event", eventNameOrPayload || {});
 }
 
 function emitWorkspaceAccessChanged(payload) {
@@ -281,6 +302,9 @@ module.exports = {
   emitFitnessChanged,
   emitCollectionsChanged,
   emitInvoicesChanged,
+  emitQuotationsChanged,
+  emitBrochuresChanged,
+  emitStorageChanged,
   emitOpportunitiesChanged,
   emitRemindersChanged,
   emitLeadsChanged,

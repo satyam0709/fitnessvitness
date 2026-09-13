@@ -18,6 +18,7 @@ import { subscribeCrmLive } from "@/lib/chatRealtime";
 import { useListHighlight, itemHighlightClass } from "@/lib/useListHighlight";
 import { useToast } from "@/components/Toast/ToastContext";
 import CrmShellModal from "@/components/Dashboard/CrmShellModal";
+import { CrmFilterStrip } from "@/components/UI/CrmFilterStrip";
 import styles from "./collectionsPage.module.css";
 
 const PAY_MODES = ["GPay", "Cash", "Online Transfer", "Cheque", "UPI", "NEFT"];
@@ -301,34 +302,41 @@ function CollectionsPageInner() {
       </header>
 
       {summary && (
-        <div className={styles.stats}>
-          <div className={styles.stat}>
-            <div className={styles.statLabel}>Open</div>
-            <div className={styles.statValue}>{summary.open_count ?? 0}</div>
-          </div>
-          <div className={`${styles.stat} ${styles.statWarn}`}>
-            <div className={styles.statLabel}>Due today</div>
-            <div className={styles.statValue}>{summary.due_today ?? 0}</div>
-          </div>
-          <div className={`${styles.stat} ${styles.statWarn}`}>
-            <div className={styles.statLabel}>Overdue</div>
-            <div className={styles.statValue}>{summary.overdue ?? 0}</div>
-          </div>
-          <div className={`${styles.stat} ${styles.statOk}`}>
-            <div className={styles.statLabel}>Total pending</div>
-            <div className={styles.statValue}>{fmtInr(summary.total_pending_inr)}</div>
-          </div>
-          <Link href="/opportunities?view=won" className={`${styles.stat} ${styles.statBooked}`}>
-            <div className={styles.statLabel}>Booked won (MTD)</div>
-            <div className={styles.statValue}>{fmtInr(summary.booked_closed_won_mtd)}</div>
-          </Link>
-          <Link href="/opportunities?view=lost" className={`${styles.stat} ${styles.statLost}`}>
-            <div className={styles.statLabel}>Closed lost (MTD)</div>
-            <div className={styles.statValue}>
-              {summary.closed_lost_count_mtd ?? 0} · {fmtInr(summary.closed_lost_value_mtd)}
-            </div>
-          </Link>
-        </div>
+        <CrmFilterStrip
+          ariaLabel="Filter collections"
+          activeKey={due || "open"}
+          items={[
+            { key: "open", label: "Open", count: summary.open_count ?? 0, color: "#0ea5e9" },
+            { key: "today", label: "Due Today", count: summary.due_today ?? 0, color: "#f59e0b" },
+            { key: "overdue", label: "Overdue", count: summary.overdue ?? 0, color: "#dc2626" },
+            { key: "all", label: "All", color: "#64748b" },
+            {
+              key: "pending_inr",
+              label: "Total pending",
+              count: fmtInr(summary.total_pending_inr),
+              color: "#16a34a",
+              onClick: () => setDue("open"),
+            },
+            {
+              key: "booked_won",
+              label: "Booked won (MTD)",
+              count: fmtInr(summary.booked_closed_won_mtd),
+              color: "#16a34a",
+              href: "/opportunities?view=won",
+            },
+            {
+              key: "closed_lost",
+              label: "Closed lost (MTD)",
+              count: `${summary.closed_lost_count_mtd ?? 0} · ${fmtInr(summary.closed_lost_value_mtd)}`,
+              color: "#9333ea",
+              href: "/opportunities?view=lost",
+            },
+          ]}
+          onSelect={(key) => {
+            if (key === "pending_inr" || key === "booked_won" || key === "closed_lost") return;
+            setDue(key);
+          }}
+        />
       )}
 
       {error && <div className={styles.error}>{error}</div>}

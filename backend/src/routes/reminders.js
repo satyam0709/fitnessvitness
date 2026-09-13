@@ -2,6 +2,7 @@ const express = require("express");
 const { verifyToken } = require("../middleware/verifyToken");
 const {
   getReminders,
+  getReminderMeta,
   createReminder,
   updateReminder,
   markReminderDone,
@@ -12,6 +13,7 @@ const {
 const router = express.Router();
 router.use(verifyToken);
 
+router.get("/meta", getReminderMeta);
 router.get("/", getReminders);
 router.post("/", createReminder);
 router.post("/bulk-delete", bulkDeleteReminders);

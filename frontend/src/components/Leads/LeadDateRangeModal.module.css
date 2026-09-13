@@ -35,14 +35,14 @@
   padding: 14px 18px;
   background: linear-gradient(
     135deg,
-    var(--crm-modal-header-start, #1a1a2e) 0%,
-    var(--crm-modal-header-end, #2d2d4e) 100%
+    var(--crm-modal-header-start, #1a1a1a) 0%,
+    var(--crm-modal-header-end, #2a2a2a) 100%
   );
-  color: var(--crm-modal-accent, var(--yellow, #f5c400));
+  color: var(--crm-modal-accent, var(--yellow, #8bc34a));
   font-family: var(--font-primary);
   font-size: 16px;
   font-weight: 800;
-  border-bottom: 2px solid var(--crm-modal-accent, var(--yellow, #f5c400));
+  border-bottom: 2px solid var(--crm-modal-accent, var(--yellow, #8bc34a));
 }
 
 .closeBtn {
@@ -50,8 +50,8 @@
   height: 36px;
   border: none;
   border-radius: 8px;
-  background: var(--crm-modal-accent-dim, rgba(245, 196, 0, 0.18));
-  color: var(--yellow, #f5c400);
+  background: var(--crm-modal-accent-dim, rgba(139, 195, 74, 0.18));
+  color: var(--yellow, #8bc34a);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -62,8 +62,8 @@
 }
 
 .closeBtn:hover {
-  background: var(--yellow, #f5c400);
-  color: var(--btn-primary-txt, #1a1a2e);
+  background: var(--yellow, #8bc34a);
+  color: var(--btn-primary-txt, #1a1a1a);
 }
 
 .body {
@@ -106,7 +106,7 @@
   border: none;
   border-radius: 8px;
   background: transparent;
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 600;
@@ -115,14 +115,14 @@
 }
 
 .presetBtn:hover {
-  background: var(--yellow-tint, rgba(245, 196, 0, 0.12));
+  background: var(--yellow-tint, rgba(139, 195, 74, 0.12));
 }
 
 .presetBtnActive {
-  background: var(--yellow-tint, rgba(245, 196, 0, 0.12));
-  color: var(--text-main, #1a1a2e);
+  background: var(--yellow-tint, rgba(139, 195, 74, 0.12));
+  color: var(--text-main, #1a1a1a);
   font-weight: 800;
-  box-shadow: inset 0 0 0 1px var(--yellow, #f5c400);
+  box-shadow: inset 0 0 0 1px var(--yellow, #8bc34a);
 }
 
 .customBlock {
@@ -194,13 +194,13 @@
   border-radius: 8px;
   font-family: var(--font-primary);
   font-size: 13px;
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
 }
 
 .rangeField input:focus {
   outline: none;
-  border-color: var(--yellow, #f5c400);
-  box-shadow: 0 0 0 2px var(--crm-modal-accent-dim, rgba(245, 196, 0, 0.25));
+  border-color: var(--yellow, #8bc34a);
+  box-shadow: 0 0 0 2px var(--crm-modal-accent-dim, rgba(139, 195, 74, 0.25));
 }
 
 .navRow {
@@ -217,7 +217,7 @@
   border: 1px solid var(--border, #e2e8f0);
   border-radius: 8px;
   background: var(--bg-card, #fff);
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -226,8 +226,8 @@
 }
 
 .navBtn:hover {
-  background: var(--yellow-tint, rgba(245, 196, 0, 0.12));
-  border-color: rgba(245, 196, 0, 0.45);
+  background: var(--yellow-tint, rgba(139, 195, 74, 0.12));
+  border-color: rgba(139, 195, 74, 0.45);
 }
 
 .monthSelects {
@@ -244,7 +244,7 @@
   font-size: 13px;
   font-weight: 600;
   background: var(--bg-card, #fff);
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
 }
 
 .calendars {
@@ -268,7 +268,7 @@
   font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 800;
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   margin-bottom: 8px;
 }
 
@@ -308,7 +308,7 @@
   cursor: pointer;
   font-size: 12px;
   font-weight: 600;
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   transition: background 0.1s;
 }
 
@@ -322,32 +322,32 @@
 }
 
 .dayCellToday .dayNum {
-  border-bottom: 2px solid var(--yellow, #f5c400);
+  border-bottom: 2px solid var(--yellow, #8bc34a);
   padding-bottom: 1px;
 }
 
 .dayInRange {
-  background: var(--crm-modal-accent-dim, rgba(245, 196, 0, 0.2));
+  background: var(--crm-modal-accent-dim, rgba(139, 195, 74, 0.2));
 }
 
 .dayRangeStart,
 .dayRangeEnd {
-  background: var(--yellow, #f5c400) !important;
-  color: var(--btn-primary-txt, #1a1a2e) !important;
+  background: var(--yellow, #8bc34a) !important;
+  color: var(--btn-primary-txt, #1a1a1a) !important;
 }
 
 .dayRangeStart.dayInRange,
 .dayRangeEnd.dayInRange {
-  background: var(--yellow, #f5c400) !important;
-  color: var(--btn-primary-txt, #1a1a2e) !important;
+  background: var(--yellow, #8bc34a) !important;
+  color: var(--btn-primary-txt, #1a1a1a) !important;
 }
 
 .markerDot {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: var(--bg-deep, #1a1a2e);
-  border: 1px solid var(--yellow, #f5c400);
+  background: var(--bg-deep, #1a1a1a);
+  border: 1px solid var(--yellow, #8bc34a);
   margin-top: 2px;
   flex-shrink: 0;
 }
@@ -366,7 +366,7 @@
   border-radius: 8px;
   border: 1px solid var(--border, #e2e8f0);
   background: var(--bg-card, #fff);
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 700;
@@ -381,18 +381,18 @@
   padding: 10px 22px;
   border-radius: 8px;
   border: none;
-  background: var(--btn-primary-bg, #f5c400);
-  color: var(--btn-primary-txt, #1a1a2e);
+  background: var(--btn-primary-bg, #8bc34a);
+  color: var(--btn-primary-txt, #1a1a1a);
   font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 800;
   cursor: pointer;
   transition: background 0.15s, transform 0.12s;
-  box-shadow: 0 2px 8px rgba(245, 196, 0, 0.35);
+  box-shadow: 0 2px 8px rgba(139, 195, 74, 0.35);
 }
 
 .btnSubmit:hover {
-  background: var(--yellow-hover, #d4a900);
+  background: var(--yellow-hover, #7cb342);
 }
 
 .btnSubmit:active {

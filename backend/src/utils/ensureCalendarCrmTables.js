@@ -12,6 +12,20 @@ async function tableCount(pool, tableName) {
   return Number(row?.c) || 0;
 }
 
+async function indexExists(pool, tableName, indexName) {
+  const [rows] = await pool.execute(
+    `SELECT 1 FROM information_schema.STATISTICS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ? LIMIT 1`,
+    [tableName, indexName]
+  );
+  return rows.length > 0;
+}
+
+async function addIndexIfMissing(pool, tableName, indexName, columnsSql) {
+  if (await indexExists(pool, tableName, indexName)) return;
+  await pool.execute(`ALTER TABLE \`${tableName}\` ADD INDEX \`${indexName}\` (${columnsSql})`);
+}
+
 async function ensureCalendarCrmTables(poolArg) {
   const pool = poolArg || require("../config/ddlPool").pool;
   const hasUsers = (await tableCount(pool, "users")) > 0;
@@ -267,11 +281,7 @@ async function ensureCalendarCrmTables(poolArg) {
        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'reminders' AND CONSTRAINT_NAME = 'fk_reminder_assignee'`
     );
     if (!fkRem.length) {
-      try {
-        await pool.execute("ALTER TABLE reminders ADD INDEX idx_assigned_to (assigned_to_user_id)");
-      } catch {
-        /* exists */
-      }
+      await addIndexIfMissing(pool, "reminders", "idx_assigned_to", "assigned_to_user_id");
       try {
         await pool.execute(
           `ALTER TABLE reminders ADD CONSTRAINT fk_reminder_assignee
@@ -301,11 +311,7 @@ async function ensureCalendarCrmTables(poolArg) {
         await pool.execute(`ALTER TABLE meetings ADD COLUMN \`${column}\` ${definition}`);
       }
     }
-    try {
-      await pool.execute("ALTER TABLE meetings ADD INDEX idx_meeting_assignee (assigned_to_user_id)");
-    } catch {
-      /* exists */
-    }
+    await addIndexIfMissing(pool, "meetings", "idx_meeting_assignee", "assigned_to_user_id");
     const [fkMa] = await pool.execute(
       `SELECT CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS
        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'meetings' AND CONSTRAINT_NAME = 'fk_meeting_assignee'`
@@ -320,11 +326,7 @@ async function ensureCalendarCrmTables(poolArg) {
         console.warn("ensureCalendarCrmTables: fk_meeting_assignee:", e.message);
       }
     }
-    try {
-      await pool.execute("ALTER TABLE meetings ADD INDEX idx_meeting_recurrence (recurrence)");
-    } catch {
-      /* exists */
-    }
+    await addIndexIfMissing(pool, "meetings", "idx_meeting_recurrence", "recurrence");
   }
 }
 

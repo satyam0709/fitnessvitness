@@ -84,6 +84,9 @@ export default function ManageTaskCustomOptionsModal({ onClose, onDone }) {
   const [err, setErr] = useState("");
   const [toast, setToast] = useState("");
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [newValue, setNewValue] = useState("");
+  const [newLabel, setNewLabel] = useState("");
+  const [adding, setAdding] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -184,6 +187,41 @@ export default function ManageTaskCustomOptionsModal({ onClose, onDone }) {
     }
   }
 
+  async function handleAdd() {
+    const val = newValue.trim();
+    if (!val) {
+      setErr("Value is required");
+      return;
+    }
+    setAdding(true);
+    setErr("");
+    try {
+      const res = await apiFetch("/tasks/custom-options", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fieldName: activeField,
+          value: val,
+          label: newLabel.trim() || val,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        setErr(json.message || "Add failed");
+        return;
+      }
+      showToast(`Added "${newLabel.trim() || val}"`);
+      setNewValue("");
+      setNewLabel("");
+      await fetchOptions();
+      onDone?.();
+    } catch {
+      setErr("Network error");
+    } finally {
+      setAdding(false);
+    }
+  }
+
   if (!mounted) return null;
 
   return createPortal(
@@ -241,7 +279,6 @@ export default function ManageTaskCustomOptionsModal({ onClose, onDone }) {
               <div className={styles.empty}>
                 <i className="fas fa-inbox" />
                 <span>No custom {activeTab.label.toLowerCase()} yet.</span>
-                <small>Create one by picking &quot;Other&quot; when creating a task.</small>
               </div>
             ) : (
               <ul className={styles.list}>
@@ -313,6 +350,29 @@ export default function ManageTaskCustomOptionsModal({ onClose, onDone }) {
                 })}
               </ul>
             )}
+
+            <div className={styles.addRow}>
+              <div className={styles.fieldStack}>
+                <input
+                  className={styles.editInput}
+                  placeholder="Custom value"
+                  value={newValue}
+                  onChange={(e) => setNewValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleAdd();
+                  }}
+                />
+              </div>
+              <input
+                className={styles.editInput}
+                placeholder="Label (optional)"
+                value={newLabel}
+                onChange={(e) => setNewLabel(e.target.value)}
+              />
+              <button type="button" className={styles.btnAdd} onClick={handleAdd} disabled={adding}>
+                {adding ? "Adding…" : "Add"}
+              </button>
+            </div>
           </div>
 
           <div className={styles.footer}>

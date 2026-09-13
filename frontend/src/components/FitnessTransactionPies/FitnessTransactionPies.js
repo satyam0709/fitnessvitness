@@ -4,11 +4,11 @@ import { RevenuePieCard } from "@/components/Dashboard/RevenuePieCard";
 import styles from "./FitnessTransactionPies.module.css";
 
 const TYPE_COLORS = {
-  Membership: "#0ea5e9",
-  Supplement: "#10b981",
-  Other: "#64748b",
+  Membership: "#8bc34a",
+  Supplement: "#1a1a1a",
+  Other: "#689f38",
 };
-const PAY_PALETTE = ["#8b5cf6", "#f59e0b", "#ec4899", "#06b6d4", "#eab308", "#14b8a6", "#94a3b8"];
+const PAY_PALETTE = ["#8bc34a", "#1a1a1a", "#7cb342", "#689f38", "#558b2f", "#33691e", "#aed581"];
 
 function fmtInr(n) {
   return new Intl.NumberFormat("en-IN", {

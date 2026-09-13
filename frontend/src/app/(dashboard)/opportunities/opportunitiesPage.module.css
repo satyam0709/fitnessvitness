@@ -128,7 +128,7 @@
 .btnPrimary {
   background: var(--yellow);
   border-color: var(--yellow);
-  color: #1a1a2e;
+  color: #1a1a1a;
 }
 
 .btnGhost {
@@ -284,11 +284,11 @@
   padding: 16px 20px;
   background: linear-gradient(
     135deg,
-    var(--crm-modal-header-start, #1a1a2e) 0%,
-    var(--crm-modal-header-end, #2d2d4e) 100%
+    var(--crm-modal-header-start, #1a1a1a) 0%,
+    var(--crm-modal-header-end, #2a2a2a) 100%
   );
   color: #fff;
-  border-bottom: 3px solid var(--crm-modal-accent, #f5c400);
+  border-bottom: 3px solid var(--crm-modal-accent, #8bc34a);
 }
 
 .modalHead h2 {
@@ -296,7 +296,7 @@
   font-family: var(--font-primary);
   font-size: 18px;
   font-weight: 800;
-  color: var(--crm-modal-accent, #f5c400);
+  color: var(--crm-modal-accent, #8bc34a);
 }
 
 .modalCloseBtn {
@@ -304,7 +304,7 @@
   height: 36px;
   border: none;
   border-radius: 6px;
-  background: rgba(245, 196, 0, 0.15);
+  background: rgba(139, 195, 74, 0.15);
   color: #fff;
   display: inline-flex;
   align-items: center;
@@ -313,7 +313,7 @@
 }
 
 .modalCloseBtn:hover {
-  background: rgba(245, 196, 0, 0.28);
+  background: rgba(139, 195, 74, 0.28);
 }
 
 .modalFormGrid {

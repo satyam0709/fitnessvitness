@@ -1,5 +1,5 @@
 .hero {
-  background: linear-gradient(135deg, #1a1a2e, #2d2d4e);
+  background: linear-gradient(135deg, #1a1a1a, #2a2a2a);
   padding: 120px 24px 80px;
   text-align: center;
   position: relative;
@@ -10,14 +10,14 @@
   position: absolute;
   top: -150px; right: -150px;
   width: 500px; height: 500px;
-  background: radial-gradient(circle, rgba(245,196,0,0.08) 0%, transparent 70%);
+  background: radial-gradient(circle, rgba(139, 195, 74,0.08) 0%, transparent 70%);
   pointer-events: none;
 }
 .tag {
   display: inline-block;
-  background: rgba(245,196,0,0.12);
-  border: 1px solid rgba(245,196,0,0.3);
-  color: #f5c400;
+  background: rgba(139, 195, 74,0.12);
+  border: 1px solid rgba(139, 195, 74,0.3);
+  color: #8bc34a;
   font-family: var(--font-primary);
   font-size: 11px;
   font-weight: 800;
@@ -39,7 +39,7 @@
   position: relative;
   z-index: 1;
 }
-.title span { color: #f5c400; }
+.title span { color: #8bc34a; }
 .subtitle {
   font-family: var(--font-primary);
   font-size: 18px;
@@ -64,7 +64,7 @@
   font-family: var(--font-primary);
   font-size: 32px;
   font-weight: 900;
-  color: #f5c400;
+  color: #8bc34a;
   line-height: 1;
   margin-bottom: 4px;
 }
@@ -97,13 +97,13 @@
 .card:hover {
   box-shadow: 0 10px 36px rgba(0,0,0,0.08);
   transform: translateY(-4px);
-  border-color: rgba(245,196,0,0.3);
+  border-color: rgba(139, 195, 74,0.3);
 }
 .badge {
   position: absolute;
   top: 16px; right: 16px;
-  background: #f5c400;
-  color: #1a1a2e;
+  background: #8bc34a;
+  color: #1a1a1a;
   font-family: var(--font-primary);
   font-size: 10px;
   font-weight: 800;
@@ -131,7 +131,7 @@
   font-family: var(--font-primary);
   font-size: 16px;
   font-weight: 800;
-  color: #1a1a2e;
+  color: #1a1a1a;
   margin: 0;
 }
 .cardDesc {
@@ -149,14 +149,14 @@
   font-family: var(--font-primary);
   font-size: 12px;
   font-weight: 800;
-  color: #d4a900;
+  color: #7cb342;
   text-decoration: none;
   transition: gap 0.15s ease;
 }
 .cardLink:hover { gap: 10px; }
 
 .ctaBox {
-  background: #1a1a2e;
+  background: #1a1a1a;
   border-radius: 20px;
   padding: 56px 40px;
   margin-top: 56px;
@@ -170,7 +170,7 @@
   margin: 0 0 12px;
   letter-spacing: -0.02em;
 }
-.ctaTitle span { color: #f5c400; }
+.ctaTitle span { color: #8bc34a; }
 .ctaDesc {
   font-family: var(--font-primary);
   font-size: 16px;
@@ -182,8 +182,8 @@
   align-items: center;
   gap: 8px;
   padding: 14px 28px;
-  background: #f5c400;
-  color: #1a1a2e;
+  background: #8bc34a;
+  color: #1a1a1a;
   font-family: var(--font-primary);
   font-size: 14px;
   font-weight: 800;
@@ -192,9 +192,9 @@
   transition: all 0.2s ease;
 }
 .btnPrimary:hover {
-  background: #d4a900;
+  background: #7cb342;
   transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(245,196,0,0.4);
+  box-shadow: 0 8px 24px rgba(139, 195, 74,0.4);
 }
 
 @media (max-width: 1024px) { .grid { grid-template-columns: repeat(2, 1fr); } }

@@ -29,7 +29,7 @@
 
 .toastOk {
   background: var(--bg-card, #fff);
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   border: 1px solid rgba(34, 197, 94, 0.35);
 }
 
@@ -39,7 +39,7 @@
 
 .toastErr {
   background: var(--bg-card, #fff);
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   border: 1px solid rgba(239, 68, 68, 0.35);
 }
 

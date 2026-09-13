@@ -299,3 +299,41 @@ export function buildSourceFilterOptions(customSources = []) {
 export function buildLabelFilterOptions(customLabels = []) {
   return buildFieldOptions(LABEL_OPTIONS, customLabels, { includeEmpty: false, includeOther: false });
 }
+
+export const LEAD_IMPORT_FIELDS = [
+  { key: "external_id", label: "External ID", required: false },
+  { key: "first_name", label: "First Name", required: true },
+  { key: "last_name", label: "Last Name", required: true },
+  { key: "name", label: "Full Name", required: false, nameGroup: true },
+  { key: "phone", label: "Phone", required: false },
+  { key: "phone_dial", label: "Phone Dial Code", required: false },
+  { key: "email", label: "Email", required: false },
+  { key: "company_name", label: "Company Name", required: false },
+  { key: "source", label: "Source", required: false },
+  { key: "status", label: "Status", required: false },
+  { key: "label", label: "Label", required: false },
+  { key: "designation", label: "Designation", required: false },
+  { key: "industry", label: "Industry", required: false },
+  { key: "department", label: "Department", required: false },
+  { key: "product_category", label: "Product Category", required: false },
+  { key: "team", label: "Team", required: false },
+  { key: "account_relationship", label: "Account Relationship", required: false },
+  { key: "followup_type", label: "Follow-up Type", required: false },
+  { key: "follow_up_date", label: "Follow-up Date", required: false },
+  { key: "followup_at", label: "Follow-up At", required: false },
+  { key: "address_line1", label: "Address Line 1", required: false },
+  { key: "address_line2", label: "Address Line 2", required: false },
+  { key: "city", label: "City", required: false },
+  { key: "state", label: "State", required: false },
+  { key: "country", label: "Country", required: false },
+  { key: "postal_code", label: "Postal Code", required: false },
+  { key: "notes", label: "Notes", required: false },
+  { key: "amount", label: "Amount", required: false },
+  { key: "currency", label: "Currency", required: false },
+  { key: "reference", label: "Reference", required: false },
+  { key: "assigned_to", label: "Assigned To (ID or email)", required: false },
+];
+
+export function leadImportTemplateCsv() {
+  return `${LEAD_IMPORT_FIELDS.map((f) => f.key).join(",")}\n`;
+}

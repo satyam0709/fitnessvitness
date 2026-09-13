@@ -43,7 +43,7 @@
   align-items: center;
   gap: 8px;
   background: var(--yellow-tint);
-  border: 1px solid rgba(245,196,0,0.3);
+  border: 1px solid rgba(139, 195, 74,0.3);
   border-radius: 20px;
   padding: 4px 14px;
   margin-bottom: 16px;
@@ -118,7 +118,7 @@
 
 .itemCount {
   background: var(--yellow-tint);
-  border: 1px solid rgba(245,196,0,0.3);
+  border: 1px solid rgba(139, 195, 74,0.3);
   color: var(--yellow-hover);
   font-family: var(--font-primary);
   font-size: 11px;
@@ -194,8 +194,8 @@
 }
 
 .iconPlan {
-  background: linear-gradient(135deg, rgba(245,196,0,0.2), rgba(245,196,0,0.08));
-  border: 1px solid rgba(245,196,0,0.3);
+  background: linear-gradient(135deg, rgba(139, 195, 74,0.2), rgba(139, 195, 74,0.08));
+  border: 1px solid rgba(139, 195, 74,0.3);
 }
 
 .iconAddon {
@@ -223,7 +223,7 @@
   align-items: center;
   gap: 4px;
   background: var(--yellow-tint);
-  border: 1px solid rgba(245,196,0,0.25);
+  border: 1px solid rgba(139, 195, 74,0.25);
   color: var(--yellow-hover);
   font-family: var(--font-primary);
   font-size: 10px;
@@ -465,8 +465,8 @@
 }
 
 .stripeNote {
-  background: rgba(245, 196, 0, 0.08);
-  border: 1px solid rgba(245, 196, 0, 0.2);
+  background: rgba(139, 195, 74, 0.08);
+  border: 1px solid rgba(139, 195, 74, 0.2);
   border-radius: 10px;
   padding: 12px;
   font-size: 12px;
@@ -500,7 +500,7 @@
 .payBtn:hover:not(:disabled) {
   background: var(--yellow-hover);
   transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(245, 196, 0, 0.35);
+  box-shadow: 0 6px 20px rgba(139, 195, 74, 0.35);
 }
 
 .payBtn:active:not(:disabled) {
@@ -589,7 +589,7 @@
 .backBtn:hover {
   background: var(--yellow-hover);
   transform: translateY(-2px);
-  box-shadow: 0 6px 20px rgba(245,196,0,0.3);
+  box-shadow: 0 6px 20px rgba(139, 195, 74,0.3);
 }
 
 /* ── Responsive ── */

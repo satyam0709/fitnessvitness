@@ -95,5 +95,5 @@ const actionBtnStyle = {
   cursor: "pointer",
   fontSize: 13,
   fontWeight: 600,
-  color: "#1a1a2e",
+  color: "#1a1a1a",
 };

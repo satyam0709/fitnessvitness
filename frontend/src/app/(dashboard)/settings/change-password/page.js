@@ -65,10 +65,10 @@ export default function ForcedPasswordChangePage() {
           <div
             style={{
               marginBottom: 12,
-              border: "1px solid rgba(245, 196, 0, 0.4)",
+              border: "1px solid rgba(139, 195, 74, 0.4)",
               borderRadius: 10,
               padding: "10px 12px",
-              background: "rgba(245, 196, 0, 0.1)",
+              background: "rgba(139, 195, 74, 0.1)",
             }}
           >
             Your account was created by admin. Please set a new password to continue.

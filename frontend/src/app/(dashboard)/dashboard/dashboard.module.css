@@ -29,6 +29,10 @@
   margin-bottom: 14px;
 }
 
+.todayWidget :global(.crm-filter-strip) {
+  margin: 0;
+}
+
 .todayWidgetHeadLeft {
   display: flex;
   flex-direction: column;
@@ -41,7 +45,7 @@
   font-size: 1.1rem;
   font-weight: 700;
   font-family: var(--font-primary);
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   letter-spacing: -0.01em;
 }
 
@@ -59,19 +63,19 @@
   gap: 8px;
   font-size: 12px;
   font-weight: 700;
-  color: #1a1a2e;
+  color: #1a1a1a;
   text-decoration: none;
   padding: 8px 12px;
   border-radius: 9px;
   border: 1px solid var(--border, #e4e7f0);
-  background: linear-gradient(180deg, #fffef8, #fff8dc);
+  background: linear-gradient(180deg, #fffef8, #f1f8e9);
   white-space: nowrap;
   transition: border-color 160ms ease, box-shadow 160ms ease, transform 140ms ease;
 }
 
 .todayWidgetLink:hover {
-  border-color: var(--yellow, #f5c400);
-  box-shadow: 0 2px 10px rgba(245, 196, 0, 0.2);
+  border-color: var(--yellow, #8bc34a);
+  box-shadow: 0 2px 10px rgba(139, 195, 74, 0.2);
   transform: translateY(-1px);
 }
 
@@ -141,7 +145,7 @@
   font-size: 13px;
   font-weight: 700;
   font-family: inherit;
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   line-height: 1.25;
 }
 
@@ -157,7 +161,7 @@
   min-width: 28px;
   text-align: right;
   font-variant-numeric: tabular-nums;
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
 }
 
 .todayTone_teal .todayTaskIcon { background: #ccfbf1; color: #0f766e; }
@@ -227,7 +231,7 @@
 
 .welcomeBanner {
   position: relative;
-  background: linear-gradient(135deg, #1a1a2e 0%, #1e2448 50%, #0f3460 100%);
+  background: linear-gradient(135deg, #1a1a1a 0%, #1e2448 50%, #0f3460 100%);
   border-radius: 20px;
   padding: 36px 44px;
   overflow: hidden;
@@ -242,7 +246,7 @@
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(ellipse 45% 80% at 100% 50%, rgba(245, 196, 0, 0.12) 0%, transparent 65%),
+    radial-gradient(ellipse 45% 80% at 100% 50%, rgba(139, 195, 74, 0.12) 0%, transparent 65%),
     radial-gradient(ellipse 30% 60% at 60% 0%, rgba(255, 255, 255, 0.04) 0%, transparent 50%);
   pointer-events: none;
 }
@@ -254,7 +258,7 @@
   width: 260px;
   height: 260px;
   border-radius: 50%;
-  border: 1.5px solid rgba(245, 196, 0, 0.15);
+  border: 1.5px solid rgba(139, 195, 74, 0.15);
   pointer-events: none;
 }
 
@@ -263,7 +267,7 @@
   position: absolute;
   inset: 28px;
   border-radius: 50%;
-  border: 1.5px solid rgba(245, 196, 0, 0.08);
+  border: 1.5px solid rgba(139, 195, 74, 0.08);
 }
 
 .welcomeDecor::after {
@@ -271,7 +275,7 @@
   position: absolute;
   inset: 56px;
   border-radius: 50%;
-  border: 1px solid rgba(245, 196, 0, 0.05);
+  border: 1px solid rgba(139, 195, 74, 0.05);
 }
 
 .welcomeText {
@@ -287,7 +291,7 @@
   font-weight: 700;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: rgba(245, 196, 0, 0.65);
+  color: rgba(139, 195, 74, 0.65);
 }
 
 .greetName {
@@ -301,16 +305,16 @@
 }
 
 .nameHighlight {
-  color: var(--yellow, #f5c400);
+  color: var(--yellow, #8bc34a);
 }
 
 .roleBadge {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: rgba(245, 196, 0, 0.14);
-  border: 1px solid rgba(245, 196, 0, 0.25);
-  color: var(--yellow, #f5c400);
+  background: rgba(139, 195, 74, 0.14);
+  border: 1px solid rgba(139, 195, 74, 0.25);
+  color: var(--yellow, #8bc34a);
   font-family: var(--font-primary);
   font-size: 11px;
   font-weight: 700;
@@ -338,9 +342,9 @@
   min-height: auto;
   box-shadow: 0 1px 4px rgba(26, 26, 46, 0.05), 0 4px 16px rgba(26, 26, 46, 0.04);
   transition: box-shadow 220ms ease, border-color 220ms ease;
-  --opr-accent: var(--yellow, #f5c400);
-  --opr-accent-soft: rgba(245, 196, 0, 0.14);
-  --opr-accent-strong: #d4a900;
+  --opr-accent: var(--yellow, #8bc34a);
+  --opr-accent-soft: rgba(139, 195, 74, 0.14);
+  --opr-accent-strong: #7cb342;
 }
 
 .oprCard:nth-child(1) {
@@ -389,7 +393,7 @@
   font-family: var(--font-primary);
   font-size: 14px;
   font-weight: 800;
-  color: color-mix(in srgb, var(--opr-accent-strong) 75%, var(--text-main, #1a1a2e));
+  color: color-mix(in srgb, var(--opr-accent-strong) 75%, var(--text-main, #1a1a1a));
   letter-spacing: 0.02em;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -478,7 +482,7 @@
   font-family: var(--font-primary);
   font-size: clamp(20px, 4vw, 26px);
   font-weight: 800;
-  color: color-mix(in srgb, var(--opr-accent-strong) 78%, var(--text-main, #1a1a2e));
+  color: color-mix(in srgb, var(--opr-accent-strong) 78%, var(--text-main, #1a1a1a));
   line-height: 1.05;
 }
 
@@ -587,7 +591,7 @@
   font-family: var(--font-primary);
   font-size: 22px;
   font-weight: 800;
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   line-height: 1.1;
 }
 
@@ -650,7 +654,7 @@
   font-family: var(--font-primary);
   font-size: 13.5px;
   font-weight: 800;
-  color: color-mix(in srgb, var(--opr-accent-strong) 85%, var(--text-main, #1a1a2e));
+  color: color-mix(in srgb, var(--opr-accent-strong) 85%, var(--text-main, #1a1a1a));
   min-width: 28px;
   text-align: right;
 }
@@ -696,7 +700,7 @@
 }
 
 .oprLinkLabel:hover {
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
 }
 
 .oprGroup {
@@ -821,7 +825,7 @@
   left: 0;
   right: 0;
   height: 3px;
-  background: var(--stat-color, var(--yellow, #f5c400));
+  background: var(--stat-color, var(--yellow, #8bc34a));
   opacity: 0;
   transition: opacity 220ms ease;
 }
@@ -862,7 +866,7 @@
   font-family: var(--font-primary);
   font-size: 34px;
   font-weight: 800;
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   line-height: 1;
   letter-spacing: -0.03em;
 }
@@ -965,20 +969,20 @@
   font-family: var(--font-primary);
   font-size: 11px;
   font-weight: 700;
-  color: var(--yellow, #f5c400);
+  color: var(--yellow, #8bc34a);
   text-decoration: none;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   padding: 4px 10px;
   border-radius: 6px;
-  background: rgba(245, 196, 0, 0.08);
-  border: 1px solid rgba(245, 196, 0, 0.2);
+  background: rgba(139, 195, 74, 0.08);
+  border: 1px solid rgba(139, 195, 74, 0.2);
   transition: all 160ms ease;
 }
 
 .viewAllBtn:hover {
-  background: rgba(245, 196, 0, 0.14);
-  border-color: rgba(245, 196, 0, 0.4);
+  background: rgba(139, 195, 74, 0.14);
+  border-color: rgba(139, 195, 74, 0.4);
   transform: translateY(-1px);
 }
 
@@ -1036,7 +1040,7 @@
   font-family: var(--font-primary);
   font-size: 14px;
   font-weight: 800;
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   margin: 0;
   letter-spacing: -0.01em;
 }
@@ -1057,9 +1061,9 @@
   margin-top: 8px;
   padding: 3px 10px;
   border-radius: 20px;
-  background: rgba(245, 196, 0, 0.14);
-  border: 1px solid rgba(245, 196, 0, 0.22);
-  color: var(--text-main, #1a1a2e);
+  background: rgba(139, 195, 74, 0.14);
+  border: 1px solid rgba(139, 195, 74, 0.22);
+  color: var(--text-main, #1a1a1a);
   font-size: 11px;
   font-weight: 700;
   text-transform: capitalize;
@@ -1091,8 +1095,8 @@
 }
 
 .taskRow:hover {
-  background: var(--yellow-tint, rgba(245, 196, 0, 0.08));
-  border-color: rgba(245, 196, 0, 0.28);
+  background: var(--yellow-tint, rgba(139, 195, 74, 0.08));
+  border-color: rgba(139, 195, 74, 0.28);
   transform: translateX(2px);
 }
 
@@ -1108,13 +1112,13 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  color: var(--yellow, #f5c400);
+  color: var(--yellow, #8bc34a);
   transition: border-color 160ms ease, background 160ms ease, transform 140ms cubic-bezier(0.16, 1, 0.3, 1);
   font-size: 11px;
 }
 
 .taskCheck:hover {
-  border-color: var(--yellow, #f5c400);
+  border-color: var(--yellow, #8bc34a);
   transform: scale(1.1);
 }
 
@@ -1133,7 +1137,7 @@
   font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 700;
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1158,8 +1162,8 @@
 .noteCard {
   position: relative;
   background: linear-gradient(155deg, #fffef0 0%, #fffde6 100%);
-  border: 1px solid rgba(245, 196, 0, 0.25);
-  border-top: 3px solid var(--yellow, #f5c400);
+  border: 1px solid rgba(139, 195, 74, 0.25);
+  border-top: 3px solid var(--yellow, #8bc34a);
   border-radius: 12px;
   padding: 14px 14px 12px;
   min-height: 100px;
@@ -1174,15 +1178,15 @@
 
 [data-theme="dark"] .noteCard {
   background: linear-gradient(155deg, #1e1c00 0%, #181600 100%);
-  border-color: rgba(245, 196, 0, 0.20);
-  border-top-color: var(--yellow, #f5c400);
+  border-color: rgba(139, 195, 74, 0.20);
+  border-top-color: var(--yellow, #8bc34a);
 }
 
 .noteCardTitle {
   font-family: var(--font-primary);
   font-size: 12.5px;
   font-weight: 800;
-  color: #1a1a2e;
+  color: #1a1a1a;
   margin-bottom: 7px;
   line-height: 1.3;
   padding-right: 24px;
@@ -1240,7 +1244,7 @@
   border-radius: 10px;
   border: none;
   cursor: pointer;
-  background: var(--btn-dark-bg, #1a1a2e);
+  background: var(--btn-dark-bg, #1a1a1a);
   color: var(--btn-dark-txt, #fff);
   display: inline-flex;
   align-items: center;
@@ -1330,8 +1334,8 @@
 
 .modalField input:focus,
 .modalField textarea:focus {
-  border-color: var(--yellow, #f5c400);
-  box-shadow: 0 0 0 3px rgba(245, 196, 0, 0.14);
+  border-color: var(--yellow, #8bc34a);
+  box-shadow: 0 0 0 3px rgba(139, 195, 74, 0.14);
   background: var(--bg-card, #fff);
 }
 
@@ -1367,9 +1371,9 @@
 }
 
 .modalBtnPrimary {
-  background: linear-gradient(135deg, #f5c400, #ffdb58 60%, #d4a900);
+  background: linear-gradient(135deg, #8bc34a, #ffdb58 60%, #7cb342);
   background-size: 200% auto;
-  color: #1a1a2e;
+  color: #1a1a1a;
   border: none;
   border-radius: 10px;
   padding: 9px 20px;
@@ -1377,14 +1381,14 @@
   font-weight: 800;
   font-size: 13px;
   cursor: pointer;
-  box-shadow: 0 3px 14px rgba(245, 196, 0, 0.35);
+  box-shadow: 0 3px 14px rgba(139, 195, 74, 0.35);
   transition: background-position 300ms ease, box-shadow 200ms ease, transform 140ms cubic-bezier(0.16, 1, 0.3, 1);
   letter-spacing: 0.01em;
 }
 
 .modalBtnPrimary:hover {
   background-position: right center;
-  box-shadow: 0 5px 20px rgba(245, 196, 0, 0.45);
+  box-shadow: 0 5px 20px rgba(139, 195, 74, 0.45);
   transform: translateY(-1px);
 }
 
@@ -1432,7 +1436,7 @@
   font-family: var(--font-primary);
   font-size: 14px;
   font-weight: 800;
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1441,7 +1445,7 @@
 }
 
 .panelTitle i {
-  color: var(--yellow, #f5c400);
+  color: var(--yellow, #8bc34a);
   font-size: 13px;
 }
 
@@ -1471,18 +1475,18 @@
 
 .tabBtn:hover {
   background: var(--bg-hover, #eef1f7);
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
 }
 
 .tabBtnActive {
-  background: var(--yellow, #f5c400);
-  color: #1a1a2e;
-  box-shadow: 0 1px 4px rgba(245, 196, 0, 0.30);
+  background: var(--yellow, #8bc34a);
+  color: #1a1a1a;
+  box-shadow: 0 1px 4px rgba(139, 195, 74, 0.30);
 }
 
 .tabBtnActive:hover {
-  background: var(--yellow, #f5c400);
-  color: #1a1a2e;
+  background: var(--yellow, #8bc34a);
+  color: #1a1a1a;
 }
 
 .panelBody {
@@ -1549,14 +1553,14 @@
 }
 
 .table tbody tr:hover td {
-  background: var(--yellow-tint, rgba(245, 196, 0, 0.06));
+  background: var(--yellow-tint, rgba(139, 195, 74, 0.06));
 }
 
 .leadName {
   font-family: var(--font-primary);
   font-weight: 700;
   font-size: 13px;
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   text-decoration: none;
   display: block;
   transition: color 130ms ease;
@@ -1564,7 +1568,7 @@
 }
 
 .leadName:hover {
-  color: var(--yellow-hover, #d4a900);
+  color: var(--yellow-hover, #7cb342);
 }
 
 .leadCompany {
@@ -1608,8 +1612,8 @@
 }
 
 .schedItem:hover {
-  background: var(--yellow-tint, rgba(245, 196, 0, 0.07));
-  border-color: rgba(245, 196, 0, 0.22);
+  background: var(--yellow-tint, rgba(139, 195, 74, 0.07));
+  border-color: rgba(139, 195, 74, 0.22);
   transform: translateX(2px);
 }
 
@@ -1642,7 +1646,7 @@
   font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 700;
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1701,7 +1705,7 @@
   width: 34px;
   height: 34px;
   border: 3px solid var(--border, #e4e7f0);
-  border-top-color: var(--yellow, #f5c400);
+  border-top-color: var(--yellow, #8bc34a);
   border-radius: 50%;
   animation: spin 0.65s linear infinite;
 }
@@ -1750,7 +1754,7 @@
 
 .tabLink:hover {
   background: var(--bg-hover, #eef1f7);
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
 }
 
 .fitnessWidget {
@@ -1796,7 +1800,7 @@
   font-family: var(--font-primary);
   font-size: 26px;
   font-weight: 800;
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
   line-height: 1.1;
 }
 
@@ -1844,7 +1848,7 @@
 }
 
 .fitnessFollowupItem:hover {
-  background: rgba(245, 196, 0, 0.1);
+  background: rgba(139, 195, 74, 0.1);
 }
 
 .fitnessFollowupName {
@@ -1852,7 +1856,7 @@
   font-family: var(--font-primary);
   font-size: 13px;
   font-weight: 700;
-  color: var(--text-main, #1a1a2e);
+  color: var(--text-main, #1a1a1a);
 }
 
 .fitnessFollowupDue {
@@ -1909,8 +1913,8 @@
 
 .fitnessIcon {
   font-size: 24px;
-  color: #f5c400;
-  filter: drop-shadow(0 2px 4px rgba(245, 196, 0, 0.2));
+  color: #8bc34a;
+  filter: drop-shadow(0 2px 4px rgba(139, 195, 74, 0.2));
 }
 
 .fitnessTitle {
@@ -1984,7 +1988,7 @@
   left: 0;
   width: 100%;
   height: 4px;
-  background: #f5c400;
+  background: #8bc34a;
   opacity: 0;
   transition: opacity 0.3s;
 }
@@ -2055,7 +2059,7 @@
   font-family: var(--font-primary);
   font-size: 11px;
   font-weight: 700;
-  color: #f5c400;
+  color: #8bc34a;
   text-decoration: none;
   text-transform: uppercase;
   letter-spacing: 0.04em;

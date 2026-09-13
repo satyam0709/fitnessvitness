@@ -1,6 +1,7 @@
 const prisma = require("../config/prisma");
 const { emitAdminChanged, emitCalendarChanged, emitRemindersChanged } = require("../realtime/meetingsRealtime");
 const { createUserNotification } = require("../services/notificationService");
+const { getReminderFormMeta, computeRemindAt, sanitizeRecurrence } = require("../services/reminderFormMeta");
 
 const REMINDER_TYPES = new Set([
   "general",
@@ -150,6 +151,14 @@ async function getReminders(req, res) {
   }
 }
 
+async function getReminderMeta(_req, res) {
+  try {
+    res.json({ success: true, data: getReminderFormMeta() });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+}
+
 async function createReminder(req, res) {
   try {
     const uid = Number(req.user?.id);
@@ -163,15 +172,27 @@ async function createReminder(req, res) {
       title,
       note,
       remind_at,
+      time,
+      weekday,
       lead_id,
       assigned_to_user_id,
       reminder_type,
+      recurrence,
     } = req.body;
 
     if (!title?.trim()) {
       return res.status(400).json({ success: false, message: "Title is required" });
     }
-    if (!remind_at) {
+
+    const rec = sanitizeRecurrence(recurrence);
+    const computed = computeRemindAt({
+      recurrence: rec,
+      remind_at,
+      time,
+      weekday,
+    });
+    const remindAtDate = computed || (remind_at ? new Date(remind_at) : null);
+    if (!remindAtDate || Number.isNaN(remindAtDate.getTime())) {
       return res.status(400).json({ success: false, message: "remind_at is required" });
     }
 
@@ -188,7 +209,7 @@ async function createReminder(req, res) {
         user_id: uid,
         title: title.trim(),
         note: note || null,
-        remind_at: new Date(remind_at),
+        remind_at: remindAtDate,
         lead_id: lead_id ? Number(lead_id) : null,
         assigned_to_user_id: assignId,
         reminder_type: typeVal
@@ -421,6 +442,7 @@ async function bulkDeleteReminders(req, res) {
 
 module.exports = {
   getReminders,
+  getReminderMeta,
   createReminder,
   updateReminder,
   markReminderDone,

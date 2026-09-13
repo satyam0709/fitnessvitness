@@ -2,6 +2,7 @@ const express = require("express");
 const { verifyToken } = require("../middleware/verifyToken");
 const {
   getMeetings,
+  getMeetingMeta,
   getMeetingStats,
   exportMeetingsCsv,
   createMeeting,
@@ -16,6 +17,7 @@ router.use(verifyToken);
 
 router.get("/stats", getMeetingStats);
 router.get("/export", exportMeetingsCsv);
+router.get("/meta", getMeetingMeta);
 router.post("/bulk-delete", bulkDeleteMeetings);
 router.post("/bulk-assign", bulkAssignMeetings);
 router.get("/", getMeetings);

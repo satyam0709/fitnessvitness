@@ -6,13 +6,23 @@ import { createPortal } from "react-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useRouter, useSearchParams } from "next/navigation";
 import { apiFetch } from "@/lib/api";
-import { subscribeTodayLive } from "@/lib/chatRealtime";
+import { subscribeCrmLive, subscribeTodayLive } from "@/lib/chatRealtime";
 import { useListHighlight, itemHighlightClass } from "@/lib/useListHighlight";
 import { useToast } from "@/components/Toast/ToastContext";
 import {
   useConfirmDialog,
   buildDeleteMessage,
 } from "@/components/ConfirmDialog/ConfirmDialogContext";
+import ManageOpportunityCustomOptionsModal from "@/components/Opportunities/ManageOpportunityCustomOptionsModal";
+import {
+  PRODUCT_CATEGORIES,
+  FOLLOWUP_TYPES,
+  OPPORTUNITY_TYPES,
+  LEAD_SOURCES,
+  emptyOpportunityCustomOptions,
+  mergeOptionList,
+} from "@/lib/opportunityConstants";
+import { CrmFilterStrip } from "@/components/UI/CrmFilterStrip";
 import styles from "./opportunitiesPage.module.css";
 
 const STAGES = [
@@ -28,16 +38,7 @@ const OPEN_STAGES = STAGES.filter((s) => s.value !== "closed_won" && s.value !==
 const CLOSED_STAGES = STAGES.filter((s) => s.value === "closed_won" || s.value === "closed_lost");
 const isClosedStage = (stage) => stage === "closed_won" || stage === "closed_lost";
 /** Intake / service detail for this CRM (stored in `product_category` for API compatibility). */
-const INTAKE_SERVICE_TYPES = [
-  { value: "initial_consultation", label: "Initial consultation" },
-  { value: "follow_up", label: "Follow-up visit" },
-  { value: "membership_or_program", label: "Membership / program" },
-  { value: "personal_training", label: "Personal training" },
-  { value: "nutrition_or_supplements", label: "Nutrition / supplements" },
-  { value: "general_inquiry", label: "General inquiry" },
-  { value: "other", label: "Other" },
-];
-const INTAKE_TYPE_VALUES = new Set(INTAKE_SERVICE_TYPES.map((t) => t.value));
+const INTAKE_SERVICE_TYPES = PRODUCT_CATEGORIES;
 
 function normalizeIntakeTypeKey(v) {
   return String(v || "")
@@ -45,31 +46,6 @@ function normalizeIntakeTypeKey(v) {
     .toLowerCase()
     .replace(/\s+/g, "_");
 }
-const FOLLOWUP_TYPES = [
-  { value: "call", label: "Call" },
-  { value: "email", label: "Email" },
-  { value: "meeting", label: "Meeting" },
-  { value: "whatsapp", label: "WhatsApp" },
-  { value: "demo", label: "Demo" },
-  { value: "other", label: "Other" },
-];
-const OPPORTUNITY_TYPES = [
-  { value: "new_business", label: "New Business" },
-  { value: "upsell", label: "Upsell" },
-  { value: "renewal", label: "Renewal" },
-  { value: "cross_sell", label: "Cross-sell" },
-  { value: "other", label: "Other" },
-];
-const LEAD_SOURCES = [
-  { value: "website", label: "Website" },
-  { value: "referral", label: "Referral" },
-  { value: "social_media", label: "Social Media" },
-  { value: "email_campaign", label: "Email Campaign" },
-  { value: "cold_call", label: "Cold Call" },
-  { value: "walk_in", label: "Walk-in" },
-  { value: "partner", label: "Partner" },
-  { value: "other", label: "Other" },
-];
 const STAGE_ALIAS_TO_UI = {
   open: "qualification_done",
   proposal: "quotation_given",
@@ -191,6 +167,8 @@ export default function OpportunitiesPage() {
   const [saving, setSaving] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const [manageOptionsOpen, setManageOptionsOpen] = useState(false);
+  const [customOptions, setCustomOptions] = useState(emptyOpportunityCustomOptions);
 
   const applyListView = useCallback(
     (nextView, { clearStage = true } = {}) => {
@@ -252,6 +230,25 @@ export default function OpportunitiesPage() {
     if (!isLoaded) return undefined;
     return subscribeTodayLive(() => fetchItems());
   }, [isLoaded, fetchItems]);
+
+  const fetchCustomOptions = useCallback(async () => {
+    try {
+      const res = await apiFetch("/opportunities/custom-options");
+      const json = await res.json();
+      if (json.success && json.data) setCustomOptions({ ...emptyOpportunityCustomOptions(), ...json.data });
+    } catch {
+      /* non-fatal */
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isLoaded) return undefined;
+    fetchCustomOptions();
+    return subscribeCrmLive(["opportunities:changed"], () => {
+      fetchCustomOptions();
+      fetchItems();
+    });
+  }, [isLoaded, fetchCustomOptions, fetchItems]);
 
   useEffect(() => {
     const view = searchParams.get("view");
@@ -348,12 +345,28 @@ export default function OpportunitiesPage() {
   }, [colFilters, fromLeadsOnly, items]);
 
   const selectedStageMeta = useMemo(() => Object.fromEntries(STAGES.map((s) => [s.value, s.label])), []);
-  const followupTypeLabels = useMemo(() => buildLabelMap(FOLLOWUP_TYPES), []);
-  const opportunityTypeLabels = useMemo(() => buildLabelMap(OPPORTUNITY_TYPES), []);
-  const leadSourceLabels = useMemo(() => buildLabelMap(LEAD_SOURCES), []);
+  const intakeOptions = useMemo(
+    () => mergeOptionList(INTAKE_SERVICE_TYPES, customOptions.product_category),
+    [customOptions]
+  );
+  const followupOptions = useMemo(
+    () => mergeOptionList(FOLLOWUP_TYPES, customOptions.followup_type),
+    [customOptions]
+  );
+  const opportunityTypeOptions = useMemo(
+    () => mergeOptionList(OPPORTUNITY_TYPES, customOptions.opportunity_type),
+    [customOptions]
+  );
+  const leadSourceOptions = useMemo(
+    () => mergeOptionList(LEAD_SOURCES, customOptions.source),
+    [customOptions]
+  );
+  const followupTypeLabels = useMemo(() => buildLabelMap(followupOptions), [followupOptions]);
+  const opportunityTypeLabels = useMemo(() => buildLabelMap(opportunityTypeOptions), [opportunityTypeOptions]);
+  const leadSourceLabels = useMemo(() => buildLabelMap(leadSourceOptions), [leadSourceOptions]);
   const intakeTypeLabels = useMemo(
-    () => Object.fromEntries(INTAKE_SERVICE_TYPES.map((t) => [t.value, t.label])),
-    []
+    () => Object.fromEntries(intakeOptions.map((t) => [t.value, t.label])),
+    [intakeOptions]
   );
 
   function openCreateModal() {
@@ -367,9 +380,7 @@ export default function OpportunitiesPage() {
     setForm({
       title: item.title || "",
       company_name: item.company_name || "",
-      product_category: INTAKE_TYPE_VALUES.has(normalizeIntakeTypeKey(item.product_category))
-        ? normalizeIntakeTypeKey(item.product_category)
-        : "initial_consultation",
+      product_category: normalizeIntakeTypeKey(item.product_category) || "initial_consultation",
       quantity: item.quantity != null ? String(item.quantity) : "",
       amount: item.amount != null ? String(item.amount) : "",
       stage: normalizeStageForUi(item.stage) || "qualification_done",
@@ -677,6 +688,9 @@ export default function OpportunitiesPage() {
           <button type="button" className={styles.btnPrimary} onClick={openCreateModal}>
             <i className="fas fa-plus" /> New walk-in
           </button>
+          <button type="button" className={styles.btnGhost} onClick={() => setManageOptionsOpen(true)}>
+            <i className="fas fa-cog" /> Custom options
+          </button>
           <div className={styles.totalValue}>
             {listView === "won"
               ? "Booked revenue"
@@ -713,64 +727,61 @@ export default function OpportunitiesPage() {
         to reopen a deal closed by mistake.
       </p>
 
-      <div className={styles.stageStrip}>
-        <button
-          type="button"
-          className={`${styles.stageCard} ${listView === "pipeline" && !stageFilter && !fromLeadsOnly ? styles.stageCardActive : ""}`}
-          onClick={() => {
-            setFromLeadsOnly(false);
-            applyListView("pipeline");
-          }}
-        >
-          <span>Pipeline</span>
-          <strong>{stageCounts.all || 0}</strong>
-        </button>
-        {OPEN_STAGES.map((s) => (
-          <button
-            key={s.value}
-            type="button"
-            className={`${styles.stageCard} ${listView === "pipeline" && stageFilter === s.value ? styles.stageCardActive : ""}`}
-            style={{ borderTopColor: s.color }}
-            onClick={() => {
+      <CrmFilterStrip
+        ariaLabel="Filter opportunities"
+        activeKey={
+          fromLeadsOnly
+            ? "from_leads"
+            : listView === "won"
+              ? "closed_won"
+              : listView === "lost"
+                ? "closed_lost"
+                : stageFilter || "pipeline"
+        }
+        items={[
+          {
+            key: "pipeline",
+            label: "Pipeline",
+            count: stageCounts.all || 0,
+            color: "#64748b",
+            onClick: () => {
+              setFromLeadsOnly(false);
+              applyListView("pipeline");
+            },
+          },
+          ...OPEN_STAGES.map((s) => ({
+            key: s.value,
+            label: s.label,
+            count: stageCounts[s.value] || 0,
+            color: s.color,
+            onClick: () => {
               setFromLeadsOnly(false);
               applyListView("pipeline", { clearStage: false });
               setStageFilter((prev) => (prev === s.value ? "" : s.value));
-            }}
-          >
-            <span>{s.label}</span>
-            <strong>{stageCounts[s.value] || 0}</strong>
-          </button>
-        ))}
-        {CLOSED_STAGES.map((s) => (
-          <button
-            key={s.value}
-            type="button"
-            className={`${styles.stageCard} ${listView === (s.value === "closed_won" ? "won" : "lost") ? styles.stageCardActive : ""}`}
-            style={{ borderTopColor: s.color }}
-            onClick={() => {
+            },
+          })),
+          ...CLOSED_STAGES.map((s) => ({
+            key: s.value,
+            label: s.label,
+            count: stageCounts[s.value] || 0,
+            color: s.color,
+            onClick: () => {
               setFromLeadsOnly(false);
               applyListView(s.value === "closed_won" ? "won" : "lost");
-            }}
-            title={`View ${s.label} deals — change stage there to reopen`}
-          >
-            <span>{s.label}</span>
-            <strong>{stageCounts[s.value] || 0}</strong>
-          </button>
-        ))}
-        <button
-          type="button"
-          className={`${styles.stageCard} ${fromLeadsOnly ? styles.stageCardActive : ""}`}
-          style={{ borderTopColor: "#6366f1" }}
-          onClick={() => {
-            applyListView("pipeline");
-            setFromLeadsOnly((v) => !v);
-          }}
-          title="Opportunities created from lead conversion"
-        >
-          <span>From leads</span>
-          <strong>{leadConversionCount}</strong>
-        </button>
-      </div>
+            },
+          })),
+          {
+            key: "from_leads",
+            label: "From leads",
+            count: leadConversionCount,
+            color: "#6366f1",
+            onClick: () => {
+              applyListView("pipeline");
+              setFromLeadsOnly((v) => !v);
+            },
+          },
+        ]}
+      />
 
       <div className={styles.toolbar}>
         <input
@@ -895,7 +906,7 @@ export default function OpportunitiesPage() {
                     onChange={(e) => setColFilters((p) => ({ ...p, category: e.target.value }))}
                   >
                     <option value="">All</option>
-                    {INTAKE_SERVICE_TYPES.map((t) => (
+                    {intakeOptions.map((t) => (
                       <option key={t.value} value={t.value}>
                         {t.label}
                       </option>
@@ -943,7 +954,7 @@ export default function OpportunitiesPage() {
                     onChange={(e) => setColFilters((p) => ({ ...p, followupType: e.target.value }))}
                   >
                     <option value="">All</option>
-                    {FOLLOWUP_TYPES.map((it) => (
+                    {followupOptions.map((it) => (
                       <option key={it.value} value={it.value}>
                         {it.label}
                       </option>
@@ -957,7 +968,7 @@ export default function OpportunitiesPage() {
                     onChange={(e) => setColFilters((p) => ({ ...p, opportunityType: e.target.value }))}
                   >
                     <option value="">All</option>
-                    {OPPORTUNITY_TYPES.map((it) => (
+                    {opportunityTypeOptions.map((it) => (
                       <option key={it.value} value={it.value}>
                         {it.label}
                       </option>
@@ -1171,7 +1182,7 @@ export default function OpportunitiesPage() {
                   value={form.product_category}
                   onChange={(e) => setForm((f) => ({ ...f, product_category: e.target.value }))}
                 >
-                  {INTAKE_SERVICE_TYPES.map((t) => (
+                  {intakeOptions.map((t) => (
                     <option key={t.value} value={t.value}>
                       {t.label}
                     </option>
@@ -1254,7 +1265,7 @@ export default function OpportunitiesPage() {
                   value={form.followup_type}
                   onChange={(e) => setForm((f) => ({ ...f, followup_type: e.target.value }))}
                 >
-                  {FOLLOWUP_TYPES.map((it) => (
+                  {followupOptions.map((it) => (
                     <option key={it.value} value={it.value}>
                       {it.label}
                     </option>
@@ -1268,7 +1279,7 @@ export default function OpportunitiesPage() {
                   value={form.opportunity_type}
                   onChange={(e) => setForm((f) => ({ ...f, opportunity_type: e.target.value }))}
                 >
-                  {OPPORTUNITY_TYPES.map((it) => (
+                  {opportunityTypeOptions.map((it) => (
                     <option key={it.value} value={it.value}>
                       {it.label}
                     </option>
@@ -1282,7 +1293,7 @@ export default function OpportunitiesPage() {
                   value={form.lead_source}
                   onChange={(e) => setForm((f) => ({ ...f, lead_source: e.target.value }))}
                 >
-                  {LEAD_SOURCES.map((it) => (
+                  {leadSourceOptions.map((it) => (
                     <option key={it.value} value={it.value}>
                       {it.label}
                     </option>
@@ -1526,6 +1537,13 @@ export default function OpportunitiesPage() {
             document.body
           )
         : null}
+
+      <ManageOpportunityCustomOptionsModal
+        open={manageOptionsOpen}
+        onClose={() => setManageOptionsOpen(false)}
+        customOptions={customOptions}
+        onRefresh={fetchCustomOptions}
+      />
     </div>
   );
 }

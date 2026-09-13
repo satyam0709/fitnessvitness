@@ -6,18 +6,10 @@ const {
   emitFitnessChanged,
 } = require("../realtime/meetingsRealtime");
 const { createUserNotification } = require("../services/notificationService");
+const { getMeetingFormMeta, sanitizeRecurrence } = require("../services/meetingFormMeta");
 
 const MEETING_TYPES = new Set(["in_person", "virtual", "phone", "other"]);
 const MEETING_STATUSES = new Set(["scheduled", "completed", "cancelled", "postponed", "no_show"]);
-const MEETING_RECURRENCE = new Set([
-  "once",
-  "daily",
-  "weekly",
-  "monthly",
-  "quarterly",
-  "half_yearly",
-  "yearly",
-]);
 
 function viewerId(req) {
   if (!req.user?.id) return null;
@@ -33,11 +25,6 @@ function sanitizeType(v) {
 function sanitizeStatus(v) {
   const s = String(v || "scheduled").toLowerCase();
   return MEETING_STATUSES.has(s) ? s : "scheduled";
-}
-
-function sanitizeRecurrence(v) {
-  const s = String(v || "once").toLowerCase();
-  return MEETING_RECURRENCE.has(s) ? s : "once";
 }
 
 function safeLeadId(lead_id) {
@@ -394,6 +381,14 @@ async function exportMeetingsCsv(req, res) {
     res.send("\uFEFF" + lines.join("\n"));
   } catch (err) {
     console.error("exportMeetingsCsv", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+async function getMeetingMeta(_req, res) {
+  try {
+    res.json({ success: true, data: getMeetingFormMeta() });
+  } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 }
@@ -825,6 +820,7 @@ async function bulkAssignMeetings(req, res) {
 
 module.exports = {
   getMeetings,
+  getMeetingMeta,
   getMeetingStats,
   exportMeetingsCsv,
   createMeeting,

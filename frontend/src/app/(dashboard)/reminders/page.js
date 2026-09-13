@@ -11,6 +11,7 @@ import {
   buildDeleteMessage,
 } from "@/components/ConfirmDialog/ConfirmDialogContext";
 import { useListHighlight, itemHighlightClass } from "@/lib/useListHighlight";
+import { CrmFilterStrip } from "@/components/UI/CrmFilterStrip";
 import styles from "./remindersPage.module.css";
 
 const TYPE_LABELS = {
@@ -89,6 +90,7 @@ function RemindersPageContent() {
   const [selected, setSelected] = useState(() => new Set());
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
+  const [cardFilter, setCardFilter] = useState("");
   const [editRow, setEditRow] = useState(null);
   const [calMonth, setCalMonth] = useState(() => new Date());
 
@@ -161,14 +163,6 @@ function RemindersPageContent() {
     })();
   }, [isLoaded]);
 
-  const allSelected =
-    items.length > 0 && items.every((r) => selected.has(String(r.id)));
-
-  function toggleSelectAll() {
-    if (allSelected) setSelected(new Set());
-    else setSelected(new Set(items.map((r) => String(r.id))));
-  }
-
   function toggleOne(id) {
     const k = String(id);
     setSelected((prev) => {
@@ -184,6 +178,7 @@ function RemindersPageContent() {
     setCreatedBy("");
     setAssignTo("");
     setTypeFilter("all");
+    setCardFilter("");
   }
 
   async function toggleDone(r) {
@@ -272,6 +267,29 @@ function RemindersPageContent() {
     }
     return { byType, open, done, upcoming, total: items.length };
   }, [items]);
+
+  const visibleItems = useMemo(() => {
+    if (!cardFilter) return items;
+    const now = Date.now();
+    return items.filter((r) => {
+      if (cardFilter === "open") return !Number(r.is_done);
+      if (cardFilter === "done") return !!Number(r.is_done);
+      if (cardFilter === "upcoming") {
+        if (Number(r.is_done)) return false;
+        const ts = r.remind_at ? new Date(r.remind_at).getTime() : 0;
+        return ts >= now;
+      }
+      return true;
+    });
+  }, [items, cardFilter]);
+
+  const allSelected =
+    visibleItems.length > 0 && visibleItems.every((r) => selected.has(String(r.id)));
+
+  function toggleSelectAll() {
+    if (allSelected) setSelected(new Set());
+    else setSelected(new Set(visibleItems.map((r) => String(r.id))));
+  }
 
   const calendarDays = useMemo(() => {
     const y = calMonth.getFullYear();
@@ -373,6 +391,18 @@ function RemindersPageContent() {
         </div>
       </div>
 
+      <CrmFilterStrip
+        ariaLabel="Filter reminders"
+        activeKey={cardFilter}
+        items={[
+          { key: "", label: "All Reminders", count: stats.total, color: "#64748b" },
+          { key: "open", label: "Open", count: stats.open, color: "#0ea5e9" },
+          { key: "done", label: "Done", count: stats.done, color: "#16a34a" },
+          { key: "upcoming", label: "Upcoming", count: stats.upcoming, color: "#f59e0b" },
+        ]}
+        onSelect={(key) => setCardFilter((prev) => (prev === key ? "" : key))}
+      />
+
       <div className={styles.filtersRow}>
         <div className={styles.filterField}>
           <span className={styles.filterLabel}>Created by</span>
@@ -472,7 +502,7 @@ function RemindersPageContent() {
 
       {loading ? (
         <p className={styles.muted}>Loading…</p>
-      ) : items.length === 0 ? (
+      ) : visibleItems.length === 0 ? (
         <div className={styles.empty}>There are no records to display.</div>
       ) : (
         <div className={styles.tableWrap}>
@@ -498,7 +528,7 @@ function RemindersPageContent() {
               </tr>
             </thead>
             <tbody>
-              {items.map((r) => (
+              {visibleItems.map((r) => (
                 <tr
                   key={r.id}
                   id={`item-${r.id}`}

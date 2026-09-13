@@ -53,9 +53,37 @@ function sanitizeQueryArgs(args) {
   return args === undefined ? null : args;
 }
 
-const basePrisma = new PrismaClient({
-  log: process.env.NODE_ENV === "development" ? ["query", "info", "warn", "error"] : ["error"],
-});
+const globalForPrisma = globalThis;
+
+const basePrisma =
+  globalForPrisma.__fitnessPrisma ||
+  new PrismaClient({
+    log: ["warn", "error"],
+  });
+
+if (process.env.NODE_ENV !== "production") {
+  globalForPrisma.__fitnessPrisma = basePrisma;
+}
+
+function disconnectPrisma() {
+  return basePrisma.$disconnect().catch(() => {});
+}
+
+if (!globalForPrisma.__fitnessPrismaShutdownBound) {
+  globalForPrisma.__fitnessPrismaShutdownBound = true;
+  process.once("beforeExit", () => {
+    disconnectPrisma();
+  });
+  process.once("SIGINT", () => {
+    disconnectPrisma().finally(() => process.exit(0));
+  });
+  process.once("SIGTERM", () => {
+    disconnectPrisma().finally(() => process.exit(0));
+  });
+  process.once("SIGUSR2", () => {
+    disconnectPrisma().finally(() => process.kill(process.pid, "SIGUSR2"));
+  });
+}
 
 const prisma = basePrisma.$extends({
   query: {
@@ -70,4 +98,5 @@ const prisma = basePrisma.$extends({
 module.exports = prisma;
 module.exports.prisma = prisma;
 module.exports.omitUndefinedDeep = omitUndefinedDeep;
+module.exports.disconnectPrisma = disconnectPrisma;
 module.exports.__leadBindFix = "2026-07-14-bind-null-v3";

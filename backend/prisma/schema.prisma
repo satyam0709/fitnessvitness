@@ -117,8 +117,13 @@ model company_settings {
   invoice_account_no String?  @db.VarChar(64)
   invoice_ifsc       String?  @db.VarChar(20)
   invoice_currency   String   @default("INR") @db.VarChar(10)
-  invoice_gst_mode   String   @default("none") @db.VarChar(20)
-  updated_at         DateTime @default(now()) @db.DateTime(0)
+  invoice_gst_mode        String   @default("none") @db.VarChar(20)
+  logo_path               String?  @db.VarChar(500)
+  invoice_signature_path  String?  @db.VarChar(500)
+  invoice_start_no        Int?     @default(1)
+  invoice_template_key    String?  @default("classic") @db.VarChar(50)
+  brochure_url            String?  @db.VarChar(500)
+  updated_at              DateTime @default(now()) @db.DateTime(0)
 }
 
 model contacts {
@@ -236,8 +241,9 @@ model customers {
   lead_id    Int?      @unique(map: "lead_id") @db.UnsignedInt
   created_at DateTime  @default(now()) @db.DateTime(0)
   updated_at DateTime  @default(now()) @db.DateTime(0)
-  is_deleted Boolean   @default(false)
-  deleted_at DateTime? @db.DateTime(0)
+  is_deleted Boolean    @default(false)
+  deleted_at DateTime?  @db.DateTime(0)
+  invoices   invoices[]
 
   @@index([is_deleted], map: "idx_customers_is_deleted")
   @@index([lead_id], map: "idx_lead_id")
@@ -499,31 +505,37 @@ model invoices {
   id                Int             @id @default(autoincrement()) @db.UnsignedInt
   invoice_number    String          @unique(map: "uk_invoice_number") @db.VarChar(50)
   type              invoices_type   @default(sales)
-  customer_name     String?         @db.VarChar(150)
-  customer_email    String?         @db.VarChar(150)
-  customer_phone    String?         @db.VarChar(32)
-  vendor_name       String?         @db.VarChar(150)
-  invoice_date      DateTime        @db.Date
-  due_date          DateTime?       @db.Date
-  subtotal          Decimal?        @default(0.00) @db.Decimal(12, 2)
-  tax               Decimal?        @default(0.00) @db.Decimal(12, 2)
-  total             Decimal?        @default(0.00) @db.Decimal(12, 2)
-  status            invoices_status @default(draft)
-  notes             String?         @db.Text
-  gst_mode          String          @default("none") @db.VarChar(20)
-  currency          String          @default("INR") @db.VarChar(10)
-  customer_id       Int?            @db.UnsignedInt
+  customer_name     String?           @db.VarChar(150)
+  customer_email    String?           @db.VarChar(150)
+  customer_phone    String?           @db.VarChar(32)
+  company_name      String?           @db.VarChar(180)
+  billing_address   String?           @db.Text
+  vendor_name       String?           @db.VarChar(150)
+  invoice_date      DateTime          @db.Date
+  due_date          DateTime?         @db.Date
+  subtotal          Decimal?          @default(0.00) @db.Decimal(12, 2)
+  tax               Decimal?          @default(0.00) @db.Decimal(12, 2)
+  total             Decimal?          @default(0.00) @db.Decimal(12, 2)
+  amount_paid       Decimal           @default(0.00) @db.Decimal(12, 2)
+  status            invoices_status  @default(draft)
+  notes             String?           @db.Text
+  gst_mode          String            @default("none") @db.VarChar(20)
+  currency          String            @default("INR") @db.VarChar(10)
+  customer_id       Int?              @db.UnsignedInt
   line_items_json   Json?
-  source_type       String?         @db.VarChar(50)
-  source_id         Int?            @db.UnsignedInt
+  source_type       String?           @db.VarChar(50)
+  source_id         Int?              @db.UnsignedInt
   payment_meta_json Json?
-  is_deleted        Boolean         @default(false)
-  deleted_at        DateTime?       @db.DateTime(0)
-  created_by        Int?            @db.UnsignedInt
-  created_at        DateTime        @default(now()) @db.DateTime(0)
-  updated_at        DateTime        @default(now()) @db.DateTime(0)
+  is_deleted        Boolean           @default(false)
+  deleted_at        DateTime?         @db.DateTime(0)
+  created_by        Int?              @db.UnsignedInt
+  created_at        DateTime         @default(now()) @db.DateTime(0)
+  updated_at        DateTime         @default(now()) @db.DateTime(0)
+  customers         customers?       @relation(fields: [customer_id], references: [id], onUpdate: NoAction, map: "fk_invoices_customer")
+  invoice_payments  invoice_payments[]
 
   @@index([created_by], map: "idx_invoices_created_by")
+  @@index([customer_id], map: "idx_invoices_customer")
   @@index([is_deleted], map: "idx_invoices_is_deleted")
   @@index([status], map: "idx_status")
   @@index([type], map: "idx_type")
@@ -603,10 +615,11 @@ model leads {
   converted_opportunity_id       Int?         @db.UnsignedInt
   last_touched_at                DateTime?    @db.DateTime(0)
   updated_by                     Int?         @db.UnsignedInt
-  status_v2                      String?      @db.VarChar(32)
+  status_v2                      String?      @db.VarChar(100)
   phone_dial                     String?      @db.VarChar(10)
   address                        String?      @db.Text
   reference                      String?      @db.VarChar(255)
+  external_id                    String?      @db.VarChar(120)
   users_leads_assigned_toTousers users?       @relation("leads_assigned_toTousers", fields: [assigned_to], references: [id], onUpdate: NoAction, map: "fk_lead_assigned")
   users_leads_created_byTousers  users        @relation("leads_created_byTousers", fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "fk_lead_creator")
   file_attachments               file_attachments[]
@@ -619,6 +632,7 @@ model leads {
   @@index([follow_up_date], map: "idx_follow_up")
   @@index([is_deleted], map: "idx_leads_is_deleted")
   @@index([status], map: "idx_status")
+  @@index([external_id], map: "idx_leads_external_id")
 }
 
 model meeting_attendees {
@@ -1347,4 +1361,142 @@ model hr_appraisals {
 
   @@index([user_id], map: "idx_hr_appraisals_user")
   @@index([year], map: "idx_hr_appraisals_year")
+}
+
+model bank_details {
+  id               Int      @id @default(autoincrement()) @db.UnsignedInt
+  bank_name        String   @db.VarChar(200)
+  bank_description String?  @db.Text
+  created_at       DateTime @default(now()) @db.DateTime(0)
+  updated_at       DateTime @default(now()) @db.DateTime(0)
+}
+
+model brochures {
+  id          Int       @id @default(autoincrement()) @db.UnsignedInt
+  name        String    @db.VarChar(180)
+  type        String    @default("paid_invoice") @db.VarChar(32)
+  file_name   String?   @db.VarChar(300)
+  stored_name String?   @db.VarChar(300)
+  created_at  DateTime  @default(now()) @db.DateTime(0)
+  updated_at  DateTime  @default(now()) @db.DateTime(0)
+  is_deleted  Boolean   @default(false)
+  deleted_at  DateTime? @db.DateTime(0)
+
+  @@index([is_deleted], map: "idx_brochures_is_deleted")
+}
+
+model invoice_payments {
+  id           Int       @id @default(autoincrement()) @db.UnsignedInt
+  invoice_id   Int       @db.UnsignedInt
+  payment_date DateTime  @db.Date
+  method       String    @default("") @db.VarChar(80)
+  amount       Decimal   @default(0.00) @db.Decimal(12, 2)
+  note         String?   @db.Text
+  created_by   Int?      @db.UnsignedInt
+  created_at   DateTime  @default(now()) @db.DateTime(0)
+  updated_at   DateTime  @default(now()) @db.DateTime(0)
+  is_deleted   Boolean   @default(false)
+  deleted_at   DateTime? @db.DateTime(0)
+  invoices     invoices  @relation(fields: [invoice_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_invoice_payments_invoice")
+
+  @@index([invoice_id], map: "idx_invoice_payments_invoice")
+}
+
+model lead_import_jobs {
+  id                 String              @id @db.Char(36)
+  created_by         Int                 @db.UnsignedInt
+  mode               String              @default("upsert") @db.VarChar(20)
+  status             String              @default("uploaded") @db.VarChar(32)
+  file_name          String              @db.VarChar(255)
+  file_type          String              @db.VarChar(10)
+  file_path          String              @db.VarChar(500)
+  column_mapping     Json?
+  total_rows         Int                 @default(0) @db.UnsignedInt
+  processed_rows     Int                 @default(0) @db.UnsignedInt
+  valid_rows         Int                 @default(0) @db.UnsignedInt
+  invalid_rows       Int                 @default(0) @db.UnsignedInt
+  duplicate_rows     Int                 @default(0) @db.UnsignedInt
+  new_rows           Int                 @default(0) @db.UnsignedInt
+  update_rows        Int                 @default(0) @db.UnsignedInt
+  created_count      Int                 @default(0) @db.UnsignedInt
+  updated_count      Int                 @default(0) @db.UnsignedInt
+  skipped_count      Int                 @default(0) @db.UnsignedInt
+  failed_count       Int                 @default(0) @db.UnsignedInt
+  progress_pct       Int                 @default(0) @db.UnsignedInt
+  retry_of_job_id    String?             @db.Char(36)
+  cancelled_by       Int?               @db.UnsignedInt
+  cancelled_at       DateTime?          @db.DateTime(0)
+  started_at         DateTime?          @db.DateTime(0)
+  completed_at       DateTime?          @db.DateTime(0)
+  created_at         DateTime           @default(now()) @db.DateTime(0)
+  updated_at         DateTime           @default(now()) @db.DateTime(0)
+  lead_import_errors lead_import_errors[]
+
+  @@index([created_by, created_at], map: "idx_lead_import_jobs_created")
+  @@index([status], map: "idx_lead_import_jobs_status")
+}
+
+model lead_import_errors {
+  id         BigInt           @id @default(autoincrement()) @db.UnsignedBigInt
+  job_id     String            @db.Char(36)
+  row_number Int              @db.UnsignedInt
+  field      String?           @db.VarChar(80)
+  message    String            @db.VarChar(500)
+  raw_data   Json?
+  severity   String           @default("error") @db.VarChar(16)
+  created_at DateTime         @default(now()) @db.DateTime(0)
+  job        lead_import_jobs @relation(fields: [job_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_lead_import_errors_job")
+
+  @@index([job_id, row_number], map: "idx_lead_import_errors_job_row")
+}
+
+model quotations {
+  id                        Int       @id @default(autoincrement()) @db.UnsignedInt
+  quotation_no              String    @unique(map: "uk_quotation_no") @db.VarChar(50)
+  name                      String    @db.VarChar(200)
+  quotation_date            DateTime  @db.Date
+  valid_until_days          Int?      @default(30)
+  valid_until               DateTime? @db.Date
+  opportunity_id            Int?      @db.UnsignedInt
+  stage                     String    @default("Draft") @db.VarChar(50)
+  comment                   String?   @db.Text
+  account_id                Int?      @db.UnsignedInt
+  shipping_account_id       Int?      @db.UnsignedInt
+  billing_contact_id        Int?      @db.UnsignedInt
+  shipping_contact_id       Int?      @db.UnsignedInt
+  billing_address           String?   @db.Text
+  shipping_address          String?   @db.Text
+  assigned_to               Int?      @db.UnsignedInt
+  show_group_total          Boolean   @default(false)
+  show_grand_total          Boolean   @default(false)
+  discount_apply_on         String    @default("line_items") @db.VarChar(50)
+  tax_apply_on              String    @default("line_items") @db.VarChar(50)
+  currency                  String    @default("INR") @db.VarChar(10)
+  total_quantity            Decimal?  @default(0.00) @db.Decimal(12, 2)
+  sub_total                 Decimal?  @default(0.00) @db.Decimal(12, 2)
+  total_discount            Decimal?  @default(0.00) @db.Decimal(12, 2)
+  total_tax                 Decimal?  @default(0.00) @db.Decimal(12, 2)
+  line_total                Decimal?  @default(0.00) @db.Decimal(12, 2)
+  charges                   Decimal?  @default(0.00) @db.Decimal(12, 2)
+  transport_charges         Decimal?  @default(0.00) @db.Decimal(12, 2)
+  extra_charges             Decimal?  @default(0.00) @db.Decimal(12, 2)
+  tax_on_charges            Decimal?  @default(0.00) @db.Decimal(12, 2)
+  adjustment                Decimal?  @default(0.00) @db.Decimal(12, 2)
+  grand_total               Decimal?  @default(0.00) @db.Decimal(12, 2)
+  line_items_groups_json    Json?
+  term_name                 String?   @db.VarChar(200)
+  terms_description         String?   @db.Text
+  payment_term_name         String?   @db.VarChar(200)
+  payment_terms_description String?   @db.Text
+  bank_name                 String?   @db.VarChar(200)
+  bank_description          String?   @db.Text
+  is_deleted                Boolean   @default(false)
+  deleted_at                DateTime? @db.DateTime(0)
+  created_by                Int?      @db.UnsignedInt
+  created_at                DateTime  @default(now()) @db.DateTime(0)
+  updated_at                DateTime  @default(now()) @db.DateTime(0)
+
+  @@index([assigned_to], map: "idx_quotation_assigned")
+  @@index([opportunity_id], map: "idx_quotation_opportunity")
+  @@index([is_deleted], map: "idx_quotation_is_deleted")
 }

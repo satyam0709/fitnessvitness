@@ -7,6 +7,7 @@ const prisma = require("../config/prisma");
 const { emitTodosChanged, emitCalendarChanged } = require("../realtime/meetingsRealtime");
 const { createUserNotification } = require("../services/notificationService");
 const { formatYmd, parseYmdLocal, nextOccurrence } = require("../utils/todoRecurrence");
+const { getReminderFormMeta } = require("../services/reminderFormMeta");
 
 const router = express.Router();
 router.use(verifyToken);
@@ -127,6 +128,26 @@ function maybeUpload(req, res, next) {
   }
   next();
 }
+
+router.get("/meta", (_req, res) => {
+  const base = getReminderFormMeta();
+  res.json({
+    success: true,
+    data: {
+      frequencies: base.frequencies,
+      weekdays: base.weekdays,
+      frequency_notes: {
+        once: null,
+        daily: "Note: Daily todo create every day",
+        weekly: "Note: Weekly todo create every 1 week",
+        monthly: "Note: Monthly todo create every 1 month",
+        quarterly: "Note: Quarterly todo create every 3 month",
+        half_yearly: "Note: Half yearly todo create every 6 month",
+        yearly: "Note: Yearly todo create every 1 year",
+      },
+    },
+  });
+});
 
 router.get("/", async (req, res) => {
   try {

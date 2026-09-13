@@ -12,6 +12,7 @@ import {
   buildDeleteMessage,
 } from "@/components/ConfirmDialog/ConfirmDialogContext";
 import { useListHighlight, itemHighlightClass } from "@/lib/useListHighlight";
+import { CrmFilterStrip } from "@/components/UI/CrmFilterStrip";
 import styles from "./meetings.module.css";
 
 /** Recurrence filter (matches Add Meeting + DB column `recurrence`) */
@@ -32,6 +33,7 @@ const STATUS_GROUP_OPTS = [
   { value: "pending", label: "Pending" },
   { value: "completed", label: "Completed" },
   { value: "missing", label: "Missing" },
+  { value: "cancelled", label: "Cancelled" },
 ];
 
 const FORMAT_OPTS = [
@@ -49,6 +51,14 @@ const ROW_STATUS_OPTS = [
   { value: "no_show", label: "Missing" },
   { value: "cancelled", label: "Cancelled" },
 ];
+
+function meetingStatusGroup(status) {
+  const s = String(status || "").toLowerCase();
+  if (s === "completed") return "completed";
+  if (s === "no_show") return "missing";
+  if (s === "cancelled") return "cancelled";
+  return "pending";
+}
 
 function fmt(dt) {
   if (!dt) return "—";
@@ -157,7 +167,6 @@ function MeetingsPageContent() {
     if (filterCreatedBy) p.set("created_by", filterCreatedBy);
     if (filterAssignTo) p.set("assign_to", filterAssignTo);
     if (filterRecurrence) p.set("recurrence", filterRecurrence);
-    if (filterStatusGroup) p.set("status_group", filterStatusGroup);
     if (filterFormat) p.set("meeting_type", filterFormat);
     if (filterLeadId) p.set("lead_id", filterLeadId);
     if (dateRange?.range_start) p.set("range_start", dateRange.range_start);
@@ -168,7 +177,6 @@ function MeetingsPageContent() {
     filterCreatedBy,
     filterAssignTo,
     filterRecurrence,
-    filterStatusGroup,
     filterFormat,
     filterLeadId,
     dateRange,
@@ -331,11 +339,25 @@ function MeetingsPageContent() {
     setDateRange(null);
   }
 
-  const allSelected = items.length > 0 && items.every((m) => selected.has(m.id));
+  const statusCounts = useMemo(() => {
+    const out = { all: items.length, pending: 0, completed: 0, missing: 0, cancelled: 0 };
+    for (const m of items) {
+      const g = meetingStatusGroup(m.status);
+      if (out[g] != null) out[g] += 1;
+    }
+    return out;
+  }, [items]);
+
+  const visibleItems = useMemo(() => {
+    if (!filterStatusGroup) return items;
+    return items.filter((m) => meetingStatusGroup(m.status) === filterStatusGroup);
+  }, [items, filterStatusGroup]);
+
+  const allSelected = visibleItems.length > 0 && visibleItems.every((m) => selected.has(m.id));
 
   function toggleAll() {
     if (allSelected) setSelected(new Set());
-    else setSelected(new Set(items.map((m) => m.id)));
+    else setSelected(new Set(visibleItems.map((m) => m.id)));
   }
 
   function toggleOne(id) {
@@ -529,7 +551,7 @@ function MeetingsPageContent() {
 
   const meetingsByDay = useMemo(() => {
     const map = new Map();
-    for (const it of items) {
+    for (const it of visibleItems) {
       if (!it.start_time) continue;
       const d = new Date(it.start_time);
       if (Number.isNaN(d.getTime())) continue;
@@ -538,7 +560,7 @@ function MeetingsPageContent() {
       map.get(key).push(it);
     }
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [items]);
+  }, [visibleItems]);
 
   return (
     <div className={styles.wrap}>
@@ -710,6 +732,19 @@ function MeetingsPageContent() {
         </div>
       </div>
 
+      <CrmFilterStrip
+        ariaLabel="Filter meetings"
+        activeKey={filterStatusGroup}
+        items={[
+          { key: "", label: "All Meetings", count: statusCounts.all, color: "#64748b" },
+          { key: "pending", label: "Pending", count: statusCounts.pending, color: "#f59e0b" },
+          { key: "completed", label: "Completed", count: statusCounts.completed, color: "#16a34a" },
+          { key: "missing", label: "Missing", count: statusCounts.missing, color: "#dc2626" },
+          { key: "cancelled", label: "Cancelled", count: statusCounts.cancelled, color: "#64748b" },
+        ]}
+        onSelect={(key) => setFilterStatusGroup((prev) => (prev === key ? "" : key))}
+      />
+
       <div className={styles.filters}>
         <div className={styles.filterField}>
           <span className={styles.filterLabel}>Type</span>
@@ -787,7 +822,7 @@ function MeetingsPageContent() {
 
       {loading ? (
         <p className={styles.muted}>Loading…</p>
-      ) : items.length === 0 ? (
+      ) : visibleItems.length === 0 ? (
         <div className={styles.empty}>There are no records to display.</div>
       ) : viewMode === "calendar" ? (
         <div className={styles.calendarPanel}>
@@ -828,7 +863,7 @@ function MeetingsPageContent() {
               </tr>
             </thead>
             <tbody>
-              {items.map((m) => {
+              {visibleItems.map((m) => {
                 const canManage = meId != null && m.organizer_id === meId;
                 const org = userById.get(m.organizer_id);
                 const asg = m.assigned_to_user_id != null ? userById.get(m.assigned_to_user_id) : org;
@@ -915,7 +950,7 @@ function MeetingsPageContent() {
 
       {!loading && items.length > 0 ? (
         <p className={styles.muted} style={{ marginTop: 12 }}>
-          Showing {items.length} of {total} meeting(s) matching filters.
+          Showing {visibleItems.length} of {items.length} meeting(s) matching filters.
           {viewMode === "calendar" ? " · Calendar view" : ""}
         </p>
       ) : null}

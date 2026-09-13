@@ -1,9 +1,15 @@
 const prisma = require("../config/prisma");
 const { createUserNotification } = require("./notificationService");
 
+const lastFitnessNotifRun = new Map();
+const FITNESS_NOTIF_COOLDOWN_MS = 2 * 60 * 1000;
+
 async function checkAndGenerateFitnessNotifications(userId) {
   const uid = Number(userId);
   if (!uid) return;
+  const now = Date.now();
+  if ((lastFitnessNotifRun.get(uid) || 0) + FITNESS_NOTIF_COOLDOWN_MS > now) return;
+  lastFitnessNotifRun.set(uid, now);
 
   try {
     const today = new Date();

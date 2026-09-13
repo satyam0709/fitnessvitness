@@ -201,7 +201,7 @@
   color: var(--bg-deep);
   border-color: var(--yellow);
   transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(245,196,0,0.35);
+  box-shadow: 0 6px 20px rgba(139, 195, 74,0.35);
 }
 
 .submitBtn:disabled {

@@ -3,12 +3,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSearchParams } from "next/navigation";
-import { apiFetch, getApiOrigin } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
+import { getChatSocket, subscribeCrmLive } from "@/lib/chatRealtime";
 import { useToast } from "@/components/Toast/ToastContext";
 import {
   useConfirmDialog,
   buildDeleteMessage,
 } from "@/components/ConfirmDialog/ConfirmDialogContext";
+import { CrmFilterStrip } from "@/components/UI/CrmFilterStrip";
 import styles from "./ticketsPage.module.css";
 
 const STATUS = ["open", "in_progress", "resolved", "closed", "reopened"];
@@ -25,6 +27,13 @@ const PRIORITY_LABEL = {
   medium: "Medium",
   high: "High",
   urgent: "Urgent",
+};
+const STATUS_COLOR = {
+  open: "#0ea5e9",
+  in_progress: "#f59e0b",
+  resolved: "#16a34a",
+  closed: "#64748b",
+  reopened: "#9333ea",
 };
 
 async function ticketsRequest(suffix = "", options = {}) {
@@ -74,12 +83,11 @@ export default function TicketsPage() {
     due_at: "",
   });
 
-  const fetchItems = useCallback(async () => {
-    setLoading(true);
+  const fetchItems = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
     setError("");
     try {
       const p = new URLSearchParams();
-      if (status) p.set("status", status);
       if (priority) p.set("priority", priority);
       if (q.trim()) p.set("q", q.trim());
       const res = await ticketsRequest(`?${p.toString()}`);
@@ -98,61 +106,45 @@ export default function TicketsPage() {
       setItems([]);
       setError(e.message || "Failed to load tickets");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
-  }, [priority, q, showToast, status]);
+  }, [priority, q, showToast]);
 
   useEffect(() => {
     fetchItems();
   }, [fetchItems]);
 
   useEffect(() => {
-    if (!isLoaded) return;
-    const timer = setInterval(fetchItems, 20000);
-    return () => clearInterval(timer);
-  }, [isLoaded, fetchItems]);
-
-  useEffect(() => {
-    if (!isLoaded) {
+    if (!isLoaded || !isSignedIn) {
       setLiveConnected(false);
-      return;
+      return undefined;
     }
     let cancelled = false;
-    const sockRef = { current: null };
-
-    async function connectSocket() {
-      if (!isSignedIn || cancelled) return;
-      try {
-        const { io } = await import("socket.io-client");
-        const s = io(getApiOrigin(), {
-          path: "/socket.io",
-          auth: {},
-          transports: ["websocket", "polling"],
-          withCredentials: true,
-          reconnection: true,
-        });
-        sockRef.current = s;
-        s.on("connect", () => !cancelled && setLiveConnected(true));
-        s.on("disconnect", () => !cancelled && setLiveConnected(false));
-        s.on("connect_error", () => !cancelled && setLiveConnected(false));
-        s.on("tickets:changed", () => !cancelled && fetchItems());
-      } catch {
-        if (!cancelled) setLiveConnected(false);
-      }
-    }
-
-    connectSocket();
+    let sock = null;
+    const onConnect = () => {
+      if (!cancelled) setLiveConnected(true);
+    };
+    const onDisconnect = () => {
+      if (!cancelled) setLiveConnected(false);
+    };
+    const unsub = subscribeCrmLive(["tickets:changed"], () => {
+      if (!cancelled) fetchItems({ silent: true });
+    });
+    getChatSocket().then((s) => {
+      if (cancelled || !s) return;
+      sock = s;
+      setLiveConnected(Boolean(s.connected));
+      s.on("connect", onConnect);
+      s.on("disconnect", onDisconnect);
+    });
     return () => {
       cancelled = true;
-      setLiveConnected(false);
-      if (sockRef.current) {
-        try {
-          sockRef.current.removeAllListeners();
-          sockRef.current.disconnect();
-        } catch {
-          /* ignore */
-        }
+      unsub();
+      if (sock) {
+        sock.off("connect", onConnect);
+        sock.off("disconnect", onDisconnect);
       }
+      setLiveConnected(false);
     };
   }, [isLoaded, isSignedIn, fetchItems]);
 
@@ -169,6 +161,7 @@ export default function TicketsPage() {
 
   const filteredRows = useMemo(() => {
     return items.filter((it) => {
+      if (status && it.status !== status) return false;
       if (colFilters.subject && !String(it.subject || "").toLowerCase().includes(colFilters.subject.toLowerCase())) return false;
       if (colFilters.description && !String(it.description || "").toLowerCase().includes(colFilters.description.toLowerCase())) return false;
       if (colFilters.status && it.status !== colFilters.status) return false;
@@ -176,7 +169,7 @@ export default function TicketsPage() {
       if (colFilters.dueDate && String(it.due_at || "").slice(0, 10) !== colFilters.dueDate) return false;
       return true;
     });
-  }, [items, colFilters]);
+  }, [items, colFilters, status]);
 
   async function createTicket(e) {
     e.preventDefault();
@@ -268,27 +261,20 @@ export default function TicketsPage() {
         </span>
       </div>
 
-      <div className={styles.statusStrip}>
-        <button
-          type="button"
-          className={`${styles.statusCard} ${!status ? styles.statusCardActive : ""}`}
-          onClick={() => setStatus("")}
-        >
-          <span>All status</span>
-          <strong>{statusCounts.all || 0}</strong>
-        </button>
-        {STATUS.map((s) => (
-          <button
-            key={s}
-            type="button"
-            className={`${styles.statusCard} ${status === s ? styles.statusCardActive : ""}`}
-            onClick={() => setStatus((prev) => (prev === s ? "" : s))}
-          >
-            <span>{STATUS_LABEL[s]}</span>
-            <strong>{statusCounts[s] || 0}</strong>
-          </button>
-        ))}
-      </div>
+      <CrmFilterStrip
+        ariaLabel="Filter by status"
+        activeKey={status || ""}
+        items={[
+          { key: "", label: "All Tickets", count: statusCounts.all || 0, color: "#64748b" },
+          ...STATUS.map((s) => ({
+            key: s,
+            label: STATUS_LABEL[s],
+            count: statusCounts[s] || 0,
+            color: STATUS_COLOR[s],
+          })),
+        ]}
+        onSelect={(key) => setStatus((prev) => (prev === key ? "" : key))}
+      />
 
       <div className={styles.toolbar}>
         <select className={styles.input} value={status} onChange={(e) => setStatus(e.target.value)}>

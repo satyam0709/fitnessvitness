@@ -42,6 +42,8 @@ export default function QuickTodoModal({ open, onClose }) {
   const { me } = useUserRole();
   const [users, setUsers] = useState([]);
   const [freq, setFreq] = useState("once");
+  const [freqOpts, setFreqOpts] = useState(FREQ_OPTS);
+  const [freqNotes, setFreqNotes] = useState({});
   const [todoDate, setTodoDate] = useState("");
   const [priority, setPriority] = useState("high");
   const [assigneeIds, setAssigneeIds] = useState([]);
@@ -73,6 +75,25 @@ export default function QuickTodoModal({ open, onClose }) {
       setAssigneeIds((prev) => (prev.length ? prev : [String(me.id)]));
     }
   }, [open, me?.id]);
+
+  useEffect(() => {
+    if (!open) return;
+    (async () => {
+      try {
+        const res = await apiFetch("/todos/meta");
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || !json.success || !json.data) return;
+        if (Array.isArray(json.data.frequencies) && json.data.frequencies.length) {
+          setFreqOpts(json.data.frequencies);
+        }
+        if (json.data.frequency_notes && typeof json.data.frequency_notes === "object") {
+          setFreqNotes(json.data.frequency_notes);
+        }
+      } catch {
+        /* keep fallbacks */
+      }
+    })();
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -178,13 +199,14 @@ export default function QuickTodoModal({ open, onClose }) {
           <div className={styles.field}>
             <span className={styles.label}>Frequency</span>
             <div className={styles.radioRow} role="radiogroup">
-              {FREQ_OPTS.map((f) => (
+              {freqOpts.map((f) => (
                 <label key={f.key} className={styles.radioLabel}>
                   <input type="radio" name={`${id}-fq`} checked={freq === f.key} onChange={() => setFreq(f.key)} />
                   {f.label}
                 </label>
               ))}
             </div>
+            {freqNotes[freq] ? <p className={styles.hint}>{freqNotes[freq]}</p> : null}
           </div>
           <div className={styles.row2}>
             <div className={styles.field}>

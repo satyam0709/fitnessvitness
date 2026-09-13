@@ -22,6 +22,7 @@ const crmRouter          = require("./crm");
 const authRouter         = require("./auth");
 const fitnessRouter      = require("./fitness");
 const collectionsRouter  = require("./collections");
+const lookupsRouter      = require("./lookups");
 const todayRouter        = require("./today");
 const { ensureCrmSchemaMiddleware } = require("../middleware/ensureCrmSchema");
 
@@ -126,6 +127,7 @@ router.use("/today", ...protectedRoute, todayRouter);
 router.use("/calendar", ...protectedRoute, calendarRouter);
 router.use("/contacts", ...protectedRoute, contactsRouter);
 router.use("/companies", ...protectedRoute, companiesRouter);
+router.use("/lookups", ...protectedRoute, lookupsRouter);
 router.use("/integrations", ...protectedRoute, integrationsRouter);
 
 router.post("/contact",            submitContact);

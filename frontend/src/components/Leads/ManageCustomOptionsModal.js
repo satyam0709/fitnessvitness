@@ -11,7 +11,7 @@ const TABS = [
   { key: "status", label: "Statuses", singular: "Status" },
 ];
 
-function ConfirmDeleteOptionModal({ fieldMeta, optionValue, onCancel, onConfirm, saving }) {
+function ConfirmDeleteOptionModal({ fieldMeta, optionValue, onCancel, onConfirm, saving, usageLoading, usageTotal }) {
   const [typed, setTyped] = useState("");
   const canDelete = typed === "DELETE";
   const singular = fieldMeta?.singular || "option";
@@ -37,14 +37,19 @@ function ConfirmDeleteOptionModal({ fieldMeta, optionValue, onCancel, onConfirm,
         <div className={styles.dangerBody}>
           <p className={styles.dangerLead}>
             Deleting the custom {singular.toLowerCase()} <strong>&apos;{optionValue}&apos;</strong>{" "}
-            is a destructive action. The options list stays open behind this dialog.
+            is a destructive action.
           </p>
-          <div className={styles.dangerAlert}>
-            <strong>
-              Warning: All leads currently using this option will also be permanently deleted. This
-              cannot be undone.
-            </strong>
-          </div>
+          {usageLoading ? (
+            <p className={styles.dangerLead}>Checking how many leads use this option…</p>
+          ) : (
+            <div className={styles.dangerAlert}>
+              <strong>
+                {usageTotal > 0
+                  ? `Warning: ${usageTotal} lead(s) currently use this option and will also be deleted. This cannot be undone.`
+                  : "No leads use this option. It can be removed safely."}
+              </strong>
+            </div>
+          )}
           <label className={styles.dangerLabel} htmlFor="confirm-delete-option">
             Type DELETE to confirm:
           </label>
@@ -65,7 +70,7 @@ function ConfirmDeleteOptionModal({ fieldMeta, optionValue, onCancel, onConfirm,
           <button
             type="button"
             className={styles.btnDanger}
-            disabled={!canDelete || saving}
+            disabled={!canDelete || saving || usageLoading}
             onClick={onConfirm}
           >
             {saving ? "Deleting…" : "Permanently Delete Option & Leads"}
@@ -91,6 +96,8 @@ export default function ManageCustomOptionsModal({ onClose, onDone }) {
   const [err, setErr] = useState("");
   const [toast, setToast] = useState("");
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [usageTotal, setUsageTotal] = useState(0);
+  const [usageLoading, setUsageLoading] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -132,6 +139,34 @@ export default function ManageCustomOptionsModal({ onClose, onDone }) {
   useEffect(() => {
     fetchOptions();
   }, [fetchOptions]);
+
+  useEffect(() => {
+    if (!deleteTarget) {
+      setUsageTotal(0);
+      return;
+    }
+    let cancelled = false;
+    setUsageLoading(true);
+    const params = new URLSearchParams({
+      fieldName: deleteTarget.fieldName,
+      optionValue: deleteTarget.optionValue,
+    });
+    apiFetch(`/leads/custom-options/usage?${params.toString()}`)
+      .then((res) => res.json())
+      .then((json) => {
+        if (cancelled) return;
+        setUsageTotal(Number(json?.data?.total || 0));
+      })
+      .catch(() => {
+        if (!cancelled) setUsageTotal(0);
+      })
+      .finally(() => {
+        if (!cancelled) setUsageLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [deleteTarget]);
 
   const activeTab = TABS.find((t) => t.key === activeField) || TABS[0];
   const currentItems = registry[activeField] || [];
@@ -336,6 +371,8 @@ export default function ManageCustomOptionsModal({ onClose, onDone }) {
           fieldMeta={TABS.find((t) => t.key === deleteTarget.fieldName)}
           optionValue={deleteTarget.optionValue}
           saving={saving}
+          usageLoading={usageLoading}
+          usageTotal={usageTotal}
           onCancel={() => setDeleteTarget(null)}
           onConfirm={() => handleDelete(deleteTarget.fieldName, deleteTarget.optionValue)}
         />

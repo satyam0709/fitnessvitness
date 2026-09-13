@@ -3,6 +3,7 @@ const { verifyToken } = require("../middleware/verifyToken");
 const prisma = require("../config/prisma");
 const { createUserNotification } = require("../services/notificationService");
 const { emitCalendarChanged, emitTasksChanged } = require("../realtime/meetingsRealtime");
+const { getTaskFormMeta, sanitizeRecurrence } = require("../services/taskFormMeta");
 
 const router = express.Router();
 router.use(verifyToken);
@@ -99,6 +100,7 @@ router.put("/custom-options/rename", async (req, res) => {
       data: { option_value: safeNewVal, option_label: newValue.trim() }
     });
 
+    emitTaskEvents(req, "options_changed");
     res.json({ success: true });
   } catch (err) {
     console.error("PUT /tasks/custom-options/rename", err);
@@ -124,9 +126,90 @@ router.delete("/custom-options", async (req, res) => {
       where: { field_name: fieldName, option_value: optionValue }
     });
 
+    emitTaskEvents(req, "options_changed");
     res.json({ success: true });
   } catch (err) {
     console.error("DELETE /tasks/custom-options", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.get("/meta", async (_req, res) => {
+  try {
+    res.json({ success: true, data: getTaskFormMeta() });
+  } catch (err) {
+    console.error("GET /tasks/meta", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+router.get("/custom-options/usage", async (req, res) => {
+  try {
+    const { fieldName, optionValue } = req.query || {};
+    if (String(fieldName || "").trim() !== "task_category" || !optionValue) {
+      return res.status(400).json({ success: false, message: "fieldName and optionValue are required" });
+    }
+    const val = String(optionValue).trim();
+    const total = await prisma.tasks.count({
+      where: { is_deleted: false, task_category: val },
+    });
+    res.json({
+      success: true,
+      data: { total, byTable: total > 0 ? { tasks: total } : {}, fieldName: "task_category", optionValue: val },
+    });
+  } catch (err) {
+    console.error("GET /tasks/custom-options/usage", err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+const BUILTIN_TASK_CATEGORIES = new Set([
+  "diet_review",
+  "meal_plan",
+  "weight_checkin",
+  "supplement_check",
+  "plan_renewal",
+  "payment_followup",
+  "client_call",
+  "admin",
+  "general",
+]);
+
+router.post("/custom-options", async (req, res) => {
+  try {
+    const fieldName = String(req.body?.fieldName || "").trim();
+    if (fieldName !== "task_category") {
+      return res.status(400).json({ success: false, message: "Invalid fieldName" });
+    }
+    const val = String(req.body?.value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+    if (!val) {
+      return res.status(400).json({ success: false, message: "value is required" });
+    }
+    if (BUILTIN_TASK_CATEGORIES.has(val)) {
+      return res.status(409).json({ success: false, message: "Option already exists" });
+    }
+    const lbl = String(req.body?.label || req.body?.value || val).trim() || val;
+    const existing = await prisma.dropdown_options.findFirst({
+      where: { field_name: "task_category", option_value: val },
+    });
+    if (existing) {
+      return res.status(409).json({ success: false, message: "Option already exists" });
+    }
+    await prisma.dropdown_options.create({
+      data: { field_name: "task_category", option_value: val, option_label: lbl },
+    });
+    emitTaskEvents(req, "options_changed");
+    res.status(201).json({ success: true });
+  } catch (err) {
+    const duplicate = err.code === "P2002" || /duplicate/i.test(String(err.message || ""));
+    if (duplicate) {
+      return res.status(409).json({ success: false, message: "Option already exists" });
+    }
+    console.error("POST /tasks/custom-options", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -532,7 +615,7 @@ router.post("/", async (req, res) => {
         client_id: clientIdNum,
         task_category: taskCategory,
         task_type: taskType,
-        frequency: frequency || "once",
+        frequency: sanitizeRecurrence(frequency),
         assigned_to: assignedUserId,
         created_by: req.user.id,
         due_date: due_date ? new Date(`${due_date}T00:00:00.000Z`) : null,
@@ -659,7 +742,7 @@ router.put("/:id", async (req, res) => {
     if (client_id !== undefined) data.client_id = client_id ? Number(client_id) : null;
     if (task_category !== undefined) data.task_category = task_category || "general";
     if (task_type !== undefined) data.task_type = task_type || "internal";
-    if (frequency !== undefined) data.frequency = frequency || "once";
+    if (frequency !== undefined) data.frequency = sanitizeRecurrence(frequency);
 
     if (Object.keys(data).length === 0) {
       return res.status(400).json({ success: false, message: "No fields to update" });

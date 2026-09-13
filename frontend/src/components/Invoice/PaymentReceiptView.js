@@ -68,7 +68,9 @@ export default function PaymentReceiptView({
     } catch (e) {
       onWhatsAppError?.(e.message || "Could not open WhatsApp");
     }
-  }  return (
+  }
+
+  return (
     <div className={styles.wrap}>
       {showToolbar ? (
         <div className={styles.toolbar}>
@@ -88,7 +90,11 @@ export default function PaymentReceiptView({
           <header className={styles.header}>
             <div className={styles.headerLeft}>
               <div className={styles.logoBox}>
-                <img src="/assets/logo.svg" alt="Logo" className={styles.logoImage} />
+                <img
+                  src={company?.logo_data_uri || company?.logo_url || "/assets/logo.svg"}
+                  alt="Logo"
+                  className={styles.logoImage}
+                />
               </div>
               <div className={styles.companyInfo}>
                 <h1 className={styles.brandName}>{company?.company_name || "Company Name"}</h1>

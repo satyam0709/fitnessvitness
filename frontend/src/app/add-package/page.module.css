@@ -47,7 +47,7 @@
   background: linear-gradient(
     135deg,
     rgba(13, 148, 136, 0.14),
-    rgba(245, 196, 0, 0.18)
+    rgba(139, 195, 74, 0.18)
   );
   border: 1px solid var(--border);
   font-size: 14px;
@@ -130,7 +130,7 @@
   top: -7px;
   right: -7px;
   background: var(--yellow);
-  color: #1a1a2e;
+  color: #1a1a1a;
   font-size: 10px;
   font-weight: 800;
   width: 18px;
@@ -454,14 +454,14 @@
 
 .addonBtnRemove {
   background: var(--yellow);
-  color: #1a1a2e;
+  color: #1a1a1a;
   border-color: var(--yellow);
 }
 
 .addonBtnRemove:hover {
   background: var(--yellow-hover);
   border-color: var(--yellow-hover);
-  color: #1a1a2e;
+  color: #1a1a1a;
 }
 
 .floatingCart {
@@ -486,7 +486,7 @@
 
 .floatingCart button {
   background: var(--yellow);
-  color: #1a1a2e;
+  color: #1a1a1a;
   border: none;
   border-radius: 24px;
   padding: 8px 20px;
@@ -567,7 +567,7 @@
 
 .primaryBtn {
   background: var(--yellow);
-  color: #1a1a2e;
+  color: #1a1a1a;
   border: none;
   padding: 10px 24px;
   border-radius: var(--radius-sm);
@@ -843,7 +843,7 @@
 
 .renewCartCount {
   background: var(--yellow);
-  color: #1a1a2e;
+  color: #1a1a1a;
   font-size: 11px;
   font-weight: 900;
   width: 20px;

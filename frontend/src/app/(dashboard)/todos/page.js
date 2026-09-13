@@ -12,13 +12,14 @@ import {
 } from "@/components/ConfirmDialog/ConfirmDialogContext";
 import { useToast } from "@/components/Toast/ToastContext";
 import { useListHighlight, itemHighlightClass } from "@/lib/useListHighlight";
+import { CrmFilterStrip } from "@/components/UI/CrmFilterStrip";
 import styles from "./todos.module.css";
 
 const TABS = [
-  { id: "all", label: "All Todo", scope: "all" },
-  { id: "today", label: "Today's Todo", scope: "today" },
-  { id: "pending", label: "Pending Todo", scope: "pending" },
-  { id: "recursive", label: "Recursive Todo", scope: "recursive" },
+  { id: "all", label: "All Todo", color: "#64748b" },
+  { id: "today", label: "Today's Todo", color: "#0ea5e9" },
+  { id: "pending", label: "Pending Todo", color: "#f59e0b" },
+  { id: "recursive", label: "Recursive Todo", color: "#6366f1" },
 ];
 
 const FREQ_FILTER = [
@@ -31,6 +32,31 @@ const FREQ_FILTER = [
   { value: "half_yearly", label: "Half-Yearly" },
   { value: "yearly", label: "Yearly" },
 ];
+
+function todoYmd(d) {
+  if (!d) return "";
+  if (d instanceof Date) {
+    if (Number.isNaN(d.getTime())) return "";
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  return String(d).slice(0, 10);
+}
+
+function matchesTodoTab(t, tab) {
+  if (!tab || tab === "all") return true;
+  if (tab === "pending") return t.status === "pending";
+  if (tab === "recursive") {
+    return t.status === "pending" && String(t.frequency || "once").toLowerCase() !== "once";
+  }
+  if (tab === "today") {
+    const todayStr = todoYmd(new Date());
+    const due = todoYmd(t.todo_date);
+    if (t.status === "pending" && due === todayStr) return true;
+    if (t.status === "pending" && t.carry_forward && due && due < todayStr) return true;
+    if (t.status === "completed" && todoYmd(t.completed_at) === todayStr) return true;
+  }
+  return false;
+}
 
 function useDebounced(value, ms) {
   const [v, setV] = useState(value);
@@ -82,20 +108,14 @@ function TodosPageContent() {
   const loadRef = useRef(() => {});
   const highlightTabSwitched = useRef(false);
 
-  const tabMeta = useMemo(() => TABS.find((t) => t.id === tab) || TABS[0], [tab]);
-
   const loadTodos = useCallback(async () => {
     setLoading(true);
     setLoadError("");
     try {
       const p = new URLSearchParams();
-      p.set("scope", tabMeta.scope);
-      if (statusFilter && tabMeta.scope !== "pending") {
-        if (statusFilter === "pending" || statusFilter === "completed") {
-          p.set("status", statusFilter);
-        }
-      } else if (tabMeta.scope === "pending") {
-        p.set("status", "pending");
+      p.set("scope", "all");
+      if (statusFilter === "pending" || statusFilter === "completed") {
+        p.set("status", statusFilter);
       }
       if (debouncedQ.trim()) p.set("q", debouncedQ.trim());
       if (createdBy) p.set("created_by", createdBy);
@@ -115,7 +135,7 @@ function TodosPageContent() {
     } finally {
       setLoading(false);
     }
-  }, [tabMeta.scope, debouncedQ, createdBy, assignTo, statusFilter, freqFilter]);
+  }, [debouncedQ, createdBy, assignTo, statusFilter, freqFilter]);
 
   loadRef.current = loadTodos;
 
@@ -186,18 +206,30 @@ function TodosPageContent() {
     })();
   }, [isLoaded]);
 
+  const tabCounts = useMemo(() => {
+    const out = { all: items.length, today: 0, pending: 0, recursive: 0 };
+    for (const t of items) {
+      if (matchesTodoTab(t, "today")) out.today += 1;
+      if (matchesTodoTab(t, "pending")) out.pending += 1;
+      if (matchesTodoTab(t, "recursive")) out.recursive += 1;
+    }
+    return out;
+  }, [items]);
+
+  const visibleItems = useMemo(() => items.filter((t) => matchesTodoTab(t, tab)), [items, tab]);
+
   const byPriority = useMemo(() => {
     const hi = [];
     const med = [];
     const lo = [];
-    for (const t of items) {
+    for (const t of visibleItems) {
       const p = String(t.priority || "").toLowerCase();
       if (p === "high") hi.push(t);
       else if (p === "low") lo.push(t);
       else med.push(t);
     }
     return { high: hi, medium: med, low: lo };
-  }, [items]);
+  }, [visibleItems]);
 
   const highlightPriority = useMemo(() => {
     if (!highlightId) return null;
@@ -391,18 +423,17 @@ function TodosPageContent() {
         </button>
       ) : null}
 
-      <div className={styles.tabs}>
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            className={`${styles.tab} ${tab === t.id ? styles.tabActive : ""}`}
-            onClick={() => setTab(t.id)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <CrmFilterStrip
+        ariaLabel="Filter todos"
+        activeKey={tab}
+        items={TABS.map((t) => ({
+          key: t.id,
+          label: t.label,
+          count: tabCounts[t.id] || 0,
+          color: t.color,
+        }))}
+        onSelect={(key) => setTab(key || "all")}
+      />
 
       <div className={styles.board}>
         {loadError ? (
